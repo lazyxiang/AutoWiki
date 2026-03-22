@@ -1,0 +1,59 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    ports:
+      - "127.0.0.1:3001:3001"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_PATH=/data/autowiki.db
+      - AUTOWIKI_DATA_DIR=/data
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    volumes:
+      - autowiki_data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_PATH=/data/autowiki.db
+      - AUTOWIKI_DATA_DIR=/data
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    volumes:
+      - autowiki_data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      # Browser-side (baked into client bundle at build time)
+      - NEXT_PUBLIC_API_URL=http://localhost:3001
+      # Server-side SSR calls within Docker network
+      - INTERNAL_API_URL=http://api:3001
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  autowiki_data:
