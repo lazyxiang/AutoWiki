@@ -37,3 +37,21 @@ def test_filter_files_respects_size_limit(tmp_path):
     files = filter_files(tmp_path, max_file_bytes=1024 * 1024)
     assert small in files
     assert large not in files
+
+def test_parse_github_url_invalid_raises():
+    with pytest.raises(ValueError, match="Cannot parse GitHub URL"):
+        parse_github_url("not-a-url")
+
+def test_parse_github_url_rejects_non_github():
+    with pytest.raises(ValueError):
+        parse_github_url("https://gitlab.com/owner/repo")
+
+def test_filter_files_uses_relative_parts(tmp_path):
+    """Ensure paths outside root with excluded dir names don't falsely skip files."""
+    # Simulate clone dir under a path containing a dir named 'build'
+    build_dir = tmp_path / "build" / "clone"
+    build_dir.mkdir(parents=True)
+    (build_dir / "main.py").write_text("x = 1")
+    files = filter_files(build_dir)
+    # main.py should be found even though 'build' is an excluded dir name in the parent path
+    assert any(f.name == "main.py" for f in files)

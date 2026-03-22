@@ -25,7 +25,7 @@ def parse_github_url(url: str) -> tuple[str, str]:
     parts = url.split("/")
     # Find 'github.com' and take the next two parts
     try:
-        idx = next(i for i, p in enumerate(parts) if "github.com" in p)
+        idx = next(i for i, p in enumerate(parts) if p.lower() == "github.com")
         return parts[idx + 1], parts[idx + 2].removesuffix(".git")
     except (StopIteration, IndexError):
         raise ValueError(f"Cannot parse GitHub URL: {url}")
@@ -46,7 +46,7 @@ def filter_files(
         if not path.is_file():
             continue
         # Skip excluded directories
-        if any(part in EXCLUDED_DIRS for part in path.parts):
+        if any(part in EXCLUDED_DIRS for part in path.relative_to(root).parts):
             continue
         # Skip non-source extensions
         if path.suffix.lower() not in SOURCE_EXTENSIONS:
@@ -59,14 +59,23 @@ def filter_files(
 
 
 async def clone_or_fetch(clone_dir: Path, owner: str, name: str) -> str:
-    """Clone or fetch a GitHub repo. Returns HEAD commit SHA."""
+    """Clone or fetch a GitHub repo. Returns HEAD commit SHA.
+
+    Runs blocking gitpython I/O in a thread executor to avoid stalling the event loop.
+    """
+    import asyncio
     import git
-    url = f"https://github.com/{owner}/{name}.git"
-    if (clone_dir / ".git").exists():
-        repo = git.Repo(clone_dir)
-        repo.remotes.origin.fetch()
-        repo.head.reset("FETCH_HEAD", index=True, working_tree=True)
-    else:
-        clone_dir.mkdir(parents=True, exist_ok=True)
-        repo = git.Repo.clone_from(url, clone_dir, depth=1)
-    return repo.head.commit.hexsha
+
+    def _do_clone_or_fetch() -> str:
+        url = f"https://github.com/{owner}/{name}.git"
+        if (clone_dir / ".git").exists():
+            repo = git.Repo(clone_dir)
+            repo.remotes.origin.fetch()
+            repo.head.reset("FETCH_HEAD", index=True, working_tree=True)
+        else:
+            clone_dir.mkdir(parents=True, exist_ok=True)
+            repo = git.Repo.clone_from(url, clone_dir, depth=1)
+        return repo.head.commit.hexsha
+
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _do_clone_or_fetch)
