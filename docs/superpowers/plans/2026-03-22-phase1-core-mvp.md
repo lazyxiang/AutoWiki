@@ -303,10 +303,13 @@ export default nextConfig;
 ```dockerfile
 FROM python:3.12-slim
 WORKDIR /app
+# Copy source before installing so editable install resolves package roots
 COPY pyproject.toml .
-RUN pip install --no-cache-dir -e ".[dev]" 2>/dev/null || pip install --no-cache-dir -e .
 COPY shared/ ./shared/
 COPY api/ ./api/
+COPY cli/ ./cli/
+COPY worker/ ./worker/
+RUN pip install --no-cache-dir .
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "3001"]
 ```
 
@@ -316,9 +319,11 @@ FROM python:3.12-slim
 RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY pyproject.toml .
-RUN pip install --no-cache-dir -e .
 COPY shared/ ./shared/
 COPY worker/ ./worker/
+COPY api/ ./api/
+COPY cli/ ./cli/
+RUN pip install --no-cache-dir .
 CMD ["python", "-m", "worker.main"]
 ```
 
@@ -336,6 +341,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/public ./public
 CMD ["node", "server.js"]
 ```
 
@@ -461,10 +467,10 @@ class ChatConfig(BaseSettings):
     history_window: int = 10
 
 class Config(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_prefix="AUTOWIKI_",
-        env_nested_delimiter="__",
-    )
+    # Do NOT set env_nested_delimiter here — nested sub-models each read their own
+    # env_prefix independently (e.g. LLMConfig reads AUTOWIKI_LLM_*, etc.)
+    # Adding env_nested_delimiter conflicts with sub-model prefixes in pydantic-settings v2.
+    model_config = SettingsConfigDict(env_prefix="AUTOWIKI_")
     llm: LLMConfig = Field(default_factory=LLMConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
@@ -2587,6 +2593,7 @@ async def list_repos():
 
 ```python
 import typer, subprocess, sys, os
+from pathlib import Path
 
 def serve_cmd(
     port: int = typer.Option(3000, "--port", "-p", help="Web UI port"),
