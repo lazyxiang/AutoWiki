@@ -2,7 +2,7 @@
 
 **Date:** 2026-03-22
 **Status:** Approved
-**Project:** AutoWiki (`/Users/lazyxiang/code/AutoWiki`)
+**Project:** AutoWiki
 
 ---
 
@@ -108,7 +108,7 @@ AutoWiki is designed to close the gaps left by existing tools (DeepWiki, Zread, 
 | Stage | Responsibility | Key Technology |
 |---|---|---|
 | **1. Repo Ingestion** | Clone/fetch repo; apply file filters (`.autowikiignore` + built-in rules); detect changes via commit SHA diff | `gitpython` |
-| **2. AST Analysis** | Parse source files with Tree-Sitter; extract functions, classes, imports, call graphs; build unified dependency graph + module tree | `tree-sitter` (8 languages) |
+| **2. AST Analysis** | Parse source files with Tree-Sitter; extract functions, classes, imports, call graphs; build unified dependency graph + module tree | `tree-sitter` (9 languages) |
 | **3. RAG Indexer** | Chunk documents with overlap; generate embeddings; build/update FAISS index; persist per `{repo_hash}` | `langchain` splitter, configurable embedding provider, `faiss-cpu` |
 | **4. Wiki Planner** | Feed AST dependency graph + repo structure to LLM; produce hierarchical JSON page plan; validate + retry on malformed output (up to 3 attempts) | LLM structured output |
 | **5. Page Generator** | Per page: RAG retrieval + AST graph slice injected as context; LLM generates page; recurse for large modules via sub-agents; stream results | Hierarchical agent loop |
@@ -129,7 +129,7 @@ This is the primary freshness differentiator over all competing products.
 
 ### 4.5 Supported Languages (AST Analysis)
 
-Python, JavaScript, TypeScript, Java, Go, C, C++, C# — 8 languages via Tree-Sitter grammars. Files in unsupported languages are still indexed via RAG (text-only, no AST graph).
+Python, JavaScript, TypeScript, Java, Go, Rust, C, C++, C# — 9 languages via Tree-Sitter grammars. Files in unsupported languages are still indexed via RAG (text-only, no AST graph).
 
 ---
 
@@ -214,17 +214,17 @@ Default provider: **Anthropic Claude Sonnet 4** (`claude-sonnet-4-6`). Override 
 ```yaml
 # autowiki.yml
 llm:
-  provider: anthropic          # Phase 1: anthropic, openai, openai-compatible, ollama
-  model: claude-sonnet-4-6    # Phase 2+: gemini (planned, not in Phase 1)
-  api_key: ${ANTHROPIC_API_KEY}
+  provider: google             # anthropic, google, openai, openai-compatible, ollama
+  model: gemini-1.5-pro       # or gemini-1.5-flash, claude-sonnet-4-6, gpt-4o, etc.
+  api_key: ${GOOGLE_API_KEY}
 
 embedding:
-  provider: openai             # Phase 1: openai, ollama; Phase 2+: google
-  model: text-embedding-3-small
-  api_key: ${OPENAI_API_KEY}
+  provider: google             # openai, google, ollama
+  model: text-embedding-004
+  api_key: ${GOOGLE_API_KEY}
 ```
 
-**Phase 1 provider support:** `anthropic`, `openai`, `openai-compatible` (any OpenAI-compatible base URL), `ollama` (local). Google Gemini (generation) and Google embedding are planned for Phase 2 but not required for MVP.
+**Phase 1 provider support:** `anthropic`, `google` (Gemini), `openai`, `openai-compatible` (any OpenAI-compatible base URL), `ollama` (local). Both generation and embedding are supported for these providers in Phase 1.
 
 Any OpenAI-compatible endpoint works via `provider: openai-compatible` + `base_url`. Switching embedding providers requires re-indexing (incompatible vector spaces — this is surfaced clearly in the UI/CLI).
 
@@ -483,7 +483,7 @@ If `pages` is defined, it overrides the LLM-generated page plan. `repo_notes` ar
 | Total storage at scale | ~500MB × N repos; no automatic eviction in v1 — users must manually delete repos via `autowiki list` + `autowiki delete`. Disk exhaustion causes new index jobs to fail with a `DISK_FULL` error surfaced in the UI and job status. |
 | Docker image size (combined) | < 2GB |
 | Startup time (`docker-compose up` to ready) | < 30 seconds |
-| AST-supported languages | 8 (Python, JS, TS, Java, Go, C, C++, C#) |
+| AST-supported languages | 9 (Python, JS, TS, Java, Go, Rust, C, C++, C#) |
 
 ---
 

@@ -155,14 +155,16 @@ dependencies = [
     "tree-sitter-javascript>=0.23",
     "tree-sitter-typescript>=0.23",
     "tree-sitter-java>=0.23",
-    "tree-sitter-go>=0.23",
-    "tree-sitter-c>=0.23",
+    "tree-sitter-go>=0.21",
+    "tree-sitter-rust>=0.23",
+    "tree-sitter-c>=0.21",
     "tree-sitter-cpp>=0.23",
     "tree-sitter-c-sharp>=0.23",
     "langchain-text-splitters>=0.3",
     "faiss-cpu>=1.8",
     "anthropic>=0.40",
     "openai>=1.50",
+    "google-generativeai>=0.8",
     "typer>=0.12",
     "httpx>=0.27",
     "websockets>=13.0",
@@ -202,6 +204,7 @@ services:
       - AUTOWIKI_DATA_DIR=/data
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
     volumes:
       - autowiki_data:/data
     depends_on:
@@ -218,6 +221,7 @@ services:
       - AUTOWIKI_DATA_DIR=/data
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
     volumes:
       - autowiki_data:/data
     depends_on:
@@ -445,14 +449,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class LLMConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AUTOWIKI_LLM_")
-    provider: Literal["anthropic", "openai", "openai-compatible", "ollama"] = "anthropic"
+    provider: Literal["anthropic", "google", "openai", "openai-compatible", "ollama"] = "anthropic"
     model: str = "claude-sonnet-4-6"
     api_key: str = ""
     base_url: str = ""
 
 class EmbeddingConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AUTOWIKI_EMBEDDING_")
-    provider: Literal["openai", "ollama"] = "openai"
+    provider: Literal["openai", "google", "ollama"] = "openai"
     model: str = "text-embedding-3-small"
     api_key: str = ""
 
@@ -696,11 +700,12 @@ git commit -m "feat: SQLite schema with SQLAlchemy async (repositories, jobs, wi
 
 ---
 
-## Task 4: LLM Provider Abstraction
+## Task 4: LLM Provider Abstraction (Anthropic, Google, OpenAI, Ollama)
 
 **Files:**
 - Create: `worker/llm/base.py`
 - Create: `worker/llm/anthropic_provider.py`
+- Create: `worker/llm/gemini_provider.py`
 - Create: `worker/llm/openai_provider.py`
 - Create: `worker/llm/ollama_provider.py`
 - Create: `tests/worker/test_llm.py`
@@ -801,7 +806,48 @@ class AnthropicProvider(LLMProvider):
                 yield text
 ```
 
-- [ ] **Step 5: Implement `worker/llm/openai_provider.py`**
+- [ ] **Step 5: Implement `worker/llm/gemini_provider.py`**
+
+```python
+from __future__ import annotations
+import json
+from typing import Any, AsyncIterator
+import google.generativeai as genai
+from worker.llm.base import LLMProvider
+
+class GeminiProvider(LLMProvider):
+    def __init__(self, api_key: str, model: str = "gemini-1.5-pro"):
+        genai.configure(api_key=api_key)
+        self._model = genai.GenerativeModel(model_name=model)
+
+    async def generate(self, prompt: str, system: str = "") -> str:
+        response = await self._model.generate_content_async(
+            prompt,
+            generation_config=genai.types.GenerationConfig(max_output_tokens=8192)
+        )
+        return response.text
+
+    async def generate_structured(self, prompt: str, schema: dict[str, Any], system: str = "") -> dict[str, Any]:
+        response = await self._model.generate_content_async(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                response_mime_type="application/json",
+                max_output_tokens=8192
+            )
+        )
+        return json.loads(response.text)
+
+    async def generate_stream(self, prompt: str, system: str = "") -> AsyncIterator[str]:
+        response = await self._model.generate_content_async(
+            prompt,
+            generation_config=genai.types.GenerationConfig(max_output_tokens=8192),
+            stream=True
+        )
+        async for chunk in response:
+            yield chunk.text
+```
+
+- [ ] **Step 6: Implement `worker/llm/openai_provider.py`**
 
 ```python
 from __future__ import annotations
@@ -847,7 +893,7 @@ class OpenAIProvider(LLMProvider):
                 yield delta
 ```
 
-- [ ] **Step 6: Implement `worker/llm/ollama_provider.py`**
+- [ ] **Step 7: Implement `worker/llm/ollama_provider.py`**
 
 ```python
 from __future__ import annotations
@@ -890,7 +936,7 @@ class OllamaProvider(LLMProvider):
                         yield data.get("response", "")
 ```
 
-- [ ] **Step 6b: Implement `worker/llm/__init__.py` — factory function**
+- [ ] **Step 8: Implement `worker/llm/__init__.py` — factory function**
 
 ```python
 # worker/llm/__init__.py
@@ -902,11 +948,17 @@ def make_llm_provider(cfg) -> LLMProvider:
     """Factory: create LLMProvider from config. Import here so worker/jobs.py patches cleanly."""
     from worker.llm.anthropic_provider import AnthropicProvider
     from worker.llm.openai_provider import OpenAIProvider
+    from worker.llm.gemini_provider import GeminiProvider
     from worker.llm.ollama_provider import OllamaProvider
     p = cfg.llm.provider
     if p == "anthropic":
         return AnthropicProvider(
             api_key=cfg.llm.api_key or os.environ.get("ANTHROPIC_API_KEY", ""),
+            model=cfg.llm.model,
+        )
+    elif p == "google":
+        return GeminiProvider(
+            api_key=cfg.llm.api_key or os.environ.get("GOOGLE_API_KEY", ""),
             model=cfg.llm.model,
         )
     elif p in ("openai", "openai-compatible"):
@@ -924,27 +976,28 @@ def make_llm_provider(cfg) -> LLMProvider:
         raise ValueError(f"Unknown LLM provider: {p}")
 ```
 
-- [ ] **Step 7: Run tests**
+- [ ] **Step 9: Run tests**
 
 ```bash
 pytest tests/worker/test_llm.py -v
 ```
 Expected: 3 PASSED
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add worker/llm/ tests/worker/test_llm.py
-git commit -m "feat: LLM provider abstraction (Anthropic, OpenAI, Ollama)"
+git commit -m "feat: LLM provider abstraction (Anthropic, Google, OpenAI, Ollama)"
 ```
 
 ---
 
-## Task 5: Embedding Provider Abstraction
+## Task 5: Embedding Provider Abstraction (OpenAI, Google, Ollama)
 
 **Files:**
 - Create: `worker/embedding/base.py`
 - Create: `worker/embedding/openai_embed.py`
+- Create: `worker/embedding/gemini_embed.py`
 - Create: `worker/embedding/ollama_embed.py`
 - Create: `tests/worker/test_embedding.py`
 
@@ -1063,7 +1116,42 @@ class OllamaEmbedding(EmbeddingProvider):
         return [await self.embed(t) for t in texts]
 ```
 
-- [ ] **Step 5b: Implement `worker/embedding/__init__.py` — factory function**
+- [ ] **Step 5: Implement `worker/embedding/gemini_embed.py`**
+
+```python
+from __future__ import annotations
+import numpy as np
+import google.generativeai as genai
+from worker.embedding.base import EmbeddingProvider
+
+class GeminiEmbedding(EmbeddingProvider):
+    def __init__(self, api_key: str, model: str = "models/text-embedding-004"):
+        genai.configure(api_key=api_key)
+        self._model = model
+        self._dim = 768
+
+    @property
+    def dimension(self) -> int:
+        return self._dim
+
+    async def embed(self, text: str) -> np.ndarray:
+        result = await genai.embed_content_async(
+            model=self._model,
+            content=text,
+            task_type="retrieval_document"
+        )
+        return np.array(result["embedding"], dtype=np.float32)
+
+    async def embed_batch(self, texts: list[str]) -> list[np.ndarray]:
+        result = await genai.embed_content_async(
+            model=self._model,
+            content=texts,
+            task_type="retrieval_document"
+        )
+        return [np.array(e, dtype=np.float32) for e in result["embedding"]]
+```
+
+- [ ] **Step 6: Implement `worker/embedding/__init__.py` — factory function**
 
 ```python
 # worker/embedding/__init__.py
@@ -1074,11 +1162,17 @@ from worker.embedding.base import EmbeddingProvider
 def make_embedding_provider(cfg) -> EmbeddingProvider:
     """Factory: create EmbeddingProvider from config. Import here so worker/jobs.py patches cleanly."""
     from worker.embedding.openai_embed import OpenAIEmbedding
+    from worker.embedding.gemini_embed import GeminiEmbedding
     from worker.embedding.ollama_embed import OllamaEmbedding
     p = cfg.embedding.provider
     if p == "openai":
         return OpenAIEmbedding(
             api_key=cfg.embedding.api_key or os.environ.get("OPENAI_API_KEY", ""),
+            model=cfg.embedding.model,
+        )
+    elif p == "google":
+        return GeminiEmbedding(
+            api_key=cfg.embedding.api_key or os.environ.get("GOOGLE_API_KEY", ""),
             model=cfg.embedding.model,
         )
     elif p == "ollama":
@@ -1087,7 +1181,7 @@ def make_embedding_provider(cfg) -> EmbeddingProvider:
         raise ValueError(f"Unknown embedding provider: {p}")
 ```
 
-- [ ] **Step 6: Run tests**
+- [ ] **Step 7: Run tests**
 
 ```bash
 pytest tests/worker/test_embedding.py -v
@@ -1098,7 +1192,7 @@ Expected: 2 PASSED
 
 ```bash
 git add worker/embedding/ tests/worker/test_embedding.py
-git commit -m "feat: embedding provider abstraction (OpenAI, Ollama)"
+git commit -m "feat: embedding provider abstraction (OpenAI, Google, Ollama)"
 ```
 
 ---
@@ -1266,9 +1360,9 @@ from worker.pipeline.ast_analysis import analyze_file, build_module_tree, SUPPOR
 FIXTURE = Path("tests/fixtures/simple-repo")
 
 def test_supported_languages_count():
-    # 12 extension entries covering 8 languages (some languages have multiple extensions)
-    # .py .js .jsx .ts .tsx .java .go .c .h .cpp .cc .cs
-    assert len(SUPPORTED_LANGUAGES) == 12
+    # 13 extension entries covering 9 languages (some languages have multiple extensions)
+    # .py .js .jsx .ts .tsx .java .go .rs .c .h .cpp .cc .cs
+    assert len(SUPPORTED_LANGUAGES) == 13
 
 def test_analyze_python_file():
     result = analyze_file(FIXTURE / "models.py")
@@ -1321,6 +1415,7 @@ import tree_sitter_javascript as tsjavascript
 import tree_sitter_typescript as tstypescript
 import tree_sitter_java as tsjava
 import tree_sitter_go as tsgo
+import tree_sitter_rust as tsrust
 import tree_sitter_c as tsc
 import tree_sitter_cpp as tscpp
 import tree_sitter_c_sharp as tscsharp
@@ -1334,6 +1429,7 @@ SUPPORTED_LANGUAGES: dict[str, Language] = {
     ".tsx":  Language(tstypescript.language_tsx()),
     ".java": Language(tsjava.language()),
     ".go":   Language(tsgo.language()),
+    ".rs":   Language(tsrust.language()),
     ".c":    Language(tsc.language()),
     ".h":    Language(tsc.language()),
     ".cpp":  Language(tscpp.language()),
@@ -1346,7 +1442,7 @@ _ENTITY_TYPES = {
     "function_definition", "class_definition",       # Python
     "function_declaration", "class_declaration",     # JS/TS/Java
     "method_declaration", "method_definition",
-    "function_item",                                 # Rust (future)
+    "function_item",                                 # Rust
     "struct_item", "impl_item",
     "func_declaration", "type_declaration",          # Go
 }
