@@ -49,3 +49,7 @@ dev = [
     "playwright>=1.48",
     "pytest-playwright>=0.5",
 ]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
