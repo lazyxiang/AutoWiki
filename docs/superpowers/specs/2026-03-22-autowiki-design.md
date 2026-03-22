@@ -214,15 +214,17 @@ Default provider: **Anthropic Claude Sonnet 4** (`claude-sonnet-4-6`). Override 
 ```yaml
 # autowiki.yml
 llm:
-  provider: anthropic          # anthropic | openai | gemini | ollama | openai-compatible
-  model: claude-sonnet-4-6
+  provider: anthropic          # Phase 1: anthropic, openai, openai-compatible, ollama
+  model: claude-sonnet-4-6    # Phase 2+: gemini (planned, not in Phase 1)
   api_key: ${ANTHROPIC_API_KEY}
 
 embedding:
-  provider: openai             # openai | google | ollama
+  provider: openai             # Phase 1: openai, ollama; Phase 2+: google
   model: text-embedding-3-small
   api_key: ${OPENAI_API_KEY}
 ```
+
+**Phase 1 provider support:** `anthropic`, `openai`, `openai-compatible` (any OpenAI-compatible base URL), `ollama` (local). Google Gemini (generation) and Google embedding are planned for Phase 2 but not required for MVP.
 
 Any OpenAI-compatible endpoint works via `provider: openai-compatible` + `base_url`. Switching embedding providers requires re-indexing (incompatible vector spaces — this is surfaced clearly in the UI/CLI).
 
@@ -245,7 +247,7 @@ POST   /api/repos                              Submit repo for indexing
 GET    /api/repos/{repo_id}                    Repo status + metadata
 GET    /api/repos/{repo_id}/wiki               List all wiki pages
 GET    /api/repos/{repo_id}/wiki/{slug}        Get single wiki page (Markdown)
-POST   /api/repos/{repo_id}/refresh            Trigger incremental re-index (Phase 2)
+POST   /api/repos/{repo_id}/refresh            Trigger incremental re-index *(Phase 2)*
 GET    /api/jobs/{job_id}                      Poll job status + progress (0–100)
 
 POST   /api/repos/{repo_id}/chat               Create chat session
@@ -253,8 +255,9 @@ GET    /api/repos/{repo_id}/chat/{session_id}  Get chat history
 WS     /ws/repos/{repo_id}/chat/{session_id}   Streaming chat (WebSocket)
 POST   /api/repos/{repo_id}/research           Start Deep Research job
 WS     /ws/repos/{repo_id}/research/{job_id}   Stream research progress
+WS     /ws/jobs/{job_id}                       Stream job progress 0–100 (used by JobProgressBar)
 
-POST   /webhook/github                         GitHub push webhook (Phase 4)
+POST   /webhook/github                         GitHub push webhook *(Phase 4)*
 ```
 
 **Key endpoint schemas:**
@@ -280,15 +283,23 @@ The caller then opens a WebSocket at `/ws/repos/{repo_id}/chat/{session_id}` and
 ### 6.2 CLI (`autowiki`)
 
 ```bash
+# Phase 1
 autowiki index github.com/owner/repo           # Index a repository
 autowiki index github.com/owner/repo --force   # Force full re-index
-autowiki refresh github.com/owner/repo         # Incremental refresh
 autowiki list                                  # List indexed repos + status
-autowiki serve [--port 3000]                   # Start web server
-autowiki chat github.com/owner/repo "..."      # Terminal Q&A
+autowiki serve [--port 3000]                   # Start full stack (API + worker + web UI)
 autowiki config show                           # Show current config
 autowiki config set llm.provider anthropic     # Update config value
+
+# Phase 2
+autowiki refresh github.com/owner/repo         # Incremental refresh (commit-SHA diff)
+autowiki chat github.com/owner/repo "..."      # Terminal Q&A (multi-turn not supported in CLI)
+
+# Phase 3
+autowiki research github.com/owner/repo "..."  # Trigger Deep Research; print report to stdout
 ```
+
+`autowiki serve` starts the full stack in a single foreground process: it spawns the FastAPI API server, an ARQ worker, and the Next.js frontend as subprocesses. It is the non-Docker entry point. In Docker Compose, each service runs independently; `autowiki serve` is not used.
 
 ### 6.3 MCP Server Tools
 
@@ -365,7 +376,7 @@ Deep Research is available in the Web UI (ResearchPanel), CLI (`autowiki researc
 | Component | Description |
 |---|---|
 | `IndexForm` | GitHub URL input; triggers index job on submit |
-| `JobProgressBar` | WebSocket-fed real-time progress during indexing |
+| `JobProgressBar` | Real-time progress during indexing; fed by `WS /ws/jobs/{job_id}` (streams 0–100 integer progress events) |
 | `WikiSidebar` | Hierarchical page tree, collapsible, keyboard-navigable |
 | `WikiPage` | Markdown renderer with syntax highlighting + Mermaid blocks |
 | `ChatPanel` | Streaming multi-turn chat with source citations |
@@ -469,6 +480,7 @@ If `pages` is defined, it overrides the LLM-generated page plan. `repo_notes` ar
 | Deep Research completion | < 3 minutes |
 | Maximum supported repo size | 1M LOC (with `.autowikiignore`) |
 | Storage per indexed repo | < 500MB |
+| Total storage at scale | ~500MB × N repos; no automatic eviction in v1 — users must manually delete repos via `autowiki list` + `autowiki delete`. Disk exhaustion causes new index jobs to fail with a `DISK_FULL` error surfaced in the UI and job status. |
 | Docker image size (combined) | < 2GB |
 | Startup time (`docker-compose up` to ready) | < 30 seconds |
 | AST-supported languages | 8 (Python, JS, TS, Java, Go, C, C++, C#) |
