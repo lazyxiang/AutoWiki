@@ -50,6 +50,9 @@ dev = [
     "pytest-playwright>=0.5",
 ]
 
+[tool.hatch.build.targets.wheel]
+packages = ["api", "worker", "shared", "cli"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
