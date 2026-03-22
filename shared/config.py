@@ -42,10 +42,10 @@ class Config(BaseSettings):
     server: ServerConfig = Field(default_factory=ServerConfig)
     chat: ChatConfig = Field(default_factory=ChatConfig)
     data_dir: Path = Field(
-        default_factory=lambda: Path(os.environ.get("AUTOWIKI_DATA_DIR", str(Path.home() / ".autowiki")))
+        default_factory=lambda: Path(os.environ.get("AUTOWIKI_DATA_DIR", Path.home() / ".autowiki"))
     )
     database_path: Path = Field(
-        default_factory=lambda: Path(os.environ.get("DATABASE_PATH", str(Path.home() / ".autowiki" / "autowiki.db")))
+        default_factory=lambda: Path(os.environ.get("DATABASE_PATH", Path.home() / ".autowiki" / "autowiki.db"))
     )
 
 
@@ -57,3 +57,9 @@ def get_config() -> Config:
     if _config is None:
         _config = Config()
     return _config
+
+
+def reset_config() -> None:
+    """Reset the cached config singleton. Use in tests to force re-read of env vars."""
+    global _config
+    _config = None
