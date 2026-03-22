@@ -3,6 +3,8 @@ import json
 from typing import Any, AsyncIterator
 from worker.llm.base import LLMProvider
 
+# TODO: migrate to google-genai package (google-generativeai is end-of-life)
+# New API: from google import genai; client = genai.Client(api_key=...)
 try:
     import google.generativeai as genai
     _GENAI_AVAILABLE = True

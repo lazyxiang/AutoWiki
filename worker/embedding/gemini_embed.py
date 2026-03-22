@@ -2,6 +2,8 @@ from __future__ import annotations
 import numpy as np
 from worker.embedding.base import EmbeddingProvider
 
+# TODO: migrate to google-genai package (google-generativeai is end-of-life)
+# New API: from google import genai; client = genai.Client(api_key=...)
 try:
     import google.generativeai as genai
     _GENAI_AVAILABLE = True
