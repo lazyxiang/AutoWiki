@@ -20,11 +20,15 @@ class OpenAIProvider(LLMProvider):
         return response.choices[0].message.content
 
     async def generate_structured(self, prompt: str, schema: dict[str, Any], system: str = "") -> dict[str, Any]:
-        json_prompt = f"{prompt}\n\nRespond ONLY with valid JSON."
+        json_prompt = f"{prompt}\n\nRespond ONLY with valid JSON matching this schema:\n{json.dumps(schema)}"
         raw = await self.generate(json_prompt, system=system)
         raw = raw.strip()
         if raw.startswith("```"):
-            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
+            # Strip opening fence line (may include language tag like ```json)
+            raw = raw.split("\n", 1)[1]
+            # Strip closing fence
+            if "```" in raw:
+                raw = raw.rsplit("```", 1)[0]
         return json.loads(raw)
 
     async def generate_stream(self, prompt: str, system: str = "") -> AsyncIterator[str]:

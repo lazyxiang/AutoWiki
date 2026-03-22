@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, AsyncIterator
 
 class LLMProvider(ABC):
     @abstractmethod
@@ -11,5 +11,5 @@ class LLMProvider(ABC):
         """Generate and parse a JSON response matching the given schema."""
 
     @abstractmethod
-    async def generate_stream(self, prompt: str, system: str = ""):
+    async def generate_stream(self, prompt: str, system: str = "") -> AsyncIterator[str]:
         """Async generator that yields text chunks as they arrive."""

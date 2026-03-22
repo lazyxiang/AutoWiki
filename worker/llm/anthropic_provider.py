@@ -22,7 +22,11 @@ class AnthropicProvider(LLMProvider):
         raw = await self.generate(json_prompt, system=system)
         raw = raw.strip()
         if raw.startswith("```"):
-            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
+            # Strip opening fence line (may include language tag like ```json)
+            raw = raw.split("\n", 1)[1]
+            # Strip closing fence
+            if "```" in raw:
+                raw = raw.rsplit("```", 1)[0]
         return json.loads(raw)
 
     async def generate_stream(self, prompt: str, system: str = "") -> AsyncIterator[str]:
