@@ -40,3 +40,11 @@ def test_config_show(runner):
     result = cli.invoke(app, ["config", "show"])
     assert result.exit_code == 0
     assert "anthropic" in result.output  # default provider
+
+def test_config_set(runner, tmp_path):
+    cli, app = runner
+    config_file = tmp_path / ".autowiki" / "autowiki.yml"
+    with patch("pathlib.Path.home", return_value=tmp_path):
+        result = cli.invoke(app, ["config", "set", "llm.provider", "openai"])
+    assert result.exit_code == 0
+    assert "openai" in result.output

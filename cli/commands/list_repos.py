@@ -15,6 +15,9 @@ def list_cmd(
             return
         for r in repos:
             typer.echo(f"{r['owner']}/{r['name']}  [{r['status']}]")
+    except httpx.HTTPStatusError as e:
+        typer.echo(f"Error: {e.response.text}", err=True)
+        raise typer.Exit(1)
     except httpx.ConnectError:
         typer.echo("Error: cannot connect to AutoWiki API.", err=True)
         raise typer.Exit(1)
