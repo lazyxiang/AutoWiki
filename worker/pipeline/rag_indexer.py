@@ -56,8 +56,18 @@ class FAISSStore:
         self._meta_path.write_bytes(pickle.dumps(self._metas))
 
     def load(self) -> None:
-        self._index = faiss.read_index(str(self._index_path))
-        self._metas = pickle.loads(self._meta_path.read_bytes())
+        try:
+            self._index = faiss.read_index(str(self._index_path))
+        except Exception as exc:
+            raise FileNotFoundError(
+                f"FAISS index file not found or unreadable: {self._index_path}"
+            ) from exc
+        try:
+            self._metas = pickle.loads(self._meta_path.read_bytes())
+        except (FileNotFoundError, OSError) as exc:
+            raise FileNotFoundError(
+                f"FAISS metadata file not found or unreadable: {self._meta_path}"
+            ) from exc
 
 
 async def build_rag_index(

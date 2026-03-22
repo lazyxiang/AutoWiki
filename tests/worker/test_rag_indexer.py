@@ -43,3 +43,25 @@ async def test_faiss_store_persist_and_load(tmp_path):
     store2.load()
     results = store2.search(np.array([1, 0, 0, 0], dtype=np.float32), k=1)
     assert results[0]["text"] == "hello"
+
+
+async def test_build_rag_index(tmp_path):
+    from unittest.mock import AsyncMock
+    import numpy as np
+    from worker.pipeline.rag_indexer import build_rag_index, FAISSStore
+
+    src = tmp_path / "hello.py"
+    src.write_text("def hello():\n    return 'world'\n")
+
+    store = FAISSStore(dimension=4, index_path=tmp_path / "rag.index",
+                       meta_path=tmp_path / "rag.meta.pkl")
+
+    mock_embed = AsyncMock()
+    mock_embed.embed_batch = AsyncMock(return_value=[np.array([1, 0, 0, 0], dtype=np.float32)])
+
+    await build_rag_index([src], tmp_path, store, mock_embed)
+
+    results = store.search(np.array([1, 0, 0, 0], dtype=np.float32), k=1)
+    assert len(results) == 1
+    assert results[0]["file"] == "hello.py"
+    assert "chunk_idx" in results[0]
