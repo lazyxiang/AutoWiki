@@ -1,0 +1,34 @@
+// INTERNAL_API_URL is used for server-side SSR calls (Docker: http://api:3001)
+// NEXT_PUBLIC_API_URL is baked into the client bundle (browser: http://localhost:3001)
+const API_URL =
+  typeof window === "undefined"
+    ? (process.env.INTERNAL_API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001")
+    : (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001");
+
+export async function submitRepo(url: string) {
+  const res = await fetch(`${API_URL}/api/repos`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json() as Promise<{ repo_id: string; job_id: string; status: string }>;
+}
+
+export async function getJob(jobId: string) {
+  const res = await fetch(`${API_URL}/api/jobs/${jobId}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json() as Promise<{ status: string; progress: number; error?: string }>;
+}
+
+export async function getRepoWiki(repoId: string) {
+  const res = await fetch(`${API_URL}/api/repos/${repoId}/wiki`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json() as Promise<{ pages: { slug: string; title: string; parent_slug: string | null }[] }>;
+}
+
+export async function getWikiPage(repoId: string, slug: string) {
+  const res = await fetch(`${API_URL}/api/repos/${repoId}/wiki/${slug}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json() as Promise<{ slug: string; title: string; content: string }>;
+}
