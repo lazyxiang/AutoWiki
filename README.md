@@ -12,21 +12,6 @@ Self-hosted, open-source AI-powered wiki generator for GitHub repositories. Poin
 
 The result is served via a REST API and displayed in a Next.js web UI with sidebar navigation.
 
-## Quick start (Docker)
-
-```bash
-# Copy and fill in your API keys
-cp autowiki.yml.example autowiki.yml
-
-# Start everything
-ANTHROPIC_API_KEY=sk-... docker-compose up
-```
-
-- Web UI: http://localhost:3000
-- API: http://localhost:3001
-
-Enter a GitHub URL in the form and click **Generate Wiki**. Progress streams in real time via WebSocket.
-
 ## Quick start (local)
 
 **Requirements:** Python 3.12+, Node.js 22+, Redis
@@ -53,6 +38,21 @@ python -m worker.main &
 cd web && npm start
 ```
 
+## Quick start (Docker)
+
+```bash
+# Copy and fill in your API keys
+cp autowiki.yml.example autowiki.yml
+
+# Start everything
+ANTHROPIC_API_KEY=sk-... docker-compose up
+```
+
+- Web UI: http://localhost:3000
+- API: http://localhost:3001
+
+Enter a GitHub URL in the form and click **Generate Wiki**. Progress streams in real time via WebSocket.
+
 ## Configuration
 
 AutoWiki looks for config in this order (highest wins):
@@ -62,17 +62,33 @@ AutoWiki looks for config in this order (highest wins):
 3. `~/.autowiki/autowiki.yml`
 4. Built-in defaults
 
+### Environment Variables
+
+| Variable | Description | Default | Example |
+|---|---|---|---|
+| `AUTOWIKI_LLM_PROVIDER` | LLM provider | `anthropic` | `google`, `openai`, `ollama` |
+| `AUTOWIKI_LLM_MODEL` | LLM model name | `claude-sonnet-4-6` | `claude-3-5-sonnet-20240620` |
+| `AUTOWIKI_LLM_API_KEY` | LLM API key | (empty) | `sk-ant-api03-...` |
+| `AUTOWIKI_EMBEDDING_PROVIDER` | Embedding provider | `openai` | `google`, `ollama` |
+| `AUTOWIKI_EMBEDDING_MODEL` | Embedding model name | `text-embedding-3-small` | `models/text-embedding-004` |
+| `AUTOWIKI_EMBEDDING_API_KEY`| Embedding API key | (empty) | `AIzaSy...` |
+| `REDIS_URL` | Redis connection URL | `redis://localhost:6379` | `redis://redis:6379` |
+| `DATABASE_PATH` | Path to SQLite database | `~/.autowiki/autowiki.db` | `/data/autowiki.db` |
+| `AUTOWIKI_DATA_DIR` | Directory for data storage | `~/.autowiki` | `/data` |
+
+### YAML Configuration
+
 ```yaml
 # autowiki.yml
 llm:
-  provider: anthropic          # anthropic | openai | openai-compatible | ollama | google
+  provider: anthropic          # anthropic | google | openai | openai-compatible | ollama
   model: claude-sonnet-4-6
   api_key: ${ANTHROPIC_API_KEY}
 
 embedding:
-  provider: openai             # openai | ollama | google
-  model: text-embedding-3-small
-  api_key: ${OPENAI_API_KEY}
+  provider: google             # google | openai | ollama
+  model: models/text-embedding-004
+  api_key: ${GOOGLE_API_KEY}
 ```
 
 Configure via CLI:

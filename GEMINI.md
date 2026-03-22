@@ -2,24 +2,22 @@
 
 AutoWiki is a self-hosted, open-source tool that automatically generates comprehensive, browsable wikis for software repositories. By combining **Tree-Sitter AST analysis** with **RAG (Retrieval-Augmented Generation)**, it produces architecture overviews, module breakdowns, dependency diagrams, and source-linked documentation.
 
-> **Note:** This project is currently in the **Design & Specification Phase**. The repository contains detailed requirements and implementation plans, but source code is not yet present.
-
 ## 🚀 Project Overview
 
 - **Goal:** Transform complex codebases into navigable, human-readable documentation.
 - **Key Differentiator:** Combines deep structural analysis (AST) with semantic search (RAG) to maintain architectural context that traditional RAG-only tools lose.
 - **Surfaces:** Web UI (Next.js), CLI (`autowiki` command), and MCP Server for AI IDE integration.
 
-## 🛠 Tech Stack (Planned)
+## 🛠 Tech Stack
 
 - **Backend:** Python 3.12, FastAPI (API Gateway), ARQ (Async Job Queue with Redis).
 - **AST Analysis:** Tree-Sitter (supporting Python, JS/TS, Java, Go, Rust, C/C++, C#).
 - **RAG & Search:** LangChain, FAISS (Vector Store), OpenAI/Anthropic/Gemini/Ollama providers.
-- **Frontend:** Next.js 15, TypeScript, Tailwind CSS, shadcn/ui.
+- **Frontend:** Next.js 16, React 19, Tailwind CSS 4, shadcn/ui.
 - **Storage:** SQLite (Metadata), FAISS (Vectors), Markdown (Wiki Pages).
 - **Deployment:** Docker Compose.
 
-## 🏗 Planned Architecture
+## 🏗 Architecture
 
 AutoWiki uses a **Worker + API Gateway** split to handle long-running generation tasks asynchronously.
 
@@ -37,7 +35,7 @@ AutoWiki uses a **Worker + API Gateway** split to handle long-running generation
 -   **PRD & Design Spec:** `docs/superpowers/specs/2026-03-22-autowiki-design.md` - Comprehensive technical architecture and product requirements.
 -   **Implementation Plan:** `docs/superpowers/plans/2026-03-22-phase1-core-mvp.md` - Step-by-step TDD plan for building the MVP.
 
-## 🛠 Development Conventions (Planned)
+## 🛠 Development Conventions
 
 ### Project Structure
 -   `shared/`: Common models, configuration, and database logic.
@@ -57,13 +55,13 @@ AutoWiki uses a hierarchical configuration discovery:
 ### Quality Standards
 -   **Testing:** Target ≥80% line coverage for Python services.
 -   **TDD:** Implementation follows the failing-test-first approach documented in the Phase 1 plan.
--   **Linting/Formatting:** Expected usage of `ruff` or similar for Python and `prettier` for frontend.
+-   **Linting/Formatting:** Usage of `ruff` or similar for Python and `prettier` for frontend.
 
-## 📦 Building and Running (Future)
+## 📦 Building and Running
 
-Once implemented, the project will be managed via:
+The project is managed via:
 -   **Docker:** `docker-compose up --build`
 -   **Local Development:**
     -   Backend: `pip install -e .` and `autowiki serve`
-    -   Frontend: `npm install && npm run dev`
--   **Testing:** `pytest` and `npm test`
+    -   Frontend: `cd web && npm install && npm run dev`
+-   **Testing:** `pytest` and `cd web && npm test`
