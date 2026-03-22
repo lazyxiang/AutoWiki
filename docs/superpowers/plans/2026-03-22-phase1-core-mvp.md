@@ -93,8 +93,6 @@ AutoWiki/
 │   └── lib/
 │       ├── api.ts                  # REST API client (typed fetch wrappers)
 │       └── ws.ts                   # WebSocket hook for job progress
-│   └── app/
-│       └── layout.tsx              # Root layout — dark mode, font
 │
 └── tests/
     ├── conftest.py                 # Shared fixtures: test DB, mock LLM, fixture repo
@@ -283,6 +281,20 @@ cd web
 npx create-next-app@latest . --typescript --tailwind --app --src-dir=no --import-alias="@/*" --yes
 npx shadcn@latest init --defaults
 npx shadcn@latest add button input card badge progress separator scroll-area
+```
+
+- [ ] **Step 4b: Set `output: "standalone"` in `web/next.config.ts`**
+
+This is required for the Docker runner stage (which copies `.next/standalone`) and `autowiki serve` (which runs `server.js`). Edit `web/next.config.ts`:
+
+```typescript
+import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  output: "standalone",
+};
+
+export default nextConfig;
 ```
 
 - [ ] **Step 5: Create stub Dockerfiles**
@@ -1013,19 +1025,7 @@ class OpenAIEmbedding(EmbeddingProvider):
             return []
         response = await self._client.embeddings.create(input=texts, model=self._model)
         return [np.array(d.embedding, dtype=np.float32) for d in response.data]
-
-def make_embedding_provider(cfg) -> EmbeddingProvider:
-    from worker.embedding.ollama_embed import OllamaEmbedding
-    p = cfg.embedding.provider
-    if p == "openai":
-        return OpenAIEmbedding(
-            api_key=cfg.embedding.api_key or __import__("os").environ.get("OPENAI_API_KEY", ""),
-            model=cfg.embedding.model,
-        )
-    elif p == "ollama":
-        return OllamaEmbedding(model=cfg.embedding.model)
-    else:
-        raise ValueError(f"Unknown embedding provider: {p}")
+# Note: make_embedding_provider() factory lives in worker/embedding/__init__.py (Step 5b)
 ```
 
 - [ ] **Step 5: Implement `worker/embedding/ollama_embed.py`**
@@ -1260,8 +1260,9 @@ from worker.pipeline.ast_analysis import analyze_file, build_module_tree, SUPPOR
 FIXTURE = Path("tests/fixtures/simple-repo")
 
 def test_supported_languages_count():
-    # 11 extension entries covering 8 languages (some languages have multiple extensions)
-    assert len(SUPPORTED_LANGUAGES) == 11
+    # 12 extension entries covering 8 languages (some languages have multiple extensions)
+    # .py .js .jsx .ts .tsx .java .go .c .h .cpp .cc .cs
+    assert len(SUPPORTED_LANGUAGES) == 12
 
 def test_analyze_python_file():
     result = analyze_file(FIXTURE / "models.py")
@@ -2596,11 +2597,21 @@ def serve_cmd(
     typer.echo(f"  API:    http://127.0.0.1:{api_port}")
     typer.echo(f"  Web UI: http://127.0.0.1:{port}")
     typer.echo("Press Ctrl+C to stop.\n")
-    env = {**os.environ, "AUTOWIKI_SERVER_PORT": str(api_port)}
+    env = {
+        **os.environ,
+        "AUTOWIKI_SERVER_PORT": str(api_port),
+        "NEXT_PUBLIC_API_URL": f"http://127.0.0.1:{api_port}",
+        "INTERNAL_API_URL": f"http://127.0.0.1:{api_port}",
+        "PORT": str(port),
+    }
+    # Find the web directory relative to this file
+    web_dir = Path(__file__).parents[2] / "web"
     procs = [
         subprocess.Popen([sys.executable, "-m", "uvicorn", "api.main:app",
                           "--host", "127.0.0.1", "--port", str(api_port)], env=env),
         subprocess.Popen([sys.executable, "-m", "worker.main"], env=env),
+        subprocess.Popen(["node", str(web_dir / ".next" / "standalone" / "server.js")],
+                         env=env, cwd=str(web_dir)),
     ]
     try:
         for p in procs:
