@@ -1,5 +1,5 @@
 from __future__ import annotations
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import String, Integer, DateTime, ForeignKey, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -30,7 +30,7 @@ class Job(Base):
     status: Mapped[str] = mapped_column(String, nullable=False)
     progress: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     repository: Mapped[Repository] = relationship("Repository", back_populates="jobs")
 
@@ -44,5 +44,5 @@ class WikiPage(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     page_order: Mapped[int] = mapped_column(Integer, default=0)
     parent_slug: Mapped[str | None] = mapped_column(String, nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     repository: Mapped[Repository] = relationship("Repository", back_populates="pages")
