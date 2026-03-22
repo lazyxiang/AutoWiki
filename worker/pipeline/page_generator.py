@@ -17,7 +17,7 @@ class PageResult:
 
 def _build_page_prompt(spec: PageSpec, context_chunks: list[dict], repo_name: str) -> str:
     context = "\n\n---\n\n".join(
-        f"File: {c.get('file', 'unknown')}\n{c['text']}"
+        f"File: {c.get('file', 'unknown')}\n{c.get('text', '')}"
         for c in context_chunks
     )
     return f"""Repository: {repo_name}
