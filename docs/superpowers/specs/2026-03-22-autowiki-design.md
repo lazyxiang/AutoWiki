@@ -120,9 +120,10 @@ Every indexed repo stores the HEAD commit SHA at index time. On refresh trigger 
 
 1. Fetch current HEAD SHA from GitHub API.
 2. Diff against stored SHA to identify changed files.
-3. Re-run stages 1–6 only for modules containing changed files.
-4. Update FAISS index for changed chunks only (delete-and-insert).
-5. Update stored commit SHA.
+3. Determine affected **modules**: a module is a top-level package directory (e.g., `src/auth/`, `src/api/`). A changed file belongs to the module whose directory path is the longest prefix match of the file path. Files at the repo root belong to a synthetic `root` module.
+4. Re-run stages 1–6 only for affected modules.
+5. Update FAISS index for changed chunks only (delete-and-insert by chunk ID).
+6. Update stored commit SHA.
 
 This is the primary freshness differentiator over all competing products.
 
@@ -225,6 +226,14 @@ embedding:
 
 Any OpenAI-compatible endpoint works via `provider: openai-compatible` + `base_url`. Switching embedding providers requires re-indexing (incompatible vector spaces — this is surfaced clearly in the UI/CLI).
 
+**Config discovery and precedence (highest to lowest):**
+1. Environment variables (e.g., `AUTOWIKI_LLM_PROVIDER`, `ANTHROPIC_API_KEY`)
+2. `autowiki.yml` in the current working directory
+3. `~/.autowiki/autowiki.yml` (user-global config)
+4. Built-in defaults
+
+Both the API service and the Worker service read config from the same source at startup. In Docker Compose, environment variables in each container's `environment:` block take precedence over any mounted `autowiki.yml`.
+
 ---
 
 ## 6. API Design
@@ -236,7 +245,7 @@ POST   /api/repos                              Submit repo for indexing
 GET    /api/repos/{repo_id}                    Repo status + metadata
 GET    /api/repos/{repo_id}/wiki               List all wiki pages
 GET    /api/repos/{repo_id}/wiki/{slug}        Get single wiki page (Markdown)
-POST   /api/repos/{repo_id}/refresh            Trigger incremental re-index
+POST   /api/repos/{repo_id}/refresh            Trigger incremental re-index (Phase 2)
 GET    /api/jobs/{job_id}                      Poll job status + progress (0–100)
 
 POST   /api/repos/{repo_id}/chat               Create chat session
@@ -245,8 +254,28 @@ WS     /ws/repos/{repo_id}/chat/{session_id}   Streaming chat (WebSocket)
 POST   /api/repos/{repo_id}/research           Start Deep Research job
 WS     /ws/repos/{repo_id}/research/{job_id}   Stream research progress
 
-POST   /webhook/github                         GitHub push webhook (auto-refresh)
+POST   /webhook/github                         GitHub push webhook (Phase 4)
 ```
+
+**Key endpoint schemas:**
+
+`POST /api/repos` — Request:
+```json
+{ "url": "https://github.com/owner/repo" }
+```
+Response `202 Accepted`:
+```json
+{ "repo_id": "abc123", "job_id": "uuid-...", "status": "queued" }
+```
+
+`POST /api/repos/{repo_id}/chat` — Creates a new session (no body required).
+Response `201 Created`:
+```json
+{ "session_id": "uuid-..." }
+```
+The caller then opens a WebSocket at `/ws/repos/{repo_id}/chat/{session_id}` and sends/receives JSON messages: `{ "role": "user"|"assistant", "content": "..." }`.
+
+`POST /webhook/github` — Requires `X-Hub-Signature-256` HMAC header (SHA-256 of the raw payload, signed with the webhook secret configured in `autowiki.yml` under `webhook.github_secret`). Requests failing signature validation return `401`. This prevents unauthorized refresh triggers when the API is exposed on a public address.
 
 ### 6.2 CLI (`autowiki`)
 
@@ -280,10 +309,11 @@ Transport: `stdio` (local) or `SSE` (remote). No authentication required for loc
 ### 7.1 Multi-Turn Chat
 
 - RAG retrieval per turn: top-k chunks from FAISS index, ranked by cosine similarity.
-- Conversation history injected into LLM context (sliding window, last N turns).
+- Conversation history injected into LLM context (sliding window, last **10 turns** by default; configurable via `chat.history_window` in `autowiki.yml`).
 - Responses streamed via WebSocket.
 - Source citations included: every response references source file + line range.
 - Session history persisted in SQLite (`chat_sessions` / `chat_messages`).
+- The MCP `ask_question` tool is single-turn (stateless); multi-turn context is only maintained in WebSocket sessions.
 
 ### 7.2 Deep Research Mode
 
@@ -341,7 +371,6 @@ Deep Research is available in the Web UI (ResearchPanel), CLI (`autowiki researc
 | `ChatPanel` | Streaming multi-turn chat with source citations |
 | `ResearchPanel` | Progressive reveal: Research Plan → findings → Final Conclusion |
 | `DependencyGraph` | Interactive force-directed module relationship graph |
-| `ProviderBadge` | Displays which LLM/model generated the current page |
 
 ### 8.4 UX Principles
 
@@ -355,9 +384,9 @@ Deep Research is available in the Web UI (ResearchPanel), CLI (`autowiki researc
 
 ## 9. User-Facing Configuration
 
-### 9.1 `.autowikiignore`
+### 9.1 `.autowikiignore` *(Phase 2)*
 
-Repos may include `.autowikiignore` in their root (`.gitignore` syntax) to control what AutoWiki indexes:
+Repos may include `.autowikiignore` in their root (`.gitignore` syntax) to control what AutoWiki indexes. In Phase 1, only built-in exclusion rules apply; `.autowikiignore` support ships in Phase 2.
 
 ```
 # .autowikiignore
@@ -372,9 +401,9 @@ migrations/
 
 AutoWiki also applies built-in exclusion rules for common non-source directories (`node_modules`, `vendor`, `.git`, build outputs, binary files, etc.).
 
-### 9.2 `.autowiki/wiki.json` (Steerability)
+### 9.2 `.autowiki/wiki.json` (Steerability) *(Phase 4)*
 
-Repos may include `.autowiki/wiki.json` to steer wiki generation (inspired by DeepWiki's `.devin/wiki.json`):
+Repos may include `.autowiki/wiki.json` to steer wiki generation (inspired by DeepWiki's `.devin/wiki.json`). This ships in Phase 4; prior phases use the LLM-generated page plan exclusively.
 
 ```json
 {
@@ -400,7 +429,7 @@ If `pages` is defined, it overrides the LLM-generated page plan. `repo_notes` ar
 |---|---|
 | LLM API rate limit / timeout | Exponential backoff with jitter (3 retries); job marked `failed` with actionable error after exhaustion |
 | Malformed LLM output (bad JSON page plan) | Structured output validation + corrective retry prompt (up to 3 attempts); fallback to flat page structure |
-| Repo exceeds size limit (>500K files) | Pre-clone file count check; reject with clear message and suggestion to use `.autowikiignore` |
+| Repo exceeds size limit (>500K files) | Pre-clone file count check; reject with clear message and suggestion to use `.autowikiignore` (available Phase 2+) or reduce scope via `autowiki.yml` file filters |
 | FAISS index corruption | Auto-detect on load; delete and trigger re-index with user notification |
 | GitHub API rate limit (webhook) | Queue webhook jobs; process with delay; surface rate limit status in UI |
 | Embedding provider unavailable | Block new index jobs; serve existing cached wiki; surface error clearly |
@@ -418,6 +447,15 @@ If `pages` is defined, it overrides the LLM-generated page plan. `repo_notes` ar
 | **API** | All REST endpoints; mock LLM responses with recorded fixtures | FastAPI `TestClient` |
 | **Frontend** | Component rendering; critical user flows (index → wiki view → chat) | `vitest` + React Testing Library + Playwright |
 | **LLM regression** | Golden-file tests: pinned fixture repo + pinned model; diff output against stored baseline | Custom pytest plugin |
+
+**Coverage targets:**
+- Unit + Integration + API: ≥ 80% line coverage on `worker/` and `api/` Python packages.
+- Frontend: no hard coverage target; Playwright E2E tests must cover all critical paths.
+
+**CI pipeline (GitHub Actions):**
+- Unit, integration, and API tests run on every pull request (no LLM API keys required — all LLM calls are mocked).
+- Frontend tests (vitest + Playwright) run on every PR.
+- LLM regression (golden-file) tests run on a scheduled nightly job only, using repository secrets for API keys. Failures create a GitHub issue automatically but do not block merges.
 
 ---
 
@@ -484,12 +522,14 @@ volumes:
 - CLI: `index`, `list`, `serve`
 - Docker Compose deployment
 
-### Phase 2 — Chat & Diagrams
+### Phase 2 — Chat, Diagrams & Refresh
 - Stage 6: Diagram Synthesis
 - Multi-turn chat (WebSocket streaming)
 - ChatPanel in UI
 - DependencyGraph view
 - `autowiki chat` CLI command
+- `autowiki refresh` CLI command (incremental re-index, commit-SHA-based; no webhook yet)
+- `.autowikiignore` support
 
 ### Phase 3 — Research & MCP
 - Deep Research mode
@@ -497,12 +537,10 @@ volumes:
 - MCP server (all 5 tools)
 - `autowiki research` CLI command
 
-### Phase 4 — Freshness & Steerability
-- Incremental re-indexing
-- GitHub webhook endpoint
-- `.autowikiignore` support
+### Phase 4 — Webhook & Steerability
+- GitHub webhook endpoint (`POST /webhook/github`) with HMAC signature validation
 - `.autowiki/wiki.json` steerability
-- `autowiki refresh` CLI command
+- Auto-refresh on `push` events (no user action required)
 
 ### Phase 5 — Polish & Extensibility
 - Platform adapter interface (GitLab, Bitbucket stubs)
@@ -517,4 +555,7 @@ volumes:
 1. **Embedding provider default** — OpenAI `text-embedding-3-small` requires a separate OpenAI API key even when using Anthropic for generation. Should AutoWiki default to a locally-runnable embedding model (e.g., via Ollama) to reduce provider dependency?
 2. **FAISS vs. alternatives** — FAISS is in-process and zero-infrastructure but does not support hybrid keyword+semantic search. Should v1 consider `sqlite-vec` (SQLite vector extension) to reduce the dependency footprint?
 3. **Page limit** — Should AutoWiki enforce a max page count per wiki (like DeepWiki's 30/80 limits) to bound generation cost and time? Or leave it unbounded and let `.autowikiignore` do the work?
-4. **Auth for the web UI** — Should the local web UI have any authentication (even a simple API key / password) to prevent unintended exposure when bound to `0.0.0.0`?
+
+**Resolved:**
+
+4. ~~Auth for the web UI~~ — **Resolved:** The API and web UI bind to `127.0.0.1` by default (localhost only). Users who need network exposure must explicitly set `server.host: 0.0.0.0` in `autowiki.yml`. When `host` is set to a non-loopback address, the startup log emits a prominent warning. An optional bearer-token auth layer (`server.auth_token`) is provided for users who expose the service over a network; it is not required for local use.
