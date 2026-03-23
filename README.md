@@ -159,14 +159,14 @@ autowiki serve [--port 3000] [--api-port 3001]
 
 # Show or update config
 autowiki config show
-autowiki config set <key> <value>
+autowiki config set <key> <value>  # Dot-separated key, e.g. llm.provider, embedding.model
 ```
 
 ---
 
 ## API
 
-```
+```text
 POST  /api/repos                         Submit a repo for indexing → {repo_id, job_id}
 GET   /api/repos                         List all repos
 GET   /api/repos/{repo_id}               Repo status and metadata
@@ -212,7 +212,7 @@ pytest tests/ --ignore=tests/e2e \
 
 ## Project structure
 
-```
+```text
 AutoWiki/
 ├── api/                    # FastAPI gateway
 │   ├── routers/            # REST endpoints (repos, jobs, wiki)
@@ -244,7 +244,7 @@ AutoWiki/
 
 ### Architecture
 
-```
+```text
 Browser / CLI
       │
       ▼
@@ -291,7 +291,7 @@ For each page in the plan, the page title and module list are embedded and used 
 
 ### Data flow (single indexing request)
 
-```
+```text
 POST /api/repos {"url": "github.com/owner/repo"}
   → validate URL, create Repository + Job rows (status=queued)
   → enqueue run_full_index on Redis
