@@ -1,6 +1,6 @@
 import pytest
 from pathlib import Path
-from shared.database import init_db, get_session
+from shared.database import init_db, get_session, dispose_db
 from shared.models import Repository, Job, WikiPage
 
 @pytest.fixture
@@ -69,14 +69,15 @@ async def test_create_wiki_page(db):
 async def test_chat_models_created(tmp_path):
     db_path = str(tmp_path / "test.db")
     await init_db(db_path)
-    from sqlalchemy import inspect, text
-    from shared.database import _engines
-    engine = _engines[db_path]
-    async with engine.connect() as conn:
-        tables = await conn.run_sync(
-            lambda sync_conn: inspect(sync_conn).get_table_names()
-        )
-    assert "chat_sessions" in tables
-    assert "chat_messages" in tables
-    from shared.database import dispose_db
-    await dispose_db(db_path)
+    try:
+        from sqlalchemy import inspect
+        from shared.database import _engines
+        engine = _engines[db_path]
+        async with engine.connect() as conn:
+            tables = await conn.run_sync(
+                lambda sync_conn: inspect(sync_conn).get_table_names()
+            )
+        assert "chat_sessions" in tables
+        assert "chat_messages" in tables
+    finally:
+        await dispose_db(db_path)
