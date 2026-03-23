@@ -108,11 +108,11 @@ AutoWiki resolves config in this order (highest wins):
 | `GOOGLE_API_KEY` | — | Google API key (Gemini LLM and/or embeddings) |
 | `AUTOWIKI_LLM_PROVIDER` | `anthropic` | `anthropic` · `openai` · `openai-compatible` · `ollama` · `google` |
 | `AUTOWIKI_LLM_MODEL` | `claude-sonnet-4-6` | Model name for the configured provider |
-| `AUTOWIKI_LLM_API_KEY` | — | Override API key for the LLM provider |
+| `AUTOWIKI_LLM_API_KEY` | — | API key override. Required if provider-specific key (e.g. `ANTHROPIC_API_KEY`) is not set or if using a custom base URL. |
 | `AUTOWIKI_LLM_BASE_URL` | — | Base URL for `openai-compatible` or `ollama` providers |
 | `AUTOWIKI_EMBEDDING_PROVIDER` | `openai` | `openai` · `ollama` · `google` |
 | `AUTOWIKI_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model name |
-| `AUTOWIKI_EMBEDDING_API_KEY` | — | Override API key for the embedding provider |
+| `AUTOWIKI_EMBEDDING_API_KEY` | — | API key override. Required if provider-specific key (e.g. `OPENAI_API_KEY`) is not set or if using a custom base URL. |
 | `REDIS_URL` | `redis://localhost:6379` | Redis connection string |
 | `DATABASE_PATH` | `~/.autowiki/autowiki.db` | SQLite database path |
 | `AUTOWIKI_DATA_DIR` | `~/.autowiki` | Root directory for clones, indexes, and wiki files |
