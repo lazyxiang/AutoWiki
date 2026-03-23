@@ -1,0 +1,48 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'api/**'
+      - 'worker/**'
+      - 'shared/**'
+      - 'cli/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'api/**'
+      - 'worker/**'
+      - 'shared/**'
+      - 'cli/**'
+      - 'tests/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+      
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+        
+    - name: Install dependencies
+      run: uv sync --all-extras --dev
+      
+    - name: Lint with Ruff
+      run: uv run ruff check .
+      
+    - name: Format check with Ruff
+      run: uv run ruff format --check .
+      
+    - name: Run tests with pytest
+      # Ignore e2e tests and generate test coverage.
+      run: uv run pytest tests/ --ignore=tests/e2e --cov=worker --cov=api --cov=shared --cov-report=xml
