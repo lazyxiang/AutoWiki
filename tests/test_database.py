@@ -65,3 +65,18 @@ async def test_create_wiki_page(db):
         assert page.slug == "overview"
         assert page.parent_slug is None
         assert page.page_order == 0
+
+async def test_chat_models_created(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    await init_db(db_path)
+    from sqlalchemy import inspect, text
+    from shared.database import _engines
+    engine = _engines[db_path]
+    async with engine.connect() as conn:
+        tables = await conn.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_table_names()
+        )
+    assert "chat_sessions" in tables
+    assert "chat_messages" in tables
+    from shared.database import dispose_db
+    await dispose_db(db_path)
