@@ -167,7 +167,7 @@ autowiki config set <key> <value>  # Dot-separated key, e.g. llm.provider, embed
 ## API
 
 ```text
-POST  /api/repos                         Submit a repo for indexing → {repo_id, job_id}
+POST  /api/repos                         Submit a repo for indexing → {repo_id, job_id, status}
 GET   /api/repos                         List all repos
 GET   /api/repos/{repo_id}               Repo status and metadata
 GET   /api/repos/{repo_id}/wiki          List wiki pages (ordered)
