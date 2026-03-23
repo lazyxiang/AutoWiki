@@ -56,3 +56,10 @@ packages = ["api", "worker", "shared", "cli"]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"] # Enable basic error checking, unreferenced variables checking, import sorting (isort), and syntax upgrade checking
