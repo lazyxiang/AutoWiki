@@ -6,9 +6,9 @@ from pathlib import Path
 
 from shared.config import get_config
 from shared.database import get_session, init_db
-from sqlalchemy import select as sa_select
+from sqlalchemy import select as sa_select, delete as sa_delete
 from shared.models import Repository, Job, WikiPage
-from worker.pipeline.ingestion import filter_files, clone_or_fetch
+from worker.pipeline.ingestion import filter_files, clone_or_fetch, get_changed_files, get_affected_modules
 from worker.pipeline.ast_analysis import build_module_tree
 from worker.pipeline.rag_indexer import build_rag_index, FAISSStore
 from worker.pipeline.wiki_planner import generate_page_plan
@@ -133,6 +133,134 @@ async def run_full_index(
         await _update_job(db_path, job_id, status="done", finished_at=now)
         await _update_repo(db_path, repo_id, status="ready", last_commit=head_sha,
                            indexed_at=now, wiki_path=str(wiki_dir))
+
+    except Exception as e:
+        now = datetime.now(timezone.utc)
+        await _update_job(db_path, job_id, status="failed", error=str(e), finished_at=now)
+        await _update_repo(db_path, repo_id, status="error")
+        raise
+
+
+async def run_refresh_index(
+    ctx: dict,
+    repo_id: str,
+    job_id: str,
+    owner: str,
+    name: str,
+    clone_root: Path | None = None,
+):
+    """Incremental refresh: re-run pipeline only for modules with changed files."""
+    cfg = get_config()
+    db_path = str(cfg.database_path)
+    data_dir = cfg.data_dir
+    await init_db(db_path)
+
+    try:
+        await _update_job(db_path, job_id, status="running", progress=5)
+
+        # Stage 1: Clone/fetch to get new HEAD
+        repo_data_dir = data_dir / "repos" / repo_id
+        if clone_root is None:
+            clone_root = repo_data_dir / "clone"
+        new_sha = await clone_or_fetch(clone_root, owner, name)
+
+        # Check if anything changed
+        async with get_session(db_path) as s:
+            repo = await s.get(Repository, repo_id)
+            old_sha = repo.last_commit or ""
+
+        if old_sha == new_sha:
+            now = datetime.now(timezone.utc)
+            await _update_job(db_path, job_id, status="done", progress=100, finished_at=now)
+            return
+
+        # Find changed files and affected modules
+        changed_files = get_changed_files(clone_root, old_sha, new_sha) if old_sha else []
+        ast_dir = repo_data_dir / "ast"
+        module_tree_path = ast_dir / "module_tree.json"
+        if not module_tree_path.exists():
+            # No prior index — fall back to full index
+            await run_full_index(ctx, repo_id=repo_id, job_id=job_id, owner=owner, name=name,
+                                 clone_root=clone_root)
+            return
+
+        module_tree = json.loads(module_tree_path.read_text())
+        affected_modules = get_affected_modules(changed_files, module_tree)
+        if not affected_modules:
+            # Files changed but outside tracked modules — update SHA only
+            now = datetime.now(timezone.utc)
+            await _update_repo(db_path, repo_id, last_commit=new_sha)
+            await _update_job(db_path, job_id, status="done", progress=100, finished_at=now)
+            return
+
+        await _update_job(db_path, job_id, progress=20)
+
+        # Stage 2: Re-analyze AST for all files
+        autowikiignore = clone_root / ".autowikiignore"
+        files = filter_files(clone_root, ignore_file=autowikiignore)
+        module_tree = build_module_tree(clone_root, files)
+        ast_dir.mkdir(parents=True, exist_ok=True)
+        (ast_dir / "module_tree.json").write_text(json.dumps(module_tree))
+        await _update_job(db_path, job_id, progress=35)
+
+        # Stage 3: Rebuild FAISS index from scratch
+        llm = make_llm_provider(cfg)
+        embedding = make_embedding_provider(cfg)
+        repo_data_dir.mkdir(parents=True, exist_ok=True)
+        store = FAISSStore(
+            dimension=embedding.dimension,
+            index_path=repo_data_dir / "faiss.index",
+            meta_path=repo_data_dir / "faiss.meta.pkl",
+        )
+        await build_rag_index(files, clone_root, store, embedding)
+        await _update_job(db_path, job_id, progress=55)
+
+        # Stage 4: Re-plan only for affected modules
+        affected_module_tree = [m for m in module_tree if m["path"] in affected_modules]
+        plan = await generate_page_plan(affected_module_tree, repo_name=name, llm=llm)
+        await _update_job(db_path, job_id, progress=65)
+
+        # Delete old pages whose slugs will be replaced
+        new_slugs = {p.slug for p in plan.pages}
+        async with get_session(db_path) as s:
+            await s.execute(
+                sa_delete(WikiPage).where(
+                    WikiPage.repo_id == repo_id,
+                    WikiPage.slug.in_(new_slugs),
+                )
+            )
+            await s.commit()
+
+        # Stage 5: Regenerate pages for affected modules
+        wiki_dir = repo_data_dir / "wiki"
+        wiki_dir.mkdir(exist_ok=True)
+        total = len(plan.pages)
+        for i, page_spec in enumerate(plan.pages):
+            result = await generate_page(page_spec, store, llm, embedding, repo_name=name)
+            (wiki_dir / f"{result.slug}.md").write_text(result.content)
+            async with get_session(db_path) as s:
+                page = WikiPage(
+                    id=str(uuid.uuid4()),
+                    repo_id=repo_id,
+                    slug=result.slug,
+                    title=result.title,
+                    content=result.content,
+                    page_order=i,
+                    parent_slug=page_spec.parent_slug,
+                )
+                s.add(page)
+                await s.commit()
+            progress = 65 + int(30 * (i + 1) / total) if total > 0 else 95
+            await _update_job(db_path, job_id, progress=progress)
+
+        # Stage 6: Diagram Synthesis (rebuild for changed modules)
+        diagram = await synthesize_diagrams(module_tree, repo_name=name, llm=llm)
+        if diagram:
+            (ast_dir / "architecture.mmd").write_text(diagram)
+
+        now = datetime.now(timezone.utc)
+        await _update_job(db_path, job_id, status="done", progress=100, finished_at=now)
+        await _update_repo(db_path, repo_id, status="ready", last_commit=new_sha, indexed_at=now)
 
     except Exception as e:
         now = datetime.now(timezone.utc)
