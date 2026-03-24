@@ -52,7 +52,8 @@ async def run_full_index(
         if clone_root is None:
             clone_root = data_dir / "repos" / repo_id / "clone"
         head_sha = await clone_or_fetch(clone_root, owner, name)
-        files = filter_files(clone_root)
+        autowikiignore = clone_root / ".autowikiignore"
+        files = filter_files(clone_root, ignore_file=autowikiignore)
         await _update_job(db_path, job_id, progress=20)
 
         # Stage 2: AST Analysis

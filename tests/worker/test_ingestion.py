@@ -55,3 +55,44 @@ def test_filter_files_uses_relative_parts(tmp_path):
     files = filter_files(build_dir)
     # main.py should be found even though 'build' is an excluded dir name in the parent path
     assert any(f.name == "main.py" for f in files)
+
+
+def test_filter_files_respects_autowikiignore(tmp_path):
+    (tmp_path / "main.py").write_text("print('hello')")
+    (tmp_path / "test_main.py").write_text("# test")
+    (tmp_path / ".autowikiignore").write_text("test_*.py\n")
+    files = filter_files(tmp_path, ignore_file=tmp_path / ".autowikiignore")
+    names = [f.name for f in files]
+    assert "main.py" in names
+    assert "test_main.py" not in names
+
+
+def test_filter_files_ignores_missing_autowikiignore(tmp_path):
+    (tmp_path / "main.py").write_text("x = 1")
+    # No .autowikiignore — should not raise, should return main.py
+    files = filter_files(tmp_path, ignore_file=tmp_path / ".autowikiignore")
+    assert any(f.name == "main.py" for f in files)
+
+
+def test_get_changed_files_returns_diff(tmp_path):
+    from worker.pipeline.ingestion import get_changed_files
+    import git
+    repo = git.Repo.init(tmp_path)
+    repo.config_writer().set_value("user", "name", "test").release()
+    repo.config_writer().set_value("user", "email", "t@t.com").release()
+    (tmp_path / "a.py").write_text("x = 1")
+    repo.index.add(["a.py"])
+    c1 = repo.index.commit("first")
+    (tmp_path / "b.py").write_text("y = 2")
+    repo.index.add(["b.py"])
+    c2 = repo.index.commit("second")
+    changed = get_changed_files(tmp_path, c1.hexsha, c2.hexsha)
+    assert "b.py" in changed
+
+
+def test_get_affected_modules():
+    from worker.pipeline.ingestion import get_affected_modules
+    module_tree = [{"path": "api", "files": []}, {"path": "worker", "files": []}]
+    affected = get_affected_modules(["api/main.py", "README.md"], module_tree)
+    assert "api" in affected
+    assert "worker" not in affected
