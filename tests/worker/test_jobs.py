@@ -82,4 +82,17 @@ async def test_run_full_index_persists_module_tree(tmp_path, mock_llm, mock_embe
     assert module_tree_path.exists()
     tree = json.loads(module_tree_path.read_text())
     assert isinstance(tree, list)
+
+    # Verify Stage 6: diagram prepended to first wiki page in DB
+    from sqlalchemy import select as sa_select
+    from shared.models import WikiPage
+    async with get_session(db_path) as s:
+        result = await s.execute(
+            sa_select(WikiPage).where(WikiPage.repo_id == repo_id).order_by(WikiPage.page_order)
+        )
+        pages = result.scalars().all()
+    assert len(pages) > 0
+    assert "## Architecture" in pages[0].content
+    assert "```mermaid" in pages[0].content
+
     await dispose_db(db_path)

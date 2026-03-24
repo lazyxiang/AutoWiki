@@ -6,8 +6,9 @@ from pathlib import Path
 
 from shared.config import get_config
 from shared.database import get_session, init_db
+from sqlalchemy import select as sa_select
 from shared.models import Repository, Job, WikiPage
-from worker.pipeline.ingestion import filter_files, clone_or_fetch, get_changed_files, get_affected_modules
+from worker.pipeline.ingestion import filter_files, clone_or_fetch
 from worker.pipeline.ast_analysis import build_module_tree
 from worker.pipeline.rag_indexer import build_rag_index, FAISSStore
 from worker.pipeline.wiki_planner import generate_page_plan
@@ -107,7 +108,6 @@ async def run_full_index(
         # Stage 6: Diagram Synthesis
         diagram = await synthesize_diagrams(module_tree, repo_name=name, llm=llm)
         if diagram is not None and plan.pages:
-            from sqlalchemy import select as sa_select
             first_slug = plan.pages[0].slug
             async with get_session(db_path) as s:
                 result_row = await s.execute(
@@ -116,13 +116,15 @@ async def run_full_index(
                         WikiPage.slug == first_slug,
                     )
                 )
-                first_page = result_row.scalars().first()
+                first_page = result_row.scalar_one_or_none()
                 if first_page is not None:
                     prefix = f"## Architecture\n\n```mermaid\n{diagram}\n```\n\n"
                     first_page.content = prefix + first_page.content
+                    await s.commit()
+                    # Write to disk after DB commit so artifacts stay consistent
                     wiki_file = wiki_dir / f"{first_page.slug}.md"
                     wiki_file.write_text(first_page.content)
-                    await s.commit()
+            # architecture.mmd is always written when a valid diagram was generated
             (ast_dir / "architecture.mmd").write_text(diagram)
         await _update_job(db_path, job_id, progress=100)
 
