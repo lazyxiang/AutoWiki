@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -6,11 +7,12 @@ from pathlib import Path
 from shared.config import get_config
 from shared.database import get_session, init_db
 from shared.models import Repository, Job, WikiPage
-from worker.pipeline.ingestion import filter_files, clone_or_fetch
+from worker.pipeline.ingestion import filter_files, clone_or_fetch, get_changed_files, get_affected_modules
 from worker.pipeline.ast_analysis import build_module_tree
 from worker.pipeline.rag_indexer import build_rag_index, FAISSStore
 from worker.pipeline.wiki_planner import generate_page_plan
 from worker.pipeline.page_generator import generate_page
+from worker.pipeline.diagram_synthesis import synthesize_diagrams
 from worker.llm import make_llm_provider
 from worker.embedding import make_embedding_provider
 
@@ -49,8 +51,10 @@ async def run_full_index(
         await _update_repo(db_path, repo_id, status="indexing")
 
         # Stage 1: Ingestion
+        repo_data_dir = data_dir / "repos" / repo_id
+        repo_data_dir.mkdir(parents=True, exist_ok=True)
         if clone_root is None:
-            clone_root = data_dir / "repos" / repo_id / "clone"
+            clone_root = repo_data_dir / "clone"
         head_sha = await clone_or_fetch(clone_root, owner, name)
         autowikiignore = clone_root / ".autowikiignore"
         files = filter_files(clone_root, ignore_file=autowikiignore)
@@ -58,13 +62,14 @@ async def run_full_index(
 
         # Stage 2: AST Analysis
         module_tree = build_module_tree(clone_root, files)
+        ast_dir = repo_data_dir / "ast"
+        ast_dir.mkdir(parents=True, exist_ok=True)
+        (ast_dir / "module_tree.json").write_text(json.dumps(module_tree))
         await _update_job(db_path, job_id, progress=35)
 
         # Stage 3: RAG Indexer
         llm = make_llm_provider(cfg)
         embedding = make_embedding_provider(cfg)
-        repo_data_dir = data_dir / "repos" / repo_id
-        repo_data_dir.mkdir(parents=True, exist_ok=True)
         store = FAISSStore(
             dimension=embedding.dimension,
             index_path=repo_data_dir / "faiss.index",
@@ -96,12 +101,34 @@ async def run_full_index(
                 )
                 s.add(page)
                 await s.commit()
-            progress = 65 + int(35 * (i + 1) / total)
+            progress = 65 + int(30 * (i + 1) / total)
             await _update_job(db_path, job_id, progress=progress)
+
+        # Stage 6: Diagram Synthesis
+        diagram = await synthesize_diagrams(module_tree, repo_name=name, llm=llm)
+        if diagram is not None and plan.pages:
+            from sqlalchemy import select as sa_select
+            first_slug = plan.pages[0].slug
+            async with get_session(db_path) as s:
+                result_row = await s.execute(
+                    sa_select(WikiPage).where(
+                        WikiPage.repo_id == repo_id,
+                        WikiPage.slug == first_slug,
+                    )
+                )
+                first_page = result_row.scalars().first()
+                if first_page is not None:
+                    prefix = f"## Architecture\n\n```mermaid\n{diagram}\n```\n\n"
+                    first_page.content = prefix + first_page.content
+                    wiki_file = wiki_dir / f"{first_page.slug}.md"
+                    wiki_file.write_text(first_page.content)
+                    await s.commit()
+            (ast_dir / "architecture.mmd").write_text(diagram)
+        await _update_job(db_path, job_id, progress=100)
 
         # Done
         now = datetime.now(timezone.utc)
-        await _update_job(db_path, job_id, status="done", progress=100, finished_at=now)
+        await _update_job(db_path, job_id, status="done", finished_at=now)
         await _update_repo(db_path, repo_id, status="ready", last_commit=head_sha,
                            indexed_at=now, wiki_path=str(wiki_dir))
 
