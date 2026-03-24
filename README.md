@@ -18,7 +18,7 @@ The result is served via a REST API and displayed in a Next.js web UI with sideb
 
 ### Local
 
-**Requirements:** Python 3.12+, Node.js 22+, Redis, an Anthropic or OpenAI API key
+**Requirements:** Python 3.12+, Node.js 22+, Redis, and an API key (Anthropic, OpenAI, or Google)
 
 ```bash
 # 1. Install Python packages
@@ -67,7 +67,7 @@ autowiki serve
 
 ### Docker Compose
 
-**Requirements:** Docker, an Anthropic or OpenAI API key
+**Requirements:** Docker, and an API key (Anthropic, OpenAI, or Google)
 
 ```bash
 # Anthropic LLM + OpenAI embeddings (default)
@@ -81,6 +81,11 @@ AUTOWIKI_LLM_PROVIDER=openai AUTOWIKI_LLM_MODEL=gpt-4o \
 AUTOWIKI_LLM_PROVIDER=ollama AUTOWIKI_LLM_MODEL=llama3.2 \
 AUTOWIKI_EMBEDDING_PROVIDER=ollama AUTOWIKI_EMBEDDING_MODEL=nomic-embed-text \
 OLLAMA_HOST=http://host.docker.internal:11434 docker-compose up
+
+# Google Gemini for everything
+AUTOWIKI_LLM_PROVIDER=google AUTOWIKI_LLM_MODEL=gemini-1.5-pro \
+AUTOWIKI_EMBEDDING_PROVIDER=google AUTOWIKI_EMBEDDING_MODEL=models/text-embedding-004 \
+GOOGLE_API_KEY=AIzaSy... docker-compose up
 ```
 
 - Web UI: http://localhost:3000
