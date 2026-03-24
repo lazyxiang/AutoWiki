@@ -50,7 +50,7 @@ def filter_files(
     """
     spec: pathspec.PathSpec | None = None
     if ignore_file is not None and ignore_file.is_file():
-        patterns = ignore_file.read_text().splitlines()
+        patterns = ignore_file.read_text(encoding="utf-8").splitlines()
         spec = pathspec.PathSpec.from_lines("gitignore", patterns)
 
     results: list[Path] = []
@@ -98,7 +98,11 @@ async def clone_or_fetch(clone_dir: Path, owner: str, name: str) -> str:
 
 
 def get_changed_files(clone_dir: Path, old_sha: str, new_sha: str) -> list[str]:
-    """Return list of file paths changed between two git SHAs."""
+    """Return list of file paths changed between two git SHAs.
+
+    Raises git.exc.GitCommandError if either SHA is not reachable in the repo
+    history (e.g. shallow clones missing the old commit).
+    """
     import git
     repo = git.Repo(clone_dir)
     diff_output = repo.git.diff("--name-only", old_sha, new_sha)
@@ -113,6 +117,7 @@ def get_affected_modules(changed_files: list[str], module_tree: list[dict]) -> s
     affected: set[str] = set()
     for f in changed_files:
         parts = Path(f).parts
+        # Root-level files (len==1) map to "." — they don't belong to any module
         module = parts[0] if len(parts) > 1 else "."
         if module in module_paths:
             affected.add(module)
