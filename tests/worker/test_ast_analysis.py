@@ -5,9 +5,67 @@ from worker.pipeline.ast_analysis import analyze_file, build_module_tree, SUPPOR
 FIXTURE = Path("tests/fixtures/simple-repo")
 
 def test_supported_languages_count():
-    # 13 extension entries covering 9 languages (some have multiple extensions)
-    # .py .js .jsx .ts .tsx .java .go .rs .c .h .cpp .cc .cs
-    assert len(SUPPORTED_LANGUAGES) == 13
+    # 15 extension entries
+    # .py .js .jsx .ts .tsx .java .kt .kts .go .rs .c .h .cpp .cc .cs
+    assert len(SUPPORTED_LANGUAGES) == 15
+
+def test_analyze_kotlin_file(tmp_path):
+    f = tmp_path / "Main.kt"
+    f.write_text("""
+        class HelloWorld {
+            fun sayHello() {
+                println("Hello")
+            }
+        }
+        fun main() {
+            println("Top-level")
+        }
+    """)
+    result = analyze_file(f)
+    assert result is not None
+    names = [e["name"] for e in result["entities"]]
+    assert "HelloWorld" in names
+    assert "sayHello" in names
+    assert "main" in names
+
+def test_analyze_javascript_file(tmp_path):
+    f = tmp_path / "index.js"
+    f.write_text("""
+        class App {
+            render() {
+                console.log("App");
+            }
+        }
+        function init() {
+            return new App();
+        }
+    """)
+    result = analyze_file(f)
+    assert result is not None
+    names = [e["name"] for e in result["entities"]]
+    assert "App" in names
+    assert "render" in names
+    assert "init" in names
+
+def test_analyze_typescript_file(tmp_path):
+    f = tmp_path / "types.ts"
+    f.write_text("""
+        interface User {
+            id: number;
+            name: string;
+        }
+        class UserService {
+            getUser(id: number): User {
+                return { id, name: "Test" };
+            }
+        }
+    """)
+    result = analyze_file(f)
+    assert result is not None
+    names = [e["name"] for e in result["entities"]]
+    assert "User" in names
+    assert "UserService" in names
+    assert "getUser" in names
 
 def test_analyze_python_file():
     result = analyze_file(FIXTURE / "models.py")

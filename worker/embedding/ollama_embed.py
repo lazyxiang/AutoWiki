@@ -14,12 +14,12 @@ class OllamaEmbedding(EmbeddingProvider):
     def dimension(self) -> int:
         return self._dim
 
-    async def embed(self, text: str) -> np.ndarray:
+    async def embed(self, text: str, is_code: bool = False) -> np.ndarray:
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(f"{self._base_url}/api/embeddings",
                                      json={"model": self._model, "prompt": text})
             resp.raise_for_status()
             return np.array(resp.json()["embedding"], dtype=np.float32)
 
-    async def embed_batch(self, texts: list[str]) -> list[np.ndarray]:
-        return [await self.embed(t) for t in texts]
+    async def embed_batch(self, texts: list[str], is_code: bool = False) -> list[np.ndarray]:
+        return [await self.embed(t, is_code=is_code) for t in texts]

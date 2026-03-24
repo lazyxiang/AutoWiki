@@ -70,6 +70,16 @@ class FAISSStore:
             ) from exc
 
 
+def is_code_file(path: Path) -> bool:
+    """Determine if a file should be treated as source code vs documentation."""
+    # Documentation usually has these extensions
+    doc_exts = {'.md', '.txt', '.rst', '.adoc', '.pdf', '.docx'}
+    if path.suffix.lower() in doc_exts:
+        return False
+    # Most other things we parse are source code (py, js, ts, go, rs, etc.)
+    return True
+
+
 async def build_rag_index(
     files: list[Path],
     root: Path,
@@ -85,7 +95,10 @@ async def build_rag_index(
             rel = str(file_path.relative_to(root))
         except ValueError:
             rel = str(file_path)
-        vectors = await embedding_provider.embed_batch(chunks)
+        
+        is_code = is_code_file(file_path)
+        vectors = await embedding_provider.embed_batch(chunks, is_code=is_code)
+        
         metas = [{"text": chunk, "file": rel, "chunk_idx": i}
                  for i, chunk in enumerate(chunks)]
         store.add(vectors, metas)

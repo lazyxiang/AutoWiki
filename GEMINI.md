@@ -55,7 +55,7 @@ Supported AST languages: Python, JavaScript/JSX, TypeScript/TSX, Java, Go, Rust,
 - **pydantic-settings v2**: Sub-model env_prefix isolation — no `env_nested_delimiter` on parent `Config`.
 - **SQLAlchemy 2.0 async**: with aiosqlite; use `datetime.now(timezone.utc)` not `datetime.utcnow()`.
 - **Next.js 16.2.1**: Tailwind v4 (CSS-only, no `tailwind.config.ts`), `@base-ui/react` not `@radix-ui/react`.
-- **Gemini providers**: `google-generativeai` is deprecated; using `google-genai` for Phase 2.
+- **Gemini providers**: Migrated to `google-genai` (Phase 2). Dynamic dimension detection enabled for embeddings.
 - **ARQ worker**: Blocking I/O must use `run_in_executor`.
 
 ### Quality Standards

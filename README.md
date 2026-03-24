@@ -70,9 +70,19 @@ autowiki serve
 **Requirements:** Docker, and an API key (Anthropic, OpenAI, or Google)
 
 ```bash
-# Anthropic LLM + OpenAI embeddings (default)
+# 1. Build the images (required for first run or when source changes)
+docker-compose build
+
+# 2. Start everything (Anthropic LLM + OpenAI embeddings default)
 ANTHROPIC_API_KEY=sk-ant-... OPENAI_API_KEY=sk-... docker-compose up
 
+# Combined build and run
+ANTHROPIC_API_KEY=sk-ant-... OPENAI_API_KEY=sk-... docker-compose up --build
+```
+
+#### Run with different providers
+
+```bash
 # OpenAI for everything
 AUTOWIKI_LLM_PROVIDER=openai AUTOWIKI_LLM_MODEL=gpt-4o \
   OPENAI_API_KEY=sk-... docker-compose up
@@ -87,9 +97,6 @@ AUTOWIKI_LLM_PROVIDER=google AUTOWIKI_LLM_MODEL=gemini-1.5-pro \
 AUTOWIKI_EMBEDDING_PROVIDER=google AUTOWIKI_EMBEDDING_MODEL=models/text-embedding-004 \
 GOOGLE_API_KEY=AIzaSy... docker-compose up
 ```
-
-- Web UI: http://localhost:3000
-- API: http://localhost:3001
 
 Persistent data (SQLite, FAISS index, clones, wiki Markdown) is stored in the `autowiki_data` Docker volume.
 

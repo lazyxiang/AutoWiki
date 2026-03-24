@@ -11,6 +11,7 @@ import tree_sitter_rust as tsrust
 import tree_sitter_c as tsc
 import tree_sitter_cpp as tscpp
 import tree_sitter_c_sharp as tscsharp
+import tree_sitter_kotlin as tskotlin
 from tree_sitter import Language, Parser
 
 SUPPORTED_LANGUAGES: dict[str, Language] = {
@@ -20,6 +21,8 @@ SUPPORTED_LANGUAGES: dict[str, Language] = {
     ".ts":   Language(tstypescript.language_typescript()),
     ".tsx":  Language(tstypescript.language_tsx()),
     ".java": Language(tsjava.language()),
+    ".kt":   Language(tskotlin.language()),
+    ".kts":  Language(tskotlin.language()),
     ".go":   Language(tsgo.language()),
     ".rs":   Language(tsrust.language()),
     ".c":    Language(tsc.language()),
@@ -32,8 +35,9 @@ SUPPORTED_LANGUAGES: dict[str, Language] = {
 # Tree-Sitter node types that represent named entities
 _ENTITY_TYPES = {
     "function_definition", "class_definition",       # Python
-    "function_declaration", "class_declaration",     # JS/TS/Java
+    "function_declaration", "class_declaration",     # JS/TS/Java/Kotlin
     "method_declaration", "method_definition",
+    "interface_declaration", "object_declaration",   # TS/Kotlin
     "function_item",                                 # Rust
     "struct_item", "impl_item",
     "func_declaration", "type_declaration",          # Go
@@ -61,7 +65,7 @@ def _extract_entities(node: Any, source: bytes) -> list[dict[str, Any]]:
     if node.type in _ENTITY_TYPES:
         name_node = node.child_by_field_name("name")
         name = name_node.text.decode("utf-8", errors="replace") if name_node else "<anonymous>"
-        kind = "class" if "class" in node.type or "struct" in node.type else "function"
+        kind = "class" if any(kw in node.type for kw in ["class", "struct", "interface", "object", "impl"]) else "function"
         results.append({
             "type": kind,
             "name": name,
