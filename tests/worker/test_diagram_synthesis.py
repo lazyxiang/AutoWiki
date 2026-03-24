@@ -33,6 +33,10 @@ async def test_synthesize_diagrams_retries_on_invalid(mock_llm):
     result = await synthesize_diagrams(module_tree, repo_name="repo", llm=mock_llm)
     assert result is not None
     assert mock_llm.generate.call_count == 2
+    # Second call prompt must reference the prior bad output (not snowball)
+    second_call_prompt = mock_llm.generate.call_args_list[1][0][0]
+    assert "Previous attempt produced invalid Mermaid" in second_call_prompt
+    assert "not valid mermaid" in second_call_prompt
 
 
 async def test_synthesize_diagrams_returns_none_after_max_retries(mock_llm):
