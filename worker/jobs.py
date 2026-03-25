@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import uuid
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -54,7 +56,13 @@ async def run_full_index(
     await init_db(db_path)
 
     try:
-        await _update_job(db_path, job_id, status="running", progress=5)
+        await _update_job(
+            db_path,
+            job_id,
+            status="running",
+            progress=5,
+            status_description="Cloning repository and fetching files...",
+        )
         await _update_repo(db_path, repo_id, status="indexing")
 
         # Stage 1: Ingestion
@@ -63,7 +71,12 @@ async def run_full_index(
         head_sha = await clone_or_fetch(clone_root, owner, name)
         files = filter_files(clone_root)
         readme = extract_readme(clone_root)
-        await _update_job(db_path, job_id, progress=20)
+        await _update_job(
+            db_path,
+            job_id,
+            progress=20,
+            status_description="Analyzing source code structure (AST)...",
+        )
 
         # Stage 2: AST Analysis — enhanced module tree with entity summaries
         module_tree = build_module_tree(clone_root, files)
@@ -79,7 +92,12 @@ async def run_full_index(
                 except ValueError:
                     rel = str(f)
                 file_entities[rel] = analysis["entities"]
-        await _update_job(db_path, job_id, progress=30)
+        await _update_job(
+            db_path,
+            job_id,
+            progress=30,
+            status_description="Building dependency graph...",
+        )
 
         # Stage 2b: Dependency Graph
         dep_graph = build_dependency_graph(files, clone_root)
@@ -92,22 +110,51 @@ async def run_full_index(
             except (ValueError, TypeError):
                 module_files[m["path"]] = m["files"]
         dep_summary = summarize_dependencies(dep_graph, module_files)
-        await _update_job(db_path, job_id, progress=40)
+        await _update_job(
+            db_path,
+            job_id,
+            progress=40,
+            status_description="Indexing code for RAG search...",
+        )
 
         # Stage 3: RAG Indexer — entity-aware chunking with line numbers
         llm = make_llm_provider(cfg)
         embedding = make_embedding_provider(cfg)
         repo_data_dir = data_dir / "repos" / repo_id
         repo_data_dir.mkdir(parents=True, exist_ok=True)
+        
+        index_path = repo_data_dir / "faiss.index"
+        meta_path = repo_data_dir / "faiss.meta.pkl"
         store = FAISSStore(
             dimension=embedding.dimension,
-            index_path=repo_data_dir / "faiss.index",
-            meta_path=repo_data_dir / "faiss.meta.pkl",
+            index_path=index_path,
+            meta_path=meta_path,
         )
-        await build_rag_index(
-            files, clone_root, store, embedding, file_entities=file_entities
-        )
-        await _update_job(db_path, job_id, progress=55)
+        
+        if index_path.exists() and meta_path.exists():
+            await _update_job(
+                db_path,
+                job_id,
+                progress=55,
+                status_description="Using existing code index...",
+            )
+            store.load()
+        else:
+            await _update_job(
+                db_path,
+                job_id,
+                progress=40,
+                status_description="Indexing code for RAG search (embedding)...",
+            )
+            await build_rag_index(
+                files, clone_root, store, embedding, file_entities=file_entities
+            )
+            await _update_job(
+                db_path,
+                job_id,
+                progress=55,
+                status_description="Planning wiki structure...",
+            )
 
         # Stage 4: Wiki Planner — enriched with README, deps, entities
         plan = await generate_page_plan(
@@ -123,7 +170,13 @@ async def run_full_index(
         # Stage 5: Page Generator — with dependency context and entity details
         wiki_dir = repo_data_dir / "wiki"
         wiki_dir.mkdir(exist_ok=True)
+
+        # Save wiki structure JSON
+        structure_data = asdict(plan)
+        (wiki_dir / "wiki.json").write_text(json.dumps(structure_data, indent=2))
+
         total = len(plan.pages)
+        # ... rest of generator setup
 
         # Build entity details lookup per module for page generation
         module_entity_map: dict[str, list[dict]] = {}
@@ -193,11 +246,23 @@ async def run_full_index(
                 s.add(page)
                 await s.commit()
             progress = 65 + int(35 * (i + 1) / total)
-            await _update_job(db_path, job_id, progress=progress)
+            await _update_job(
+                db_path,
+                job_id,
+                progress=progress,
+                status_description=f"Generating page: {result.title}...",
+            )
 
         # Done
         now = datetime.now(UTC)
-        await _update_job(db_path, job_id, status="done", progress=100, finished_at=now)
+        await _update_job(
+            db_path,
+            job_id,
+            status="done",
+            progress=100,
+            finished_at=now,
+            status_description="Wiki generation complete!",
+        )
         await _update_repo(
             db_path,
             repo_id,
@@ -205,12 +270,18 @@ async def run_full_index(
             last_commit=head_sha,
             indexed_at=now,
             wiki_path=str(wiki_dir),
+            wiki_structure=json.dumps(structure_data),
         )
 
     except Exception as e:
         now = datetime.now(UTC)
         await _update_job(
-            db_path, job_id, status="failed", error=str(e), finished_at=now
+            db_path,
+            job_id,
+            status="failed",
+            error=str(e),
+            finished_at=now,
+            status_description=f"Error: {str(e)}",
         )
         await _update_repo(db_path, repo_id, status="error")
         raise

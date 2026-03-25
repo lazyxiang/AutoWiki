@@ -20,5 +20,6 @@ async def get_job(job_id: str):
             "type": job.type,
             "status": job.status,
             "progress": job.progress,
+            "status_description": job.status_description,
             "error": job.error,
         }

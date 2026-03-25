@@ -1,9 +1,11 @@
+import json
+
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
 
 from shared.config import get_config
 from shared.database import get_session
-from shared.models import WikiPage
+from shared.models import Repository, WikiPage
 
 router = APIRouter(prefix="/api/repos/{repo_id}/wiki")
 
@@ -12,6 +14,11 @@ router = APIRouter(prefix="/api/repos/{repo_id}/wiki")
 async def list_wiki_pages(repo_id: str):
     cfg = get_config()
     async with get_session(str(cfg.database_path)) as s:
+        repo = await s.get(Repository, repo_id)
+        if repo and repo.wiki_structure:
+            structure = json.loads(repo.wiki_structure)
+            return {"pages": structure.get("pages", [])}
+
         result = await s.execute(
             select(WikiPage)
             .where(WikiPage.repo_id == repo_id)

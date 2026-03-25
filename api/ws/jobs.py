@@ -20,7 +20,13 @@ async def ws_job_progress(websocket: WebSocket, job_id: str):
             if job is None:
                 await websocket.send_json({"error": "Job not found"})
                 break
-            await websocket.send_json({"progress": job.progress, "status": job.status})
+            await websocket.send_json(
+                {
+                    "progress": job.progress,
+                    "status": job.status,
+                    "status_description": job.status_description,
+                }
+            )
             if job.status in ("done", "failed"):
                 break
             await asyncio.sleep(1)
