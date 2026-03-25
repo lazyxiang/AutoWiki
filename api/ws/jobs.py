@@ -1,8 +1,10 @@
+import asyncio
+
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+
+from shared.config import get_config
 from shared.database import get_session
 from shared.models import Job
-from shared.config import get_config
-import asyncio
 
 router = APIRouter()
 

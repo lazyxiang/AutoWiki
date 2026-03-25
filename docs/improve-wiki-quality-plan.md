@@ -350,7 +350,7 @@ description: Mapped[str | None] = mapped_column(Text, nullable=True)
 2. **Integration test**: `pytest tests/test_integration.py` — full pipeline with fixtures
 3. **Manual check**: Run against the fixture repo and verify:
    - Page plan has descriptions and hierarchy
-   - Generated pages include Mermaid diagrams (```mermaid blocks)
+   - Generated pages include Mermaid diagrams (Mermaid code blocks)
    - Source annotations present (e.g., *Source: models.py:5-20*)
    - Dependency information included in pages
 4. **Frontend**: Verify Mermaid renders in the web UI (requires `npm run dev`)

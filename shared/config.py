@@ -1,14 +1,18 @@
 from __future__ import annotations
+
 import os
 from pathlib import Path
 from typing import Literal
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class LLMConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AUTOWIKI_LLM_")
-    provider: Literal["anthropic", "google", "openai", "openai-compatible", "ollama"] = "anthropic"
+    provider: Literal[
+        "anthropic", "google", "openai", "openai-compatible", "ollama"
+    ] = "anthropic"
     model: str = "claude-sonnet-4-6"
     api_key: str = ""
     base_url: str = ""
@@ -42,10 +46,14 @@ class Config(BaseSettings):
     server: ServerConfig = Field(default_factory=ServerConfig)
     chat: ChatConfig = Field(default_factory=ChatConfig)
     data_dir: Path = Field(
-        default_factory=lambda: Path(os.environ.get("AUTOWIKI_DATA_DIR", Path.home() / ".autowiki"))
+        default_factory=lambda: Path(
+            os.environ.get("AUTOWIKI_DATA_DIR", Path.home() / ".autowiki")
+        )
     )
     database_path: Path = Field(
-        default_factory=lambda: Path(os.environ.get("DATABASE_PATH", Path.home() / ".autowiki" / "autowiki.db"))
+        default_factory=lambda: Path(
+            os.environ.get("DATABASE_PATH", Path.home() / ".autowiki" / "autowiki.db")
+        )
     )
 
 

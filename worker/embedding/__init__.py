@@ -1,13 +1,19 @@
 from __future__ import annotations
+
 import os
+
 from worker.embedding.base import EmbeddingProvider
 
 
 def make_embedding_provider(cfg) -> EmbeddingProvider:
-    """Factory: create EmbeddingProvider from config. Import here so worker/jobs.py patches cleanly."""
-    from worker.embedding.openai_embed import OpenAIEmbedding
+    """Factory: create EmbeddingProvider from config.
+
+    Import here so worker/jobs.py patches cleanly.
+    """
     from worker.embedding.gemini_embed import GeminiEmbedding
     from worker.embedding.ollama_embed import OllamaEmbedding
+    from worker.embedding.openai_embed import OpenAIEmbedding
+
     p = cfg.embedding.provider
     if p == "openai":
         return OpenAIEmbedding(

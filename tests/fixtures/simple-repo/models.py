@@ -3,6 +3,7 @@ class User:
         self.name = name
         self.email = email
 
+
 class Post:
     def __init__(self, title: str, author: User):
         self.title = title

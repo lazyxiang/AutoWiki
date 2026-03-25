@@ -18,7 +18,7 @@ function MermaidBlock({ children }: { children: string }) {
       mermaid.initialize({
         startOnLoad: false,
         theme: "dark",
-        securityLevel: "loose",
+        securityLevel: "strict",
       });
       if (cancelled || !ref.current) return;
       try {

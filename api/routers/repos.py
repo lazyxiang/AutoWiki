@@ -1,14 +1,17 @@
 from __future__ import annotations
-import uuid
+
 import hashlib
+import uuid
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
-from shared.database import get_session
-from shared.models import Repository, Job
-from shared.config import get_config
-from worker.pipeline.ingestion import parse_github_url
+
 from api.queue import enqueue_full_index
+from shared.config import get_config
+from shared.database import get_session
+from shared.models import Job, Repository
+from worker.pipeline.ingestion import parse_github_url
 
 router = APIRouter(prefix="/api/repos")
 
@@ -32,9 +35,13 @@ async def submit_repo(req: IndexRequest):
     async with get_session(db_path) as s:
         existing = await s.get(Repository, repo_id)
         if existing is None:
-            repo = Repository(id=repo_id, owner=owner, name=name, status="pending", platform="github")
+            repo = Repository(
+                id=repo_id, owner=owner, name=name, status="pending", platform="github"
+            )
             s.add(repo)
-        job = Job(id=job_id, repo_id=repo_id, type="full_index", status="queued", progress=0)
+        job = Job(
+            id=job_id, repo_id=repo_id, type="full_index", status="queued", progress=0
+        )
         s.add(job)
         await s.commit()
 
@@ -48,7 +55,12 @@ async def list_repos():
     async with get_session(str(cfg.database_path)) as s:
         result = await s.execute(select(Repository))
         repos = result.scalars().all()
-    return {"repos": [{"id": r.id, "owner": r.owner, "name": r.name, "status": r.status} for r in repos]}
+    return {
+        "repos": [
+            {"id": r.id, "owner": r.owner, "name": r.name, "status": r.status}
+            for r in repos
+        ]
+    }
 
 
 @router.get("/{repo_id}")
@@ -58,5 +70,10 @@ async def get_repo(repo_id: str):
         repo = await s.get(Repository, repo_id)
         if repo is None:
             raise HTTPException(status_code=404, detail="Repository not found")
-        return {"id": repo.id, "owner": repo.owner, "name": repo.name,
-                "status": repo.status, "indexed_at": repo.indexed_at}
+        return {
+            "id": repo.id,
+            "owner": repo.owner,
+            "name": repo.name,
+            "status": repo.status,
+            "indexed_at": repo.indexed_at,
+        }

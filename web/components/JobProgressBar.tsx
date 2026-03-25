@@ -6,12 +6,11 @@ import { useJobProgress } from "@/lib/ws";
 
 interface Props {
   jobId: string;
-  repoId: string;
   owner: string;
   repo: string;
 }
 
-export function JobProgressBar({ jobId, repoId, owner, repo }: Props) {
+export function JobProgressBar({ jobId, owner, repo }: Props) {
   const { progress, status } = useJobProgress(jobId);
   const router = useRouter();
 

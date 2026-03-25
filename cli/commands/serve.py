@@ -1,8 +1,9 @@
-import typer
+import os
 import subprocess
 import sys
-import os
 from pathlib import Path
+
+import typer
 
 
 def serve_cmd(
@@ -10,7 +11,7 @@ def serve_cmd(
     api_port: int = typer.Option(3001, "--api-port", help="API port"),
 ):
     """Start the full AutoWiki stack (API + worker + web UI)."""
-    typer.echo(f"Starting AutoWiki...")
+    typer.echo("Starting AutoWiki...")
     typer.echo(f"  API:    http://127.0.0.1:{api_port}")
     typer.echo(f"  Web UI: http://127.0.0.1:{port}")
     typer.echo("Press Ctrl+C to stop.\n")
@@ -24,8 +25,16 @@ def serve_cmd(
     web_dir = Path(__file__).parents[2] / "web"
     procs = [
         subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "api.main:app",
-             "--host", "127.0.0.1", "--port", str(api_port)],
+            [
+                sys.executable,
+                "-m",
+                "uvicorn",
+                "api.main:app",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(api_port),
+            ],
             env=env,
         ),
         subprocess.Popen([sys.executable, "-m", "worker.main"], env=env),

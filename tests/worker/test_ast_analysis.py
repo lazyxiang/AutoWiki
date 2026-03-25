@@ -1,15 +1,20 @@
-import pytest
 from pathlib import Path
+
 from worker.pipeline.ast_analysis import (
-    analyze_file, build_module_tree, build_enhanced_module_tree, SUPPORTED_LANGUAGES,
+    SUPPORTED_LANGUAGES,
+    analyze_file,
+    build_enhanced_module_tree,
+    build_module_tree,
 )
 
 FIXTURE = Path("tests/fixtures/simple-repo")
+
 
 def test_supported_languages_count():
     # 15 extension entries
     # .py .js .jsx .ts .tsx .java .kt .kts .go .rs .c .h .cpp .cc .cs
     assert len(SUPPORTED_LANGUAGES) == 15
+
 
 def test_analyze_kotlin_file(tmp_path):
     f = tmp_path / "Main.kt"
@@ -30,6 +35,7 @@ def test_analyze_kotlin_file(tmp_path):
     assert "sayHello" in names
     assert "main" in names
 
+
 def test_analyze_javascript_file(tmp_path):
     f = tmp_path / "index.js"
     f.write_text("""
@@ -48,6 +54,7 @@ def test_analyze_javascript_file(tmp_path):
     assert "App" in names
     assert "render" in names
     assert "init" in names
+
 
 def test_analyze_typescript_file(tmp_path):
     f = tmp_path / "types.ts"
@@ -69,6 +76,7 @@ def test_analyze_typescript_file(tmp_path):
     assert "UserService" in names
     assert "getUser" in names
 
+
 def test_analyze_python_file():
     result = analyze_file(FIXTURE / "models.py")
     assert result is not None
@@ -76,11 +84,13 @@ def test_analyze_python_file():
     assert "User" in names
     assert "Post" in names
 
+
 def test_analyze_python_file_entities_have_type():
     result = analyze_file(FIXTURE / "models.py")
     for entity in result["entities"]:
-        assert "type" in entity   # "class" or "function"
+        assert "type" in entity  # "class" or "function"
         assert "name" in entity
+
 
 def test_build_module_tree_groups_by_dir(tmp_path):
     (tmp_path / "src").mkdir()
@@ -92,9 +102,11 @@ def test_build_module_tree_groups_by_dir(tmp_path):
     modules = [m["path"] for m in tree]
     assert "src" in modules or any("src" in m for m in modules)
 
+
 def test_unsupported_language_returns_none():
-    from pathlib import Path
     import tempfile
+    from pathlib import Path
+
     with tempfile.NamedTemporaryFile(suffix=".rb", mode="w", delete=False) as f:
         f.write("puts 'hello'")
         fname = f.name
@@ -103,6 +115,7 @@ def test_unsupported_language_returns_none():
 
 
 # ── New tests for enhanced features ──────────────────────────────────────────
+
 
 def test_extract_python_docstring(tmp_path):
     f = tmp_path / "mod.py"

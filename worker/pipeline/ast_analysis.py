@@ -1,46 +1,53 @@
 from __future__ import annotations
+
 from pathlib import Path
 from typing import Any
 
-import tree_sitter_python as tspython
-import tree_sitter_javascript as tsjavascript
-import tree_sitter_typescript as tstypescript
-import tree_sitter_java as tsjava
-import tree_sitter_go as tsgo
-import tree_sitter_rust as tsrust
 import tree_sitter_c as tsc
-import tree_sitter_cpp as tscpp
 import tree_sitter_c_sharp as tscsharp
+import tree_sitter_cpp as tscpp
+import tree_sitter_go as tsgo
+import tree_sitter_java as tsjava
+import tree_sitter_javascript as tsjavascript
 import tree_sitter_kotlin as tskotlin
+import tree_sitter_python as tspython
+import tree_sitter_rust as tsrust
+import tree_sitter_typescript as tstypescript
 from tree_sitter import Language, Parser
 
 SUPPORTED_LANGUAGES: dict[str, Language] = {
-    ".py":   Language(tspython.language()),
-    ".js":   Language(tsjavascript.language()),
-    ".jsx":  Language(tsjavascript.language()),
-    ".ts":   Language(tstypescript.language_typescript()),
-    ".tsx":  Language(tstypescript.language_tsx()),
+    ".py": Language(tspython.language()),
+    ".js": Language(tsjavascript.language()),
+    ".jsx": Language(tsjavascript.language()),
+    ".ts": Language(tstypescript.language_typescript()),
+    ".tsx": Language(tstypescript.language_tsx()),
     ".java": Language(tsjava.language()),
-    ".kt":   Language(tskotlin.language()),
-    ".kts":  Language(tskotlin.language()),
-    ".go":   Language(tsgo.language()),
-    ".rs":   Language(tsrust.language()),
-    ".c":    Language(tsc.language()),
-    ".h":    Language(tsc.language()),
-    ".cpp":  Language(tscpp.language()),
-    ".cc":   Language(tscpp.language()),
-    ".cs":   Language(tscsharp.language()),
+    ".kt": Language(tskotlin.language()),
+    ".kts": Language(tskotlin.language()),
+    ".go": Language(tsgo.language()),
+    ".rs": Language(tsrust.language()),
+    ".c": Language(tsc.language()),
+    ".h": Language(tsc.language()),
+    ".cpp": Language(tscpp.language()),
+    ".cc": Language(tscpp.language()),
+    ".cs": Language(tscsharp.language()),
 }
 
 # Tree-Sitter node types that represent named entities
 _ENTITY_TYPES = {
-    "function_definition", "class_definition",       # Python
-    "function_declaration", "class_declaration",     # JS/TS/Java/Kotlin
-    "method_declaration", "method_definition",
-    "interface_declaration", "object_declaration",   # TS/Kotlin
-    "function_item",                                 # Rust
-    "struct_item", "impl_item",
-    "func_declaration", "type_declaration",          # Go
+    "function_definition",
+    "class_definition",  # Python
+    "function_declaration",
+    "class_declaration",  # JS/TS/Java/Kotlin
+    "method_declaration",
+    "method_definition",
+    "interface_declaration",
+    "object_declaration",  # TS/Kotlin
+    "function_item",  # Rust
+    "struct_item",
+    "impl_item",
+    "func_declaration",
+    "type_declaration",  # Go
 }
 
 # Node types that contain docstrings (language-specific)
@@ -74,11 +81,15 @@ def _get_signature(node: Any, source: bytes) -> str | None:
         return None
 
     name_node = node.child_by_field_name("name")
-    name = name_node.text.decode("utf-8", errors="replace") if name_node else "<anonymous>"
+    name = (
+        name_node.text.decode("utf-8", errors="replace") if name_node else "<anonymous>"
+    )
     params = params_node.text.decode("utf-8", errors="replace")
 
     # Include return type if present
-    ret_node = node.child_by_field_name("return_type") or node.child_by_field_name("type")
+    ret_node = node.child_by_field_name("return_type") or node.child_by_field_name(
+        "type"
+    )
     ret = ""
     if ret_node:
         ret = f" -> {ret_node.text.decode('utf-8', errors='replace')}"
@@ -127,8 +138,19 @@ def _extract_entities(node: Any, source: bytes) -> list[dict[str, Any]]:
     results = []
     if node.type in _ENTITY_TYPES:
         name_node = node.child_by_field_name("name")
-        name = name_node.text.decode("utf-8", errors="replace") if name_node else "<anonymous>"
-        kind = "class" if any(kw in node.type for kw in ["class", "struct", "interface", "object", "impl"]) else "function"
+        name = (
+            name_node.text.decode("utf-8", errors="replace")
+            if name_node
+            else "<anonymous>"
+        )
+        kind = (
+            "class"
+            if any(
+                kw in node.type
+                for kw in ["class", "struct", "interface", "object", "impl"]
+            )
+            else "function"
+        )
         entity: dict[str, Any] = {
             "type": kind,
             "name": name,
@@ -159,7 +181,10 @@ def build_module_tree(root: Path, files: list[Path]) -> list[dict[str, Any]]:
         module_path = parts[0] if len(parts) > 1 else "."
         modules.setdefault(module_path, []).append(f)
 
-    return [{"path": mod, "files": [str(f) for f in fs]} for mod, fs in sorted(modules.items())]
+    return [
+        {"path": mod, "files": [str(f) for f in fs]}
+        for mod, fs in sorted(modules.items())
+    ]
 
 
 def build_enhanced_module_tree(root: Path, files: list[Path]) -> list[dict[str, Any]]:
@@ -196,15 +221,31 @@ def build_enhanced_module_tree(root: Path, files: list[Path]) -> list[dict[str, 
         top_entities = [e["name"] for e in all_entities[:20]]
         summary = ", ".join(top_entities) if top_entities else "(no named entities)"
 
-        result.append({
-            "path": mod,
-            "files": rel_files,
-            "file_count": len(mod_files),
-            "class_count": len(classes),
-            "function_count": len(functions),
-            "classes": [{"name": c["name"], "signature": c.get("signature"), "docstring": c.get("docstring")} for c in classes[:10]],
-            "functions": [{"name": f["name"], "signature": f.get("signature"), "docstring": f.get("docstring")} for f in functions[:15]],
-            "summary": summary,
-        })
+        result.append(
+            {
+                "path": mod,
+                "files": rel_files,
+                "file_count": len(mod_files),
+                "class_count": len(classes),
+                "function_count": len(functions),
+                "classes": [
+                    {
+                        "name": c["name"],
+                        "signature": c.get("signature"),
+                        "docstring": c.get("docstring"),
+                    }
+                    for c in classes[:10]
+                ],
+                "functions": [
+                    {
+                        "name": f["name"],
+                        "signature": f.get("signature"),
+                        "docstring": f.get("docstring"),
+                    }
+                    for f in functions[:15]
+                ],
+                "summary": summary,
+            }
+        )
 
     return result

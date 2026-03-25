@@ -1,14 +1,20 @@
-import pytest
-import numpy as np
 from pathlib import Path
 from unittest.mock import AsyncMock
+
+import numpy as np
+
 from worker.pipeline.rag_indexer import (
-    chunk_file, chunk_file_with_lines, chunk_file_with_entities,
-    FAISSStore, build_rag_index,
+    FAISSStore,
+    build_rag_index,
+    chunk_file,
+    chunk_file_with_entities,
+    chunk_file_with_lines,
 )
+
 
 def test_chunk_file_returns_non_empty():
     import tempfile
+
     content = "def foo():\n    return 1\n" * 50
     with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
         f.write(content)
@@ -16,6 +22,7 @@ def test_chunk_file_returns_non_empty():
     chunks = chunk_file(fname, chunk_size=200, overlap=20)
     assert len(chunks) >= 1
     assert all(isinstance(c, str) for c in chunks)
+
 
 def test_chunk_file_small_file_is_one_chunk(tmp_path):
     small = tmp_path / "small.py"
@@ -35,7 +42,7 @@ def test_chunk_file_with_lines_tracks_line_numbers(tmp_path):
 
 def test_chunk_file_with_lines_multiple_chunks(tmp_path):
     f = tmp_path / "big.py"
-    f.write_text(("x = 1\n" * 200))  # big enough to split
+    f.write_text("x = 1\n" * 200)  # big enough to split
     chunks = chunk_file_with_lines(f, chunk_size=100, overlap=10)
     assert len(chunks) > 1
     # Each chunk should have line number info
@@ -67,10 +74,15 @@ def test_chunk_file_with_entities_falls_back_without_entities(tmp_path):
 
 
 async def test_faiss_store_add_and_search(tmp_path):
-    store = FAISSStore(dimension=4, index_path=tmp_path / "test.index",
-                       meta_path=tmp_path / "test.meta.pkl")
-    vecs = [np.array([1, 0, 0, 0], dtype=np.float32),
-            np.array([0, 1, 0, 0], dtype=np.float32)]
+    store = FAISSStore(
+        dimension=4,
+        index_path=tmp_path / "test.index",
+        meta_path=tmp_path / "test.meta.pkl",
+    )
+    vecs = [
+        np.array([1, 0, 0, 0], dtype=np.float32),
+        np.array([0, 1, 0, 0], dtype=np.float32),
+    ]
     metas = [{"text": "alpha", "file": "a.py"}, {"text": "beta", "file": "b.py"}]
     store.add(vecs, metas)
     results = store.search(np.array([1, 0, 0, 0], dtype=np.float32), k=1)
@@ -78,8 +90,11 @@ async def test_faiss_store_add_and_search(tmp_path):
 
 
 async def test_faiss_store_multi_search(tmp_path):
-    store = FAISSStore(dimension=4, index_path=tmp_path / "test.index",
-                       meta_path=tmp_path / "test.meta.pkl")
+    store = FAISSStore(
+        dimension=4,
+        index_path=tmp_path / "test.index",
+        meta_path=tmp_path / "test.meta.pkl",
+    )
     vecs = [
         np.array([1, 0, 0, 0], dtype=np.float32),
         np.array([0, 1, 0, 0], dtype=np.float32),
@@ -103,14 +118,20 @@ async def test_faiss_store_multi_search(tmp_path):
 
 
 async def test_faiss_store_persist_and_load(tmp_path):
-    store = FAISSStore(dimension=4, index_path=tmp_path / "test.index",
-                       meta_path=tmp_path / "test.meta.pkl")
+    store = FAISSStore(
+        dimension=4,
+        index_path=tmp_path / "test.index",
+        meta_path=tmp_path / "test.meta.pkl",
+    )
     vecs = [np.array([1, 0, 0, 0], dtype=np.float32)]
     store.add(vecs, [{"text": "hello", "file": "x.py"}])
     store.save()
 
-    store2 = FAISSStore(dimension=4, index_path=tmp_path / "test.index",
-                        meta_path=tmp_path / "test.meta.pkl")
+    store2 = FAISSStore(
+        dimension=4,
+        index_path=tmp_path / "test.index",
+        meta_path=tmp_path / "test.meta.pkl",
+    )
     store2.load()
     results = store2.search(np.array([1, 0, 0, 0], dtype=np.float32), k=1)
     assert results[0]["text"] == "hello"
@@ -120,12 +141,17 @@ async def test_build_rag_index(tmp_path):
     src = tmp_path / "hello.py"
     src.write_text("def hello():\n    return 'world'\n")
 
-    store = FAISSStore(dimension=4, index_path=tmp_path / "rag.index",
-                       meta_path=tmp_path / "rag.meta.pkl")
+    store = FAISSStore(
+        dimension=4,
+        index_path=tmp_path / "rag.index",
+        meta_path=tmp_path / "rag.meta.pkl",
+    )
 
     mock_embed = AsyncMock()
     mock_embed.embed_batch = AsyncMock(
-        side_effect=lambda texts, **kwargs: [np.array([1, 0, 0, 0], dtype=np.float32) for _ in texts]
+        side_effect=lambda texts, **kwargs: [
+            np.array([1, 0, 0, 0], dtype=np.float32) for _ in texts
+        ]
     )
 
     await build_rag_index([src], tmp_path, store, mock_embed)
@@ -139,14 +165,21 @@ async def test_build_rag_index(tmp_path):
 
 async def test_build_rag_index_with_entities(tmp_path):
     src = tmp_path / "hello.py"
-    src.write_text("def hello():\n    return 'world'\n\ndef goodbye():\n    return 'bye'\n")
+    src.write_text(
+        "def hello():\n    return 'world'\n\ndef goodbye():\n    return 'bye'\n"
+    )
 
-    store = FAISSStore(dimension=4, index_path=tmp_path / "rag.index",
-                       meta_path=tmp_path / "rag.meta.pkl")
+    store = FAISSStore(
+        dimension=4,
+        index_path=tmp_path / "rag.index",
+        meta_path=tmp_path / "rag.meta.pkl",
+    )
 
     mock_embed = AsyncMock()
     mock_embed.embed_batch = AsyncMock(
-        side_effect=lambda texts, **kwargs: [np.array([1, 0, 0, 0], dtype=np.float32) for _ in texts]
+        side_effect=lambda texts, **kwargs: [
+            np.array([1, 0, 0, 0], dtype=np.float32) for _ in texts
+        ]
     )
 
     file_entities = {
@@ -156,7 +189,9 @@ async def test_build_rag_index_with_entities(tmp_path):
         ]
     }
 
-    await build_rag_index([src], tmp_path, store, mock_embed, file_entities=file_entities)
+    await build_rag_index(
+        [src], tmp_path, store, mock_embed, file_entities=file_entities
+    )
 
     results = store.search(np.array([1, 0, 0, 0], dtype=np.float32), k=5)
     assert len(results) >= 2

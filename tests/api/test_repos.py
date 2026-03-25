@@ -1,11 +1,14 @@
-import pytest
-from unittest.mock import patch, AsyncMock
+from unittest.mock import AsyncMock, patch
 
 
 async def test_post_repos_returns_202(client):
-    with patch("api.routers.repos.enqueue_full_index", new_callable=AsyncMock) as mock_eq:
+    with patch(
+        "api.routers.repos.enqueue_full_index", new_callable=AsyncMock
+    ) as mock_eq:
         mock_eq.return_value = "job-uuid-1"
-        resp = await client.post("/api/repos", json={"url": "https://github.com/psf/requests"})
+        resp = await client.post(
+            "/api/repos", json={"url": "https://github.com/psf/requests"}
+        )
     assert resp.status_code == 202
     body = resp.json()
     assert "repo_id" in body
@@ -30,7 +33,9 @@ async def test_list_repos_empty(client):
 
 
 async def test_list_repos_after_index(client):
-    with patch("api.routers.repos.enqueue_full_index", new_callable=AsyncMock) as mock_eq:
+    with patch(
+        "api.routers.repos.enqueue_full_index", new_callable=AsyncMock
+    ) as mock_eq:
         mock_eq.return_value = "job-uuid-2"
         await client.post("/api/repos", json={"url": "https://github.com/psf/requests"})
     resp = await client.get("/api/repos")

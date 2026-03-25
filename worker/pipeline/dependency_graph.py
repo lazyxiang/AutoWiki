@@ -1,4 +1,5 @@
 """Extract import/dependency relationships between source files and cluster modules."""
+
 from __future__ import annotations
 
 import re
@@ -10,32 +11,30 @@ from typing import Any
 @dataclass
 class DependencyGraph:
     """Directed graph of file-level import relationships."""
-    edges: dict[str, list[str]] = field(default_factory=dict)       # file -> [imported files]
-    clusters: list[list[str]] = field(default_factory=list)          # groups of connected files
-    external_deps: dict[str, list[str]] = field(default_factory=dict)  # file -> [external packages]
+
+    edges: dict[str, list[str]] = field(
+        default_factory=dict
+    )  # file -> [imported files]
+    clusters: list[list[str]] = field(default_factory=list)  # groups of connected files
+    external_deps: dict[str, list[str]] = field(
+        default_factory=dict
+    )  # file -> [external packages]
 
 
 # ── Language-specific import patterns ──────────────────────────────────────────
 
 _PYTHON_IMPORT = re.compile(
-    r"^\s*(?:from\s+([\w.]+)\s+import|import\s+([\w.]+))", re.MULTILINE
+    r"^\s*(?:from\s+([\w.]+)\s+import|import\s+([\w.]+(?:\s*,\s*[\w.]+)*))",
+    re.MULTILINE,
 )
 _JS_TS_IMPORT = re.compile(
     r"""(?:import\s+.*?\s+from\s+['"]([^'"]+)['"]|require\s*\(\s*['"]([^'"]+)['"]\s*\))""",
     re.MULTILINE,
 )
-_GO_IMPORT = re.compile(
-    r'^\s*(?:import\s+"([^"]+)"|"([^"]+)")', re.MULTILINE
-)
-_JAVA_KOTLIN_IMPORT = re.compile(
-    r"^\s*import\s+([\w.]+)", re.MULTILINE
-)
-_RUST_USE = re.compile(
-    r"^\s*(?:use\s+([\w:]+)|mod\s+(\w+))", re.MULTILINE
-)
-_C_INCLUDE = re.compile(
-    r'^\s*#include\s+"([^"]+)"', re.MULTILINE
-)
+_GO_IMPORT = re.compile(r'^\s*(?:import\s+"([^"]+)"|"([^"]+)")', re.MULTILINE)
+_JAVA_KOTLIN_IMPORT = re.compile(r"^\s*import\s+([\w.]+)", re.MULTILINE)
+_RUST_USE = re.compile(r"^\s*(?:use\s+([\w:]+)|mod\s+(\w+))", re.MULTILINE)
+_C_INCLUDE = re.compile(r'^\s*#include\s+"([^"]+)"', re.MULTILINE)
 
 _LANG_PATTERNS: dict[str, re.Pattern] = {
     ".py": _PYTHON_IMPORT,
@@ -66,7 +65,11 @@ def _extract_imports(path: Path, source: str) -> list[str]:
         # Each pattern may have multiple groups; take first non-None
         for group in match.groups():
             if group is not None:
-                raw.append(group)
+                # Handle comma-separated imports (e.g., "import os, sys")
+                for part in group.split(","):
+                    part = part.strip()
+                    if part:
+                        raw.append(part)
                 break
     return raw
 
@@ -229,10 +232,12 @@ def summarize_dependencies(
         result[mod] = {
             "depends_on": sorted(depends_on),
             "depended_by": sorted(depended_by),
-            "external_deps": sorted({
-                dep
-                for f in module_files[mod]
-                for dep in graph.external_deps.get(f, [])
-            }),
+            "external_deps": sorted(
+                {
+                    dep
+                    for f in module_files[mod]
+                    for dep in graph.external_deps.get(f, [])
+                }
+            ),
         }
     return result

@@ -1,6 +1,8 @@
 from __future__ import annotations
-from datetime import datetime, timezone
-from sqlalchemy import String, Integer, DateTime, ForeignKey, Text
+
+from datetime import UTC, datetime
+
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -19,7 +21,9 @@ class Repository(Base):
     indexed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     wiki_path: Mapped[str | None] = mapped_column(String, nullable=True)
     jobs: Mapped[list[Job]] = relationship("Job", back_populates="repository")
-    pages: Mapped[list[WikiPage]] = relationship("WikiPage", back_populates="repository")
+    pages: Mapped[list[WikiPage]] = relationship(
+        "WikiPage", back_populates="repository"
+    )
 
 
 class Job(Base):
@@ -30,7 +34,9 @@ class Job(Base):
     status: Mapped[str] = mapped_column(String, nullable=False)
     progress: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(UTC)
+    )
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     repository: Mapped[Repository] = relationship("Repository", back_populates="jobs")
 
@@ -45,5 +51,7 @@ class WikiPage(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     page_order: Mapped[int] = mapped_column(Integer, default=0)
     parent_slug: Mapped[str | None] = mapped_column(String, nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(UTC)
+    )
     repository: Mapped[Repository] = relationship("Repository", back_populates="pages")

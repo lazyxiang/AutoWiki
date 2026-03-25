@@ -1,5 +1,5 @@
-import typer
 import httpx
+import typer
 
 
 def index_cmd(
@@ -15,7 +15,9 @@ def index_cmd(
         typer.echo(f"Indexing started. Job ID: {data['job_id']}")
         typer.echo(f"Track progress: {api_url}/api/jobs/{data['job_id']}")
     except httpx.ConnectError:
-        typer.echo("Error: cannot connect to AutoWiki API. Is the server running?", err=True)
+        typer.echo(
+            "Error: cannot connect to AutoWiki API. Is the server running?", err=True
+        )
         raise typer.Exit(1)
     except httpx.HTTPStatusError as e:
         typer.echo(f"Error: {e.response.text}", err=True)

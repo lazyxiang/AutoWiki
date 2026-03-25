@@ -1,22 +1,31 @@
 import pytest
-from pathlib import Path
-from worker.pipeline.ingestion import filter_files, get_repo_hash, parse_github_url, extract_readme
+
+from worker.pipeline.ingestion import (
+    extract_readme,
+    filter_files,
+    get_repo_hash,
+    parse_github_url,
+)
+
 
 def test_parse_github_url():
     owner, name = parse_github_url("https://github.com/psf/requests")
     assert owner == "psf"
     assert name == "requests"
 
+
 def test_parse_github_url_without_scheme():
     owner, name = parse_github_url("github.com/psf/requests")
     assert owner == "psf"
     assert name == "requests"
+
 
 def test_get_repo_hash_is_deterministic():
     h1 = get_repo_hash("github", "psf", "requests")
     h2 = get_repo_hash("github", "psf", "requests")
     assert h1 == h2
     assert len(h1) == 16  # truncated sha256
+
 
 def test_filter_files_excludes_binaries(tmp_path):
     (tmp_path / "main.py").write_text("print('hello')")
@@ -29,6 +38,7 @@ def test_filter_files_excludes_binaries(tmp_path):
     assert "image.png" not in paths
     assert "lib.js" not in paths
 
+
 def test_filter_files_respects_size_limit(tmp_path):
     small = tmp_path / "small.py"
     large = tmp_path / "large.py"
@@ -38,13 +48,16 @@ def test_filter_files_respects_size_limit(tmp_path):
     assert small in files
     assert large not in files
 
+
 def test_parse_github_url_invalid_raises():
     with pytest.raises(ValueError, match="Cannot parse GitHub URL"):
         parse_github_url("not-a-url")
 
+
 def test_parse_github_url_rejects_non_github():
     with pytest.raises(ValueError):
         parse_github_url("https://gitlab.com/owner/repo")
+
 
 def test_filter_files_uses_relative_parts(tmp_path):
     """Ensure paths outside root with excluded dir names don't falsely skip files."""
@@ -53,7 +66,8 @@ def test_filter_files_uses_relative_parts(tmp_path):
     build_dir.mkdir(parents=True)
     (build_dir / "main.py").write_text("x = 1")
     files = filter_files(build_dir)
-    # main.py should be found even though 'build' is an excluded dir name in the parent path
+    # main.py should be found even though 'build' is an
+    # excluded dir name in the parent path
     assert any(f.name == "main.py" for f in files)
 
 

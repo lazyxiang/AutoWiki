@@ -1,7 +1,11 @@
 from __future__ import annotations
+
 from contextlib import asynccontextmanager
 from typing import Any
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+
+from sqlalchemy import inspect, text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
 from shared.models import Base
 
 _engines: dict[str, Any] = {}
@@ -14,7 +18,10 @@ async def init_db(database_path: str) -> None:
     _engines[database_path] = engine
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    _session_factories[database_path] = async_sessionmaker(engine, expire_on_commit=False)
+        await conn.run_sync(_apply_migrations)
+    _session_factories[database_path] = async_sessionmaker(
+        engine, expire_on_commit=False
+    )
 
 
 @asynccontextmanager
@@ -26,6 +33,17 @@ async def get_session(database_path: str):
     factory = _session_factories[database_path]
     async with factory() as session:
         yield session
+
+
+def _apply_migrations(connection) -> None:
+    """Detect and apply missing columns for schema evolution."""
+    insp = inspect(connection)
+    if insp.has_table("wiki_pages"):
+        columns = {col["name"] for col in insp.get_columns("wiki_pages")}
+        if "description" not in columns:
+            connection.execute(
+                text("ALTER TABLE wiki_pages ADD COLUMN description TEXT")
+            )
 
 
 async def dispose_db(database_path: str) -> None:

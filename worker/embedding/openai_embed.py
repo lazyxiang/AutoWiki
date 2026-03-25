@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 import numpy as np
 from openai import AsyncOpenAI
+
 from worker.embedding.base import EmbeddingProvider
 
 
@@ -18,7 +20,9 @@ class OpenAIEmbedding(EmbeddingProvider):
         response = await self._client.embeddings.create(input=[text], model=self._model)
         return np.array(response.data[0].embedding, dtype=np.float32)
 
-    async def embed_batch(self, texts: list[str], is_code: bool = False) -> list[np.ndarray]:
+    async def embed_batch(
+        self, texts: list[str], is_code: bool = False
+    ) -> list[np.ndarray]:
         if not texts:
             return []
         response = await self._client.embeddings.create(input=texts, model=self._model)

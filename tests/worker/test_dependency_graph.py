@@ -1,10 +1,8 @@
-import pytest
-from pathlib import Path
 from worker.pipeline.dependency_graph import (
+    DependencyGraph,
+    _extract_imports,
     build_dependency_graph,
     summarize_dependencies,
-    _extract_imports,
-    DependencyGraph,
 )
 
 
@@ -19,7 +17,11 @@ def test_extract_python_imports(tmp_path):
 
 def test_extract_js_imports(tmp_path):
     f = tmp_path / "app.js"
-    f.write_text("import React from 'react';\nimport { User } from './models';\nconst fs = require('fs');\n")
+    f.write_text(
+        "import React from 'react';\n"
+        "import { User } from './models';\n"
+        "const fs = require('fs');\n"
+    )
     imports = _extract_imports(f, f.read_text())
     assert "react" in imports
     assert "./models" in imports
@@ -53,7 +55,9 @@ def test_extract_c_includes(tmp_path):
 
 
 def test_build_dependency_graph(tmp_path):
-    (tmp_path / "main.py").write_text("from models import User\nfrom utils import greet\n")
+    (tmp_path / "main.py").write_text(
+        "from models import User\nfrom utils import greet\n"
+    )
     (tmp_path / "models.py").write_text("class User:\n    pass\n")
     (tmp_path / "utils.py").write_text("import os\ndef greet():\n    pass\n")
 

@@ -1,29 +1,40 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Any
-from worker.llm.base import LLMProvider
+
 from worker.embedding.base import EmbeddingProvider
+from worker.llm.base import LLMProvider
 from worker.pipeline.rag_indexer import FAISSStore
 from worker.pipeline.wiki_planner import PageSpec
 
-_SYSTEM = """You are a senior technical writer creating comprehensive, production-quality \
-wiki documentation for a software repository. Your goal is to help developers new to this \
-codebase understand it quickly and thoroughly.
+_SYSTEM = (
+    "You are a senior technical writer creating comprehensive, "
+    "production-quality wiki documentation for a software "
+    "repository. Your goal is to help developers new to this "
+    "codebase understand it quickly and thoroughly.\n\n"
+    "Rules:\n"
+    "- Every technical claim MUST be grounded in the provided "
+    "source code — do not invent APIs, classes, or features "
+    "not present in the code context\n"
+    "- After each major section or subsection, add a source "
+    "annotation in italics citing where the information comes "
+    "from: *Source: path/to/file.py:10-45*\n"
+    "- Include Mermaid diagrams where they aid understanding "
+    "— use ```mermaid code blocks\n"
+    "- Choose diagram types that best fit the content:\n"
+    "  - flowchart TD for architecture/data flow\n"
+    "  - classDiagram for class relationships\n"
+    "  - sequenceDiagram for request/response flows\n"
+    "  - graph LR for dependency relationships\n"
+    "- Write for developers who are new to this codebase but "
+    "experienced programmers\n"
+    "- Use precise technical language and include concrete "
+    "code examples from the source\n"
+    "- Organize content from high-level concepts down to "
+    "implementation details"
+)
 
-Rules:
-- Every technical claim MUST be grounded in the provided source code — do not invent APIs, \
-classes, or features not present in the code context
-- After each major section or subsection, add a source annotation in italics citing where \
-the information comes from: *Source: path/to/file.py:10-45*
-- Include Mermaid diagrams where they aid understanding — use ```mermaid code blocks
-- Choose diagram types that best fit the content:
-  - flowchart TD for architecture/data flow
-  - classDiagram for class relationships
-  - sequenceDiagram for request/response flows
-  - graph LR for dependency relationships
-- Write for developers who are new to this codebase but experienced programmers
-- Use precise technical language and include concrete code examples from the source
-- Organize content from high-level concepts down to implementation details"""
 
 @dataclass
 class PageResult:
@@ -45,7 +56,9 @@ def _format_entity_details(entities: list[dict[str, Any]]) -> str:
             doc = e["docstring"][:150]
             parts.append(f"  Doc: {doc}")
         if e.get("start_line") and e.get("file"):
-            parts.append(f"  Location: {e['file']}:{e['start_line']}-{e.get('end_line', '?')}")
+            parts.append(
+                f"  Location: {e['file']}:{e['start_line']}-{e.get('end_line', '?')}"
+            )
         lines.append("\n".join(parts))
     return "\n".join(lines)
 
@@ -107,59 +120,72 @@ def _build_page_prompt(
 
     # Entity details
     if entity_details:
-        sections.append(f"Key entities in these modules:\n{_format_entity_details(entity_details)}")
+        sections.append(
+            f"Key entities in these modules:\n{_format_entity_details(entity_details)}"
+        )
 
-    sections.append(f"Relevant source code (with file paths and line numbers):\n{context}")
+    sections.append(
+        f"Relevant source code (with file paths and line numbers):\n{context}"
+    )
 
     is_overview = spec.slug == "overview" or "overview" in spec.title.lower()
 
     if is_overview:
-        sections.append(f"""Write a comprehensive Overview wiki page for the "{repo_name}" project. Structure:
-
-## Overview
-What this project does, its primary use cases, and the problem it solves.
-
-## Architecture
-Include a Mermaid diagram (```mermaid flowchart) showing the major components and how they connect.
-Describe the high-level architecture, service topology, and data flow.
-
-## Key Components
-For each major subsystem/module, provide a brief description of its role.
-After each component description, cite the source: *Source: file.py:line-line*
-
-## Getting Started
-How a developer would begin working with this codebase (entry points, key files to read first).
-
-## Technology Stack
-Key frameworks, libraries, and tools used.
-
-Output Markdown only.""")
+        sections.append(
+            f"Write a comprehensive Overview wiki page for"
+            f' the "{repo_name}" project. Structure:\n\n'
+            "## Overview\n"
+            "What this project does, its primary use cases, "
+            "and the problem it solves.\n\n"
+            "## Architecture\n"
+            "Include a Mermaid diagram (```mermaid flowchart) "
+            "showing the major components and how they "
+            "connect.\n"
+            "Describe the high-level architecture, service "
+            "topology, and data flow.\n\n"
+            "## Key Components\n"
+            "For each major subsystem/module, provide a brief "
+            "description of its role.\n"
+            "After each component description, cite the "
+            "source: *Source: file.py:line-line*\n\n"
+            "## Getting Started\n"
+            "How a developer would begin working with this "
+            "codebase (entry points, key files to read "
+            "first).\n\n"
+            "## Technology Stack\n"
+            "Key frameworks, libraries, and tools used.\n\n"
+            "Output Markdown only."
+        )
     else:
-        sections.append(f"""Write a comprehensive wiki page for "{spec.title}". Structure:
-
-## Overview
-Brief description of this component's role, purpose, and design rationale.
-
-## Architecture
-Include a Mermaid diagram if it helps explain relationships (class diagram, flowchart, or sequence diagram).
-Only include a diagram if it adds genuine value — not every page needs one.
-
-## Key Components
-For each major class/function in this module:
-- What it does and why it exists
-- Its interface/signature
-- Key implementation details
-- Usage example from the codebase if available
-After each subsection, cite the source: *Source: file.py:line-line*
-
-## Dependencies & Interactions
-How this module connects to other parts of the codebase.
-What it depends on and what depends on it.
-
-## Source Files
-Table or list of all source files covered by this page with brief descriptions.
-
-Output Markdown only.""")
+        sections.append(
+            f"Write a comprehensive wiki page for"
+            f' "{spec.title}". Structure:\n\n'
+            "## Overview\n"
+            "Brief description of this component's role, "
+            "purpose, and design rationale.\n\n"
+            "## Architecture\n"
+            "Include a Mermaid diagram if it helps explain "
+            "relationships (class diagram, flowchart, or "
+            "sequence diagram).\n"
+            "Only include a diagram if it adds genuine "
+            "value — not every page needs one.\n\n"
+            "## Key Components\n"
+            "For each major class/function in this module:\n"
+            "- What it does and why it exists\n"
+            "- Its interface/signature\n"
+            "- Key implementation details\n"
+            "- Usage example from the codebase if available\n"
+            "After each subsection, cite the source: "
+            "*Source: file.py:line-line*\n\n"
+            "## Dependencies & Interactions\n"
+            "How this module connects to other parts of the "
+            "codebase.\n"
+            "What it depends on and what depends on it.\n\n"
+            "## Source Files\n"
+            "Table or list of all source files covered by "
+            "this page with brief descriptions.\n\n"
+            "Output Markdown only."
+        )
 
     return "\n\n".join(sections)
 
@@ -197,7 +223,9 @@ async def generate_page(
     else:
         context_chunks = store.search(query_vecs[0], k=top_k)
 
-    prompt = _build_page_prompt(spec, context_chunks, repo_name, dep_info, entity_details)
+    prompt = _build_page_prompt(
+        spec, context_chunks, repo_name, dep_info, entity_details
+    )
     content = await llm.generate(prompt, system=_SYSTEM)
 
     return PageResult(slug=spec.slug, title=spec.title, content=content)

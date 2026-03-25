@@ -1,19 +1,27 @@
 from __future__ import annotations
+
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from shared.config import get_config
 from shared.database import get_session, init_db
-from shared.models import Repository, Job, WikiPage
-from worker.pipeline.ingestion import filter_files, clone_or_fetch, extract_readme
-from worker.pipeline.ast_analysis import build_module_tree, build_enhanced_module_tree, analyze_file
-from worker.pipeline.rag_indexer import build_rag_index, FAISSStore
-from worker.pipeline.dependency_graph import build_dependency_graph, summarize_dependencies
-from worker.pipeline.wiki_planner import generate_page_plan
-from worker.pipeline.page_generator import generate_page
-from worker.llm import make_llm_provider
+from shared.models import Job, Repository, WikiPage
 from worker.embedding import make_embedding_provider
+from worker.llm import make_llm_provider
+from worker.pipeline.ast_analysis import (
+    analyze_file,
+    build_enhanced_module_tree,
+    build_module_tree,
+)
+from worker.pipeline.dependency_graph import (
+    build_dependency_graph,
+    summarize_dependencies,
+)
+from worker.pipeline.ingestion import clone_or_fetch, extract_readme, filter_files
+from worker.pipeline.page_generator import generate_page
+from worker.pipeline.rag_indexer import FAISSStore, build_rag_index
+from worker.pipeline.wiki_planner import generate_page_plan
 
 
 async def _update_job(db_path: str, job_id: str, **kwargs):
@@ -96,7 +104,9 @@ async def run_full_index(
             index_path=repo_data_dir / "faiss.index",
             meta_path=repo_data_dir / "faiss.meta.pkl",
         )
-        await build_rag_index(files, clone_root, store, embedding, file_entities=file_entities)
+        await build_rag_index(
+            files, clone_root, store, embedding, file_entities=file_entities
+        )
         await _update_job(db_path, job_id, progress=55)
 
         # Stage 4: Wiki Planner — enriched with README, deps, entities
@@ -146,15 +156,24 @@ async def run_full_index(
         for i, page_spec in enumerate(plan.pages):
             # Gather entity details for all modules in this page
             page_entities: list[dict] = []
-            page_dep_info: dict = {"depends_on": [], "depended_by": [], "external_deps": []}
+            page_dep_info: dict = {
+                "depends_on": [],
+                "depended_by": [],
+                "external_deps": [],
+            }
             for mod in page_spec.modules:
                 page_entities.extend(module_entity_map.get(mod, []))
                 mod_dep = dep_summary.get(mod, {})
                 for key in ("depends_on", "depended_by", "external_deps"):
-                    page_dep_info[key] = list(set(page_dep_info[key]) | set(mod_dep.get(key, [])))
+                    page_dep_info[key] = list(
+                        set(page_dep_info[key]) | set(mod_dep.get(key, []))
+                    )
 
             result = await generate_page(
-                page_spec, store, llm, embedding,
+                page_spec,
+                store,
+                llm,
+                embedding,
                 repo_name=name,
                 dep_info=page_dep_info if any(page_dep_info.values()) else None,
                 entity_details=page_entities if page_entities else None,
@@ -177,13 +196,21 @@ async def run_full_index(
             await _update_job(db_path, job_id, progress=progress)
 
         # Done
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         await _update_job(db_path, job_id, status="done", progress=100, finished_at=now)
-        await _update_repo(db_path, repo_id, status="ready", last_commit=head_sha,
-                           indexed_at=now, wiki_path=str(wiki_dir))
+        await _update_repo(
+            db_path,
+            repo_id,
+            status="ready",
+            last_commit=head_sha,
+            indexed_at=now,
+            wiki_path=str(wiki_dir),
+        )
 
     except Exception as e:
-        now = datetime.now(timezone.utc)
-        await _update_job(db_path, job_id, status="failed", error=str(e), finished_at=now)
+        now = datetime.now(UTC)
+        await _update_job(
+            db_path, job_id, status="failed", error=str(e), finished_at=now
+        )
         await _update_repo(db_path, repo_id, status="error")
         raise

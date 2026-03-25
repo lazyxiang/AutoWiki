@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+
 import numpy as np
 
 
@@ -8,7 +9,9 @@ class EmbeddingProvider(ABC):
         """Embed a single text. Returns float32 numpy array."""
 
     @abstractmethod
-    async def embed_batch(self, texts: list[str], is_code: bool = False) -> list[np.ndarray]:
+    async def embed_batch(
+        self, texts: list[str], is_code: bool = False
+    ) -> list[np.ndarray]:
         """Embed multiple texts. Returns list of float32 arrays."""
 
     @property
