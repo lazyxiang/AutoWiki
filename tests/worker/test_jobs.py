@@ -60,34 +60,59 @@ async def test_full_index_job_updates_status(tmp_path, mock_llm, mock_embedding)
 
 
 async def test_run_full_index_persists_module_tree(tmp_path, mock_llm, mock_embedding):
-    from worker.jobs import run_full_index
-    from shared.database import init_db, dispose_db, get_session
-    from tests.conftest import FIXTURE_REPO
     import json
+
+    from shared.database import dispose_db, get_session, init_db
+    from tests.conftest import FIXTURE_REPO
+    from worker.jobs import run_full_index
 
     db_path = str(tmp_path / "test.db")
     await init_db(db_path)
 
     mock_embedding.dimension = 1536
 
-    with patch("worker.jobs.get_config") as mock_cfg, \
-         patch("worker.jobs.clone_or_fetch", new_callable=AsyncMock, return_value="abc123"), \
-         patch("worker.jobs.make_llm_provider", return_value=mock_llm), \
-         patch("worker.jobs.make_embedding_provider", return_value=mock_embedding), \
-         patch("worker.jobs.synthesize_diagrams", new_callable=AsyncMock, return_value="graph TD\n  A-->B"):
+    with (
+        patch("worker.jobs.get_config") as mock_cfg,
+        patch(
+            "worker.jobs.clone_or_fetch", new_callable=AsyncMock, return_value="abc123"
+        ),
+        patch("worker.jobs.make_llm_provider", return_value=mock_llm),
+        patch("worker.jobs.make_embedding_provider", return_value=mock_embedding),
+        patch(
+            "worker.jobs.synthesize_diagrams",
+            new_callable=AsyncMock,
+            return_value="graph TD\n  A-->B",
+        ),
+    ):
         cfg = mock_cfg.return_value
         cfg.database_path = tmp_path / "test.db"
         cfg.data_dir = tmp_path
-        from shared.models import Repository, Job
         import uuid
+
+        from shared.models import Job, Repository
+
         repo_id = "test_repo_1"
         job_id = str(uuid.uuid4())
         async with get_session(db_path) as s:
             s.add(Repository(id=repo_id, owner="o", name="r", status="pending"))
-            s.add(Job(id=job_id, repo_id=repo_id, type="full_index", status="queued", progress=0))
+            s.add(
+                Job(
+                    id=job_id,
+                    repo_id=repo_id,
+                    type="full_index",
+                    status="queued",
+                    progress=0,
+                )
+            )
             await s.commit()
-        await run_full_index({}, repo_id=repo_id, job_id=job_id, owner="o", name="r",
-                             clone_root=FIXTURE_REPO)
+        await run_full_index(
+            {},
+            repo_id=repo_id,
+            job_id=job_id,
+            owner="o",
+            name="r",
+            clone_root=FIXTURE_REPO,
+        )
 
     try:
         module_tree_path = tmp_path / "repos" / repo_id / "ast" / "module_tree.json"
@@ -97,10 +122,14 @@ async def test_run_full_index_persists_module_tree(tmp_path, mock_llm, mock_embe
 
         # Verify Stage 6: diagram prepended to first wiki page in DB
         from sqlalchemy import select as sa_select
+
         from shared.models import WikiPage
+
         async with get_session(db_path) as s:
             result = await s.execute(
-                sa_select(WikiPage).where(WikiPage.repo_id == repo_id).order_by(WikiPage.page_order)
+                sa_select(WikiPage)
+                .where(WikiPage.repo_id == repo_id)
+                .order_by(WikiPage.page_order)
             )
             pages = result.scalars().all()
         assert len(pages) > 0

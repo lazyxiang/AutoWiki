@@ -1,16 +1,11 @@
-import pytest
-import uuid
-from pathlib import Path
-from unittest.mock import AsyncMock, patch
-
-
 async def test_create_chat_session(tmp_path):
-    from worker.chat import create_chat_session
-    from shared.database import init_db, dispose_db, get_session
+    from shared.database import dispose_db, get_session, init_db
     from shared.models import ChatSession
+    from worker.chat import create_chat_session
 
     db_path = str(tmp_path / "test.db")
     from shared.models import Repository
+
     await init_db(db_path)
     async with get_session(db_path) as s:
         s.add(Repository(id="r1", owner="o", name="n", status="ready"))
@@ -29,9 +24,9 @@ async def test_create_chat_session(tmp_path):
 
 
 async def test_get_chat_history_ordered(tmp_path):
-    from worker.chat import create_chat_session, save_message, get_chat_history
-    from shared.database import init_db, dispose_db, get_session
+    from shared.database import dispose_db, get_session, init_db
     from shared.models import Repository
+    from worker.chat import create_chat_session, get_chat_history, save_message
 
     db_path = str(tmp_path / "test.db")
     await init_db(db_path)
@@ -53,8 +48,9 @@ async def test_get_chat_history_ordered(tmp_path):
 
 
 async def test_generate_chat_response_streams(mock_llm, mock_embedding):
-    from worker.chat import generate_chat_response
     from unittest.mock import MagicMock
+
+    from worker.chat import generate_chat_response
 
     async def _fake_stream(*args, **kwargs):
         for chunk in ["Hello", " world"]:
@@ -68,7 +64,10 @@ async def test_generate_chat_response_streams(mock_llm, mock_embedding):
     chunks = []
     async for chunk in generate_chat_response(
         user_message="What does foo do?",
-        history=[{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}],
+        history=[
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+        ],
         store=store,
         llm=mock_llm,
         embedding=mock_embedding,

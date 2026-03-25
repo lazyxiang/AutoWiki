@@ -159,6 +159,7 @@ def get_changed_files(clone_dir: Path, old_sha: str, new_sha: str) -> list[str]:
     history (e.g. shallow clones missing the old commit).
     """
     import git
+
     repo = git.Repo(clone_dir)
     diff_output = repo.git.diff("--name-only", old_sha, new_sha)
     if not diff_output:

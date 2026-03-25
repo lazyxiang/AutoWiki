@@ -1,5 +1,7 @@
 """Stage 6: Generate Mermaid architecture diagrams for a repository's wiki."""
+
 from __future__ import annotations
+
 import logging
 from typing import Any
 
@@ -11,8 +13,14 @@ logger = logging.getLogger(__name__)
 # "pie" has no trailing space — bare `pie` is valid Mermaid syntax.
 # "gantt " has a trailing space to avoid false-positive on hypothetical `ganttable`.
 _VALID_DIAGRAM_TYPES = (
-    "graph ", "flowchart ", "sequencediagram", "classdiagram",
-    "erdiagram", "statediagram", "pie", "gantt ",
+    "graph ",
+    "flowchart ",
+    "sequencediagram",
+    "classdiagram",
+    "erdiagram",
+    "statediagram",
+    "pie",
+    "gantt ",
 )
 
 _SYSTEM = """You are a software architecture diagram generator.
@@ -69,6 +77,8 @@ async def synthesize_diagrams(
         if validate_mermaid(last_output.strip()):
             return last_output.strip()
     logger.warning(
-        "synthesize_diagrams: all %d attempts exhausted for repo %r", max_retries, repo_name
+        "synthesize_diagrams: all %d attempts exhausted for repo %r",
+        max_retries,
+        repo_name,
     )
     return None

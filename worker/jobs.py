@@ -5,7 +5,8 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sqlalchemy import delete as sa_delete, select as sa_select
+from sqlalchemy import delete as sa_delete
+from sqlalchemy import select as sa_select
 
 from shared.config import get_config
 from shared.database import get_session, init_db
@@ -280,16 +281,24 @@ async def run_refresh_index(
         if old_sha == new_sha:
             now = datetime.now(UTC)
             await _update_repo(db_path, repo_id, status="ready")
-            await _update_job(db_path, job_id, status="done", progress=100, finished_at=now)
+            await _update_job(
+                db_path, job_id, status="done", progress=100, finished_at=now
+            )
             return
 
         # Find changed files and affected modules
-        changed_files = get_changed_files(clone_root, old_sha, new_sha) if old_sha else []
+        changed_files = (
+            get_changed_files(clone_root, old_sha, new_sha) if old_sha else []
+        )
         ast_dir = repo_data_dir / "ast"
         module_tree_path = ast_dir / "module_tree.json"
         if not module_tree_path.exists():
             await run_full_index(
-                ctx, repo_id=repo_id, job_id=job_id, owner=owner, name=name,
+                ctx,
+                repo_id=repo_id,
+                job_id=job_id,
+                owner=owner,
+                name=name,
                 clone_root=clone_root,
             )
             return
@@ -299,7 +308,9 @@ async def run_refresh_index(
         if not affected_modules:
             now = datetime.now(UTC)
             await _update_repo(db_path, repo_id, last_commit=new_sha, status="ready")
-            await _update_job(db_path, job_id, status="done", progress=100, finished_at=now)
+            await _update_job(
+                db_path, job_id, status="done", progress=100, finished_at=now
+            )
             return
 
         await _update_job(db_path, job_id, progress=20)
@@ -347,7 +358,9 @@ async def run_refresh_index(
             index_path=repo_data_dir / "faiss.index",
             meta_path=repo_data_dir / "faiss.meta.pkl",
         )
-        await build_rag_index(files, clone_root, store, embedding, file_entities=file_entities)
+        await build_rag_index(
+            files, clone_root, store, embedding, file_entities=file_entities
+        )
         await _update_job(db_path, job_id, progress=55)
 
         # Stage 4: Re-plan for affected modules with quality enrichment
@@ -390,7 +403,11 @@ async def run_refresh_index(
 
         for i, page_spec in enumerate(plan.pages):
             page_entities: list[dict] = []
-            page_dep_info: dict = {"depends_on": [], "depended_by": [], "external_deps": []}
+            page_dep_info: dict = {
+                "depends_on": [],
+                "depended_by": [],
+                "external_deps": [],
+            }
             for mod in page_spec.modules:
                 page_entities.extend(module_entity_map.get(mod, []))
                 mod_dep = dep_summary.get(mod, {})
@@ -433,11 +450,17 @@ async def run_refresh_index(
         now = datetime.now(UTC)
         await _update_job(db_path, job_id, status="done", progress=100, finished_at=now)
         await _update_repo(
-            db_path, repo_id, status="ready", last_commit=new_sha, indexed_at=now,
+            db_path,
+            repo_id,
+            status="ready",
+            last_commit=new_sha,
+            indexed_at=now,
         )
 
     except Exception as e:
         now = datetime.now(UTC)
-        await _update_job(db_path, job_id, status="failed", error=str(e), finished_at=now)
+        await _update_job(
+            db_path, job_id, status="failed", error=str(e), finished_at=now
+        )
         await _update_repo(db_path, repo_id, status="error")
         raise

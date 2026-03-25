@@ -89,8 +89,10 @@ def test_filter_files_ignores_missing_autowikiignore(tmp_path):
 
 
 def test_get_changed_files_returns_diff(tmp_path):
-    from worker.pipeline.ingestion import get_changed_files
     import git
+
+    from worker.pipeline.ingestion import get_changed_files
+
     repo = git.Repo.init(tmp_path)
     repo.config_writer().set_value("user", "name", "test").release()
     repo.config_writer().set_value("user", "email", "t@t.com").release()
@@ -106,6 +108,7 @@ def test_get_changed_files_returns_diff(tmp_path):
 
 def test_get_affected_modules():
     from worker.pipeline.ingestion import get_affected_modules
+
     module_tree = [{"path": "api", "files": []}, {"path": "worker", "files": []}]
     affected = get_affected_modules(["api/main.py", "README.md"], module_tree)
     assert "api" in affected

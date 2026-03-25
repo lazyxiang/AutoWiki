@@ -2,18 +2,20 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
-from shared.database import get_session
-from shared.models import ChatMessage, ChatSession, Repository
 from shared.config import get_config
+from shared.database import get_session
+from shared.models import ChatSession, Repository
 from worker.chat import (
     create_chat_session as _create_session,
+)
+from worker.chat import (
+    generate_chat_response,
     get_chat_history,
     save_message,
-    generate_chat_response,
 )
-from worker.pipeline.rag_indexer import FAISSStore
-from worker.llm import make_llm_provider
 from worker.embedding import make_embedding_provider
+from worker.llm import make_llm_provider
+from worker.pipeline.rag_indexer import FAISSStore
 
 router = APIRouter()
 
@@ -34,7 +36,9 @@ async def create_chat_session(repo_id: str):
 async def get_session_history(repo_id: str, session_id: str):
     cfg = get_config()
     db_path = str(cfg.database_path)
-    history = await get_chat_history(session_id, db_path, limit=cfg.chat.history_window * 2)
+    history = await get_chat_history(
+        session_id, db_path, limit=cfg.chat.history_window * 2
+    )
     return {"session_id": session_id, "messages": history}
 
 

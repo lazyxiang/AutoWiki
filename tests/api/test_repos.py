@@ -1,6 +1,5 @@
 import json
 import os
-import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -52,13 +51,16 @@ async def test_list_repos_after_index(client):
 async def test_refresh_repo_returns_job(client):
     """POST /refresh on a ready repo returns 202 with job_id."""
     with patch("api.routers.repos.enqueue_full_index", new_callable=AsyncMock):
-        resp = await client.post("/api/repos", json={"url": "https://github.com/psf/requests"})
+        resp = await client.post(
+            "/api/repos", json={"url": "https://github.com/psf/requests"}
+        )
     repo_id = resp.json()["repo_id"]
 
     # Mark repo as ready so refresh is allowed
     db_path = os.environ["DATABASE_PATH"]
     from shared.database import get_session
     from shared.models import Repository
+
     async with get_session(db_path) as s:
         repo = await s.get(Repository, repo_id)
         repo.status = "ready"
@@ -76,15 +78,21 @@ async def test_refresh_repo_returns_job(client):
 
 async def test_get_graph_returns_nodes(client):
     with patch("api.routers.repos.enqueue_full_index", new_callable=AsyncMock):
-        resp = await client.post("/api/repos", json={"url": "https://github.com/psf/requests"})
+        resp = await client.post(
+            "/api/repos", json={"url": "https://github.com/psf/requests"}
+        )
     repo_id = resp.json()["repo_id"]
 
     data_dir = os.environ["AUTOWIKI_DATA_DIR"]
     ast_dir = Path(data_dir) / "repos" / repo_id / "ast"
     ast_dir.mkdir(parents=True)
     (ast_dir / "module_tree.json").write_text(
-        json.dumps([{"path": "api", "files": ["api/main.py"]},
-                    {"path": "worker", "files": ["worker/jobs.py"]}])
+        json.dumps(
+            [
+                {"path": "api", "files": ["api/main.py"]},
+                {"path": "worker", "files": ["worker/jobs.py"]},
+            ]
+        )
     )
 
     resp2 = await client.get(f"/api/repos/{repo_id}/graph")

@@ -5,10 +5,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from api.routers import chat as chat_router
 from api.routers import jobs as jobs_router
 from api.routers import repos
 from api.routers import wiki as wiki_router
-from api.routers import chat as chat_router
 from api.ws import jobs as ws_jobs
 from shared.config import get_config
 from shared.database import init_db
