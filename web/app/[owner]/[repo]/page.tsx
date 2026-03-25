@@ -7,8 +7,7 @@ export default async function WikiIndex({ params }: { params: Promise<{ owner: s
   const repoId = crypto.createHash("sha256").update(`github:${owner}/${repo}`).digest("hex").slice(0, 16);
   const { pages } = await getRepoWiki(repoId).catch(() => ({ pages: [] }));
   if (pages.length > 0) {
-    const overview = pages.find(p => p.slug === "overview") || pages[0];
-    redirect(`/${owner}/${repo}/${overview.slug}`);
+    redirect(`/${owner}/${repo}/${pages[0].slug}`);
   }
   return <p className="p-8 text-muted-foreground">No wiki pages found.</p>;
 }
