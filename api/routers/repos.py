@@ -90,12 +90,13 @@ async def refresh_repo(repo_id: str):
             raise HTTPException(status_code=404, detail="Repository not found")
         if repo.status not in ("ready", "error"):
             raise HTTPException(status_code=409, detail="Repository is not in a refreshable state")
+        owner, name = repo.owner, repo.name
         job_id = str(uuid.uuid4())
         job = Job(id=job_id, repo_id=repo_id, type="refresh", status="queued", progress=0)
         s.add(job)
         repo.status = "indexing"
         await s.commit()
-    await enqueue_refresh_index(repo_id, job_id, repo.owner, repo.name)
+    await enqueue_refresh_index(repo_id, job_id, owner, name)
     return {"repo_id": repo_id, "job_id": job_id, "status": "queued"}
 
 

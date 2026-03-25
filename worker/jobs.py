@@ -279,6 +279,7 @@ async def run_refresh_index(
 
         if old_sha == new_sha:
             now = datetime.now(UTC)
+            await _update_repo(db_path, repo_id, status="ready")
             await _update_job(db_path, job_id, status="done", progress=100, finished_at=now)
             return
 
@@ -297,7 +298,7 @@ async def run_refresh_index(
         affected_modules = get_affected_modules(changed_files, module_tree)
         if not affected_modules:
             now = datetime.now(UTC)
-            await _update_repo(db_path, repo_id, last_commit=new_sha)
+            await _update_repo(db_path, repo_id, last_commit=new_sha, status="ready")
             await _update_job(db_path, job_id, status="done", progress=100, finished_at=now)
             return
 

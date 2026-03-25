@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, WebSocket
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
 from shared.database import get_session
 from shared.models import ChatMessage, ChatSession, Repository
@@ -44,7 +44,26 @@ async def ws_chat(websocket: WebSocket, repo_id: str, session_id: str):
     db_path = str(cfg.database_path)
     data_dir = cfg.data_dir
 
+    # Validate session exists before accepting
+    async with get_session(db_path) as s:
+        session = await s.get(ChatSession, session_id)
+        if session is None or session.repo_id != repo_id:
+            await websocket.close(code=4004)
+            return
+
     await websocket.accept()
+
+    # Load store once outside the message loop
+    repo_data_dir = data_dir / "repos" / repo_id
+    embedding = make_embedding_provider(cfg)
+    store = FAISSStore(
+        dimension=embedding.dimension,
+        index_path=repo_data_dir / "faiss.index",
+        meta_path=repo_data_dir / "faiss.meta.pkl",
+    )
+    store.load()
+    llm = make_llm_provider(cfg)
+
     try:
         while True:
             data = await websocket.receive_json()
@@ -59,16 +78,6 @@ async def ws_chat(websocket: WebSocket, repo_id: str, session_id: str):
             )
             history = history[:-1]  # exclude the user message just inserted
 
-            repo_data_dir = data_dir / "repos" / repo_id
-            embedding = make_embedding_provider(cfg)
-            store = FAISSStore(
-                dimension=embedding.dimension,
-                index_path=repo_data_dir / "faiss.index",
-                meta_path=repo_data_dir / "faiss.meta.pkl",
-            )
-            store.load()
-
-            llm = make_llm_provider(cfg)
             response_chunks: list[str] = []
             async for chunk in generate_chat_response(
                 user_message, history, store, llm, embedding
@@ -80,7 +89,12 @@ async def ws_chat(websocket: WebSocket, repo_id: str, session_id: str):
             await save_message(session_id, "assistant", full_response, db_path)
             await websocket.send_json({"type": "done"})
 
+    except WebSocketDisconnect:
+        pass  # Client disconnected normally
     except Exception as e:
-        await websocket.send_json({"type": "error", "content": str(e)})
+        try:
+            await websocket.send_json({"type": "error", "content": str(e)})
+        except Exception:
+            pass  # Socket may already be closed
     finally:
         await websocket.close()

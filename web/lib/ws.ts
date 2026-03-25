@@ -31,6 +31,13 @@ export function useChatStream(
 ) {
   const wsRef = useRef<WebSocket | null>(null);
 
+  useEffect(() => {
+    return () => {
+      wsRef.current?.close();
+      wsRef.current = null;
+    };
+  }, []);
+
   const sendMessage = useCallback(
     (content: string) => {
       if (!sessionId) return;
