@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json as _json
 import uuid
 import hashlib
 from fastapi import APIRouter, HTTPException
@@ -8,7 +9,7 @@ from shared.database import get_session
 from shared.models import Repository, Job
 from shared.config import get_config
 from worker.pipeline.ingestion import parse_github_url
-from api.queue import enqueue_full_index
+from api.queue import enqueue_full_index, enqueue_refresh_index
 
 router = APIRouter(prefix="/api/repos")
 
@@ -60,3 +61,36 @@ async def get_repo(repo_id: str):
             raise HTTPException(status_code=404, detail="Repository not found")
         return {"id": repo.id, "owner": repo.owner, "name": repo.name,
                 "status": repo.status, "indexed_at": repo.indexed_at}
+
+
+@router.post("/{repo_id}/refresh", status_code=202)
+async def refresh_repo(repo_id: str):
+    cfg = get_config()
+    db_path = str(cfg.database_path)
+    async with get_session(db_path) as s:
+        repo = await s.get(Repository, repo_id)
+        if repo is None:
+            raise HTTPException(status_code=404, detail="Repository not found")
+        if repo.status not in ("ready", "error"):
+            raise HTTPException(status_code=409, detail="Repository is not in a refreshable state")
+        job_id = str(uuid.uuid4())
+        job = Job(id=job_id, repo_id=repo_id, type="refresh", status="queued", progress=0)
+        s.add(job)
+        repo.status = "indexing"
+        await s.commit()
+    await enqueue_refresh_index(repo_id, job_id, repo.owner, repo.name)
+    return {"repo_id": repo_id, "job_id": job_id, "status": "queued"}
+
+
+@router.get("/{repo_id}/graph")
+async def get_repo_graph(repo_id: str):
+    cfg = get_config()
+    module_tree_path = cfg.data_dir / "repos" / repo_id / "ast" / "module_tree.json"
+    if not module_tree_path.exists():
+        raise HTTPException(status_code=404, detail="Graph not available — run index first")
+    module_tree = _json.loads(module_tree_path.read_text())
+    nodes = [
+        {"id": m["path"], "label": m["path"], "file_count": len(m.get("files", []))}
+        for m in module_tree
+    ]
+    return {"nodes": nodes, "edges": []}
