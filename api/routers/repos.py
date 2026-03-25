@@ -40,7 +40,12 @@ async def submit_repo(req: IndexRequest):
             )
             s.add(repo)
         job = Job(
-            id=job_id, repo_id=repo_id, type="full_index", status="queued", progress=0
+            id=job_id,
+            repo_id=repo_id,
+            type="full_index",
+            status="queued",
+            progress=0,
+            status_description="Queued for processing...",
         )
         s.add(job)
         await s.commit()

@@ -11,7 +11,7 @@ interface Props {
 }
 
 export function JobProgressBar({ jobId, owner, repo }: Props) {
-  const { progress, status } = useJobProgress(jobId);
+  const { progress, status, statusDescription } = useJobProgress(jobId);
   const router = useRouter();
 
   useEffect(() => {
@@ -22,7 +22,12 @@ export function JobProgressBar({ jobId, owner, repo }: Props) {
 
   return (
     <div className="flex flex-col gap-4 w-full max-w-xl">
-      <p className="text-sm text-muted-foreground capitalize">{status}…</p>
+      <div className="flex flex-col gap-1">
+        <p className="text-sm font-medium text-foreground capitalize">{status}…</p>
+        {statusDescription && (
+          <p className="text-xs text-muted-foreground animate-pulse">{statusDescription}</p>
+        )}
+      </div>
       <Progress value={progress} className="h-2" />
       <p className="text-xs text-muted-foreground">{progress}%</p>
       {status === "failed" && (

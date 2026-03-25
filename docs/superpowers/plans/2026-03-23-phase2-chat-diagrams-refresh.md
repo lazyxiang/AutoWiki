@@ -1925,6 +1925,62 @@ git commit -m "feat: add DependencyGraph UI with reactflow visualization"
 
 ---
 
+## Merge Compatibility: Wiki Quality PR (merged 2026-03-25)
+
+After Phase 2 was branched, a wiki-quality improvement PR was merged to `main`
+(`feat: improve wiki quality with dependency graphs, richer prompts, source annotations, and Mermaid diagrams`).
+The Phase 2 branch must be rebased onto / merged with main before release.
+
+### What the Quality PR Added
+
+| File | Change |
+|------|--------|
+| `worker/pipeline/dependency_graph.py` | **New module** — extracts import relationships, builds module clusters |
+| `worker/pipeline/ast_analysis.py` | `build_enhanced_module_tree()` (entity summaries per module), `analyze_file()` (per-file entity extraction) |
+| `worker/pipeline/wiki_planner.py` | `generate_page_plan()` gains `readme`, `dep_summary`, `clusters` optional params |
+| `worker/pipeline/page_generator.py` | `generate_page()` gains `dep_info`, `entity_details` params; per-page Mermaid prompts built in |
+| `worker/pipeline/ingestion.py` | `extract_readme()` added |
+| `shared/models.py` | `WikiPage.description` column added; `datetime.now(UTC)` style |
+| `worker/embedding/base.py` | `embed()` gains `is_code: bool = False` param |
+| `worker/jobs.py` | Orchestrates all enhancements in `run_full_index` |
+
+### Incompatibilities with Phase 2
+
+| Area | Severity | Issue |
+|------|----------|-------|
+| `worker/jobs.py` | **Critical** | Phase 2's `run_full_index` drops all quality enhancements: no `build_enhanced_module_tree`, no `dependency_graph`, no `analyze_file`/`file_entities`, no `readme`/`dep_summary` passed to planner or page generator |
+| `worker/pipeline/ast_analysis.py` | **High** | Phase 2 refresh job re-runs Stage 2 using only `build_module_tree` — misses entity analysis |
+| `worker/pipeline/wiki_planner.py` | **Medium** | Phase 2's `run_refresh_index` calls planner without `readme`/`dep_summary`/`clusters` — works but lower quality |
+| `worker/pipeline/page_generator.py` | **Medium** | Phase 2 calls `generate_page()` without `dep_info`/`entity_details`; main already embeds Mermaid prompts per-page, making Phase 2's separate Stage 6 partially additive rather than redundant (Stage 6 generates a repo-level architecture diagram, per-page Mermaid is page-scoped) |
+| `shared/models.py` | **Low** | Phase 2 branch missing `WikiPage.description` column |
+| `worker/pipeline/ingestion.py` | **Low** | Phase 2 missing `extract_readme()` — no functional breakage |
+| `worker/embedding/base.py` | **None** | `embed(text)` call in `worker/chat.py` still works; `is_code` defaults to False |
+
+### Merge Resolution Plan
+
+The merge of `main` into `phase2-chat-diagrams-refresh` must combine in `worker/jobs.py`:
+
+**Keep from main:**
+- `build_enhanced_module_tree` call (Stage 2)
+- `analyze_file` loop to build `file_entities` (Stage 2)
+- `build_dependency_graph` + `summarize_dependencies` (Stage 2b)
+- `extract_readme` call (Stage 1)
+- Pass `readme`, `dep_summary`, `clusters` to `generate_page_plan`
+- Pass `entity_details`, `dep_info` to `generate_page`
+- `entity_aware` RAG chunking (`build_rag_index(..., file_entities=file_entities)`)
+
+**Keep from Phase 2:**
+- `.autowikiignore` pass-through to `filter_files`
+- `ast_dir / "module_tree.json"` persistence after Stage 2
+- Stage 6 `synthesize_diagrams` call and diagram prepend
+- `run_refresh_index` function (entire new function)
+
+**`shared/models.py`:** Accept main's `WikiPage.description` + `datetime.now(UTC)` style; keep Phase 2's `ChatSession`/`ChatMessage` additions.
+
+**`worker/pipeline/ingestion.py`:** Keep main's `extract_readme` + Phase 2's `.autowikiignore` and `get_changed_files`/`get_affected_modules`.
+
+---
+
 ## Coverage & Integration Verification
 
 After all tasks are complete:

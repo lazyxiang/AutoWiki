@@ -20,6 +20,7 @@ class Repository(Base):
     status: Mapped[str] = mapped_column(String, nullable=False)
     indexed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     wiki_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    wiki_structure: Mapped[str | None] = mapped_column(Text, nullable=True)
     jobs: Mapped[list[Job]] = relationship("Job", back_populates="repository")
     pages: Mapped[list[WikiPage]] = relationship(
         "WikiPage", back_populates="repository"
@@ -33,6 +34,7 @@ class Job(Base):
     type: Mapped[str] = mapped_column(String, nullable=False)
     status: Mapped[str] = mapped_column(String, nullable=False)
     progress: Mapped[int] = mapped_column(Integer, default=0)
+    status_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(UTC)

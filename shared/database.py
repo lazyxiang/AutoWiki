@@ -39,12 +39,38 @@ async def get_session(database_path: str):
 def _apply_migrations(connection) -> None:
     """Detect and apply missing columns for schema evolution."""
     insp = inspect(connection)
+
+    # wiki_pages migrations
     if insp.has_table("wiki_pages"):
         columns = {col["name"] for col in insp.get_columns("wiki_pages")}
         if "description" not in columns:
             try:
                 connection.execute(
                     text("ALTER TABLE wiki_pages ADD COLUMN description TEXT")
+                )
+            except OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
+
+    # repositories migrations
+    if insp.has_table("repositories"):
+        columns = {col["name"] for col in insp.get_columns("repositories")}
+        if "wiki_structure" not in columns:
+            try:
+                connection.execute(
+                    text("ALTER TABLE repositories ADD COLUMN wiki_structure TEXT")
+                )
+            except OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
+
+    # jobs migrations
+    if insp.has_table("jobs"):
+        columns = {col["name"] for col in insp.get_columns("jobs")}
+        if "status_description" not in columns:
+            try:
+                connection.execute(
+                    text("ALTER TABLE jobs ADD COLUMN status_description TEXT")
                 )
             except OperationalError as exc:
                 if "duplicate column name" not in str(exc).lower():
