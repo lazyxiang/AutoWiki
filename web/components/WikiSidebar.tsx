@@ -30,7 +30,7 @@ function PageLink({
   allPages: Page[];
 }) {
   const children = allPages.filter((p) => p.parent_slug === page.slug);
-  const isActive = pathname.endsWith(`/${page.slug}`);
+  const isActive = pathname === `/${owner}/${repo}/${page.slug}`;
 
   return (
     <li className="space-y-1">

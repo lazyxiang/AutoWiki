@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from dataclasses import asdict
@@ -122,7 +123,7 @@ async def run_full_index(
         embedding = make_embedding_provider(cfg)
         repo_data_dir = data_dir / "repos" / repo_id
         repo_data_dir.mkdir(parents=True, exist_ok=True)
-        
+
         index_path = repo_data_dir / "faiss.index"
         meta_path = repo_data_dir / "faiss.meta.pkl"
         store = FAISSStore(
@@ -130,7 +131,7 @@ async def run_full_index(
             index_path=index_path,
             meta_path=meta_path,
         )
-        
+
         if index_path.exists() and meta_path.exists():
             await _update_job(
                 db_path,
@@ -138,7 +139,8 @@ async def run_full_index(
                 progress=55,
                 status_description="Using existing code index...",
             )
-            store.load()
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, store.load)
         else:
             await _update_job(
                 db_path,
