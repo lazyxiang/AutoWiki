@@ -152,19 +152,25 @@ async def clone_or_fetch(clone_dir: Path, owner: str, name: str) -> str:
     return await loop.run_in_executor(None, _do_clone_or_fetch)
 
 
-def get_changed_files(clone_dir: Path, old_sha: str, new_sha: str) -> list[str]:
+async def get_changed_files(clone_dir: Path, old_sha: str, new_sha: str) -> list[str]:
     """Return list of file paths changed between two git SHAs.
 
     Raises git.exc.GitCommandError if either SHA is not reachable in the repo
     history (e.g. shallow clones missing the old commit).
     """
+    import asyncio
+
     import git
 
-    repo = git.Repo(clone_dir)
-    diff_output = repo.git.diff("--name-only", old_sha, new_sha)
-    if not diff_output:
-        return []
-    return [line for line in diff_output.split("\n") if line.strip()]
+    def _do_diff() -> list[str]:
+        repo = git.Repo(clone_dir)
+        diff_output = repo.git.diff("--name-only", old_sha, new_sha)
+        if not diff_output:
+            return []
+        return [line for line in diff_output.split("\n") if line.strip()]
+
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _do_diff)
 
 
 def get_affected_modules(changed_files: list[str], module_tree: list[dict]) -> set[str]:

@@ -9,12 +9,11 @@ import typer
 
 from worker.pipeline.ingestion import parse_github_url
 
-API_BASE = "http://localhost:3001"
-
 
 def chat_cmd(
     url: str = typer.Argument(..., help="GitHub repo URL"),
     question: str = typer.Argument(..., help="Question to ask about the repository"),
+    api_url: str = typer.Option("http://127.0.0.1:3001", envvar="AUTOWIKI_API_URL"),
 ):
     """Ask a single question about an indexed repository."""
     try:
@@ -25,7 +24,13 @@ def chat_cmd(
 
     repo_id = hashlib.sha256(f"github:{owner}/{name}".encode()).hexdigest()[:16]
 
-    repo_resp = httpx.get(f"{API_BASE}/api/repos/{repo_id}")
+    try:
+        repo_resp = httpx.get(f"{api_url}/api/repos/{repo_id}", timeout=10)
+    except httpx.ConnectError:
+        typer.echo(
+            "Error: cannot connect to AutoWiki API. Is the server running?", err=True
+        )
+        raise typer.Exit(1)
     if repo_resp.status_code == 404:
         typer.echo("Repository not found. Run `autowiki index` first.", err=True)
         raise typer.Exit(1)
@@ -33,14 +38,22 @@ def chat_cmd(
         typer.echo("Repository is not ready. Wait for indexing to complete.", err=True)
         raise typer.Exit(1)
 
-    session_resp = httpx.post(f"{API_BASE}/api/repos/{repo_id}/chat")
+    try:
+        session_resp = httpx.post(f"{api_url}/api/repos/{repo_id}/chat", timeout=10)
+    except httpx.ConnectError:
+        typer.echo(
+            "Error: cannot connect to AutoWiki API. Is the server running?", err=True
+        )
+        raise typer.Exit(1)
     session_resp.raise_for_status()
     session_id = session_resp.json()["session_id"]
 
     import websockets
 
+    ws_url = api_url.replace("http://", "ws://").replace("https://", "wss://")
+
     async def _ask() -> str:
-        uri = f"ws://localhost:3001/ws/repos/{repo_id}/chat/{session_id}"
+        uri = f"{ws_url}/ws/repos/{repo_id}/chat/{session_id}"
         async with websockets.connect(uri) as ws:
             await ws.send(_json.dumps({"content": question}))
             chunks = []
@@ -54,5 +67,12 @@ def chat_cmd(
                     raise RuntimeError(msg["content"])
             return "".join(chunks)
 
-    answer = asyncio.run(_ask())
-    typer.echo(answer)
+    try:
+        answer = asyncio.run(_ask())
+        typer.echo(answer)
+    except RuntimeError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+    except Exception as e:
+        typer.echo(f"Connection error: {e}", err=True)
+        raise typer.Exit(1)

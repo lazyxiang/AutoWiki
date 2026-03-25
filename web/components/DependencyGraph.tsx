@@ -14,6 +14,7 @@ export default function DependencyGraph({ repoId }: { repoId: string }) {
     getRepoGraph(repoId)
       .then((data) => {
         const count = data.nodes.length;
+        setError(null);
         if (count === 0) {
           setNodes([]);
           setEdges([]);

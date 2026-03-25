@@ -99,7 +99,11 @@ async def test_run_refresh_index_with_changes(tmp_path, mock_llm, mock_embedding
         patch(
             "worker.jobs.clone_or_fetch", new_callable=AsyncMock, return_value=new_sha
         ),
-        patch("worker.jobs.get_changed_files", return_value=["main.py"]),
+        patch(
+            "worker.jobs.get_changed_files",
+            new_callable=AsyncMock,
+            return_value=["main.py"],
+        ),
         patch("worker.jobs.make_llm_provider", return_value=mock_llm),
         patch("worker.jobs.make_embedding_provider", return_value=mock_embedding),
         patch(

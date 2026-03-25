@@ -288,7 +288,7 @@ async def run_refresh_index(
 
         # Find changed files and affected modules
         changed_files = (
-            get_changed_files(clone_root, old_sha, new_sha) if old_sha else []
+            await get_changed_files(clone_root, old_sha, new_sha) if old_sha else []
         )
         ast_dir = repo_data_dir / "ast"
         module_tree_path = ast_dir / "module_tree.json"
@@ -442,10 +442,31 @@ async def run_refresh_index(
             progress = 65 + int(30 * (i + 1) / total) if total > 0 else 95
             await _update_job(db_path, job_id, progress=progress)
 
-        # Stage 6: Rebuild architecture diagram
+        # Stage 6: Rebuild architecture diagram and update first wiki page
         diagram = await synthesize_diagrams(module_tree, repo_name=name, llm=llm)
         if diagram:
             (ast_dir / "architecture.mmd").write_text(diagram)
+            async with get_session(db_path) as s:
+                result_row = await s.execute(
+                    sa_select(WikiPage)
+                    .where(WikiPage.repo_id == repo_id)
+                    .order_by(WikiPage.page_order)
+                    .limit(1)
+                )
+                first_page = result_row.scalar_one_or_none()
+                if first_page is not None:
+                    prefix = f"## Architecture\n\n```mermaid\n{diagram}\n```\n\n"
+                    # Replace existing diagram prefix if present, else prepend
+                    if first_page.content.startswith("## Architecture"):
+                        first_page.content = (
+                            prefix + first_page.content.split("\n\n", 3)[-1]
+                        )
+                    else:
+                        first_page.content = prefix + first_page.content
+                    await s.commit()
+                    wiki_dir = repo_data_dir / "wiki"
+                    wiki_dir.mkdir(parents=True, exist_ok=True)
+                    (wiki_dir / f"{first_page.slug}.md").write_text(first_page.content)
 
         now = datetime.now(UTC)
         await _update_job(db_path, job_id, status="done", progress=100, finished_at=now)

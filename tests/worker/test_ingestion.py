@@ -88,7 +88,7 @@ def test_filter_files_ignores_missing_autowikiignore(tmp_path):
     assert any(f.name == "main.py" for f in files)
 
 
-def test_get_changed_files_returns_diff(tmp_path):
+async def test_get_changed_files_returns_diff(tmp_path):
     import git
 
     from worker.pipeline.ingestion import get_changed_files
@@ -102,7 +102,7 @@ def test_get_changed_files_returns_diff(tmp_path):
     (tmp_path / "b.py").write_text("y = 2")
     repo.index.add(["b.py"])
     c2 = repo.index.commit("second")
-    changed = get_changed_files(tmp_path, c1.hexsha, c2.hexsha)
+    changed = await get_changed_files(tmp_path, c1.hexsha, c2.hexsha)
     assert "b.py" in changed
 
 

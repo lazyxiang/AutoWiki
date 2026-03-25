@@ -41,6 +41,13 @@ export function useChatStream(
   const sendMessage = useCallback(
     (content: string) => {
       if (!sessionId) return;
+      // Close any existing connection before opening a new one
+      if (wsRef.current) {
+        wsRef.current.onmessage = null;
+        wsRef.current.onerror = null;
+        wsRef.current.close();
+        wsRef.current = null;
+      }
       const wsBase = typeof window !== "undefined"
         ? window.location.origin.replace(/^http/, "ws").replace(":3000", ":3001")
         : "ws://localhost:3001";

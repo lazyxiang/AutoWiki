@@ -10,10 +10,12 @@ async def enqueue_full_index(repo_id: str, job_id: str, owner: str, name: str) -
     redis = await create_pool(
         RedisSettings.from_dsn(os.environ.get("REDIS_URL", "redis://localhost:6379"))
     )
-    await redis.enqueue_job(
-        "run_full_index", repo_id=repo_id, job_id=job_id, owner=owner, name=name
-    )
-    await redis.close()
+    try:
+        await redis.enqueue_job(
+            "run_full_index", repo_id=repo_id, job_id=job_id, owner=owner, name=name
+        )
+    finally:
+        await redis.close()
     return job_id
 
 
@@ -23,8 +25,14 @@ async def enqueue_refresh_index(
     redis = await create_pool(
         RedisSettings.from_dsn(os.environ.get("REDIS_URL", "redis://localhost:6379"))
     )
-    await redis.enqueue_job(
-        "run_refresh_index", repo_id=repo_id, job_id=job_id, owner=owner, name=name
-    )
-    await redis.close()
+    try:
+        await redis.enqueue_job(
+            "run_refresh_index",
+            repo_id=repo_id,
+            job_id=job_id,
+            owner=owner,
+            name=name,
+        )
+    finally:
+        await redis.close()
     return job_id

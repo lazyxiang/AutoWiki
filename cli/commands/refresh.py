@@ -8,10 +8,11 @@ import typer
 
 from worker.pipeline.ingestion import parse_github_url
 
-API_BASE = "http://localhost:3001"
 
-
-def refresh_cmd(url: str = typer.Argument(..., help="GitHub repo URL")):
+def refresh_cmd(
+    url: str = typer.Argument(..., help="GitHub repo URL"),
+    api_url: str = typer.Option("http://127.0.0.1:3001", envvar="AUTOWIKI_API_URL"),
+):
     """Trigger incremental refresh for an indexed repository."""
     try:
         owner, name = parse_github_url(url)
@@ -20,7 +21,14 @@ def refresh_cmd(url: str = typer.Argument(..., help="GitHub repo URL")):
         raise typer.Exit(1)
 
     repo_id = hashlib.sha256(f"github:{owner}/{name}".encode()).hexdigest()[:16]
-    resp = httpx.post(f"{API_BASE}/api/repos/{repo_id}/refresh")
+
+    try:
+        resp = httpx.post(f"{api_url}/api/repos/{repo_id}/refresh", timeout=10)
+    except httpx.ConnectError:
+        typer.echo(
+            "Error: cannot connect to AutoWiki API. Is the server running?", err=True
+        )
+        raise typer.Exit(1)
     if resp.status_code == 404:
         typer.echo("Repository not found. Run `autowiki index` first.", err=True)
         raise typer.Exit(1)
@@ -35,8 +43,12 @@ def refresh_cmd(url: str = typer.Argument(..., help="GitHub repo URL")):
     with typer.progressbar(length=100, label="Refreshing") as progress:
         last = 0
         while True:
-            status_resp = httpx.get(f"{API_BASE}/api/jobs/{job_id}")
-            status_resp.raise_for_status()
+            try:
+                status_resp = httpx.get(f"{api_url}/api/jobs/{job_id}", timeout=10)
+                status_resp.raise_for_status()
+            except (httpx.ConnectError, httpx.RequestError) as e:
+                typer.echo(f"\nConnection error while polling: {e}", err=True)
+                raise typer.Exit(1)
             data = status_resp.json()
             current = data.get("progress", 0)
             progress.update(current - last)

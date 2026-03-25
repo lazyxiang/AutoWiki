@@ -1,21 +1,19 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
 from shared.config import get_config
 from shared.database import get_session
 from shared.models import ChatSession, Repository
-from worker.chat import (
-    create_chat_session as _create_session,
-)
-from worker.chat import (
-    generate_chat_response,
-    get_chat_history,
-    save_message,
-)
+from worker.chat import create_chat_session as _create_session
+from worker.chat import generate_chat_response, get_chat_history, save_message
 from worker.embedding import make_embedding_provider
 from worker.llm import make_llm_provider
 from worker.pipeline.rag_indexer import FAISSStore
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -36,6 +34,10 @@ async def create_chat_session(repo_id: str):
 async def get_session_history(repo_id: str, session_id: str):
     cfg = get_config()
     db_path = str(cfg.database_path)
+    async with get_session(db_path) as s:
+        session = await s.get(ChatSession, session_id)
+        if session is None or session.repo_id != repo_id:
+            raise HTTPException(status_code=404, detail="Session not found")
     history = await get_chat_history(
         session_id, db_path, limit=cfg.chat.history_window * 2
     )
@@ -95,9 +97,12 @@ async def ws_chat(websocket: WebSocket, repo_id: str, session_id: str):
 
     except WebSocketDisconnect:
         pass  # Client disconnected normally
-    except Exception as e:
+    except Exception:
+        logger.exception("Unhandled error in ws_chat for session %s", session_id)
         try:
-            await websocket.send_json({"type": "error", "content": str(e)})
+            await websocket.send_json(
+                {"type": "error", "content": "Internal server error"}
+            )
         except Exception:
             pass  # Socket may already be closed
     finally:

@@ -21,7 +21,7 @@ def client(tmp_path):
             s.add(Repository(id="r1", owner="owner", name="repo", status="ready"))
             await s.commit()
 
-    asyncio.get_event_loop().run_until_complete(_setup())
+    asyncio.run(_setup())
 
     with (
         patch("shared.config._config", None),
@@ -34,7 +34,7 @@ def client(tmp_path):
 
         yield TestClient(app)
 
-    asyncio.get_event_loop().run_until_complete(dispose_db(db_path))
+    asyncio.run(dispose_db(db_path))
 
 
 def test_create_chat_session(client):
