@@ -58,6 +58,18 @@ def filter_files(
     return sorted(results)
 
 
+def extract_readme(root: Path, max_chars: int = 3000) -> str | None:
+    """Extract README content from the repository root."""
+    for name in ("README.md", "readme.md", "README.rst", "README.txt", "README"):
+        p = root / name
+        if p.exists() and p.is_file():
+            try:
+                return p.read_text(encoding="utf-8", errors="replace")[:max_chars]
+            except OSError:
+                continue
+    return None
+
+
 async def clone_or_fetch(clone_dir: Path, owner: str, name: str) -> str:
     """Clone or fetch a GitHub repo. Returns HEAD commit SHA.
 

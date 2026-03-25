@@ -1,6 +1,8 @@
 import pytest
 from pathlib import Path
-from worker.pipeline.ast_analysis import analyze_file, build_module_tree, SUPPORTED_LANGUAGES
+from worker.pipeline.ast_analysis import (
+    analyze_file, build_module_tree, build_enhanced_module_tree, SUPPORTED_LANGUAGES,
+)
 
 FIXTURE = Path("tests/fixtures/simple-repo")
 
@@ -98,3 +100,57 @@ def test_unsupported_language_returns_none():
         fname = f.name
     result = analyze_file(Path(fname))
     assert result is None  # Ruby not supported in Phase 1 AST
+
+
+# ── New tests for enhanced features ──────────────────────────────────────────
+
+def test_extract_python_docstring(tmp_path):
+    f = tmp_path / "mod.py"
+    f.write_text('class Foo:\n    """A foo class."""\n    pass\n')
+    result = analyze_file(f)
+    assert result is not None
+    foo = [e for e in result["entities"] if e["name"] == "Foo"][0]
+    assert foo.get("docstring") is not None
+    assert "foo class" in foo["docstring"].lower()
+
+
+def test_extract_python_function_signature(tmp_path):
+    f = tmp_path / "mod.py"
+    f.write_text("def greet(name: str) -> str:\n    return f'Hello {name}'\n")
+    result = analyze_file(f)
+    assert result is not None
+    greet = [e for e in result["entities"] if e["name"] == "greet"][0]
+    assert greet.get("signature") is not None
+    assert "name" in greet["signature"]
+
+
+def test_build_enhanced_module_tree(tmp_path):
+    (tmp_path / "src").mkdir()
+    src_file = tmp_path / "src" / "main.py"
+    src_file.write_text("class App:\n    pass\n\ndef run():\n    pass\n")
+    root_file = tmp_path / "setup.py"
+    root_file.write_text("x = 1\n")
+
+    files = [src_file, root_file]
+    tree = build_enhanced_module_tree(tmp_path, files)
+
+    assert len(tree) >= 1
+    # Find the src module
+    src_mod = [m for m in tree if m["path"] == "src"]
+    assert len(src_mod) == 1
+    assert src_mod[0]["class_count"] == 1
+    assert src_mod[0]["function_count"] == 1
+    assert "App" in src_mod[0]["summary"]
+    assert len(src_mod[0]["classes"]) == 1
+    assert src_mod[0]["classes"][0]["name"] == "App"
+
+
+def test_build_enhanced_module_tree_empty_entities(tmp_path):
+    f = tmp_path / "data.json"
+    f.write_text('{"key": "value"}')
+    tree = build_enhanced_module_tree(tmp_path, [f])
+    assert len(tree) >= 1
+    mod = tree[0]
+    assert mod["class_count"] == 0
+    assert mod["function_count"] == 0
+    assert mod["summary"] == "(no named entities)"

@@ -1,6 +1,6 @@
 import pytest
 from pathlib import Path
-from worker.pipeline.ingestion import filter_files, get_repo_hash, parse_github_url
+from worker.pipeline.ingestion import filter_files, get_repo_hash, parse_github_url, extract_readme
 
 def test_parse_github_url():
     owner, name = parse_github_url("https://github.com/psf/requests")
@@ -55,3 +55,29 @@ def test_filter_files_uses_relative_parts(tmp_path):
     files = filter_files(build_dir)
     # main.py should be found even though 'build' is an excluded dir name in the parent path
     assert any(f.name == "main.py" for f in files)
+
+
+def test_extract_readme_finds_markdown(tmp_path):
+    (tmp_path / "README.md").write_text("# My Project\nSome description.")
+    result = extract_readme(tmp_path)
+    assert result is not None
+    assert "My Project" in result
+
+
+def test_extract_readme_truncates(tmp_path):
+    (tmp_path / "README.md").write_text("x" * 5000)
+    result = extract_readme(tmp_path, max_chars=100)
+    assert result is not None
+    assert len(result) == 100
+
+
+def test_extract_readme_returns_none_when_missing(tmp_path):
+    result = extract_readme(tmp_path)
+    assert result is None
+
+
+def test_extract_readme_case_insensitive(tmp_path):
+    (tmp_path / "readme.md").write_text("# Lower case readme")
+    result = extract_readme(tmp_path)
+    assert result is not None
+    assert "Lower case" in result

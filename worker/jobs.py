@@ -6,9 +6,10 @@ from pathlib import Path
 from shared.config import get_config
 from shared.database import get_session, init_db
 from shared.models import Repository, Job, WikiPage
-from worker.pipeline.ingestion import filter_files, clone_or_fetch
-from worker.pipeline.ast_analysis import build_module_tree
+from worker.pipeline.ingestion import filter_files, clone_or_fetch, extract_readme
+from worker.pipeline.ast_analysis import build_module_tree, build_enhanced_module_tree, analyze_file
 from worker.pipeline.rag_indexer import build_rag_index, FAISSStore
+from worker.pipeline.dependency_graph import build_dependency_graph, summarize_dependencies
 from worker.pipeline.wiki_planner import generate_page_plan
 from worker.pipeline.page_generator import generate_page
 from worker.llm import make_llm_provider
@@ -53,13 +54,39 @@ async def run_full_index(
             clone_root = data_dir / "repos" / repo_id / "clone"
         head_sha = await clone_or_fetch(clone_root, owner, name)
         files = filter_files(clone_root)
+        readme = extract_readme(clone_root)
         await _update_job(db_path, job_id, progress=20)
 
-        # Stage 2: AST Analysis
+        # Stage 2: AST Analysis — enhanced module tree with entity summaries
         module_tree = build_module_tree(clone_root, files)
-        await _update_job(db_path, job_id, progress=35)
+        enhanced_tree = build_enhanced_module_tree(clone_root, files)
 
-        # Stage 3: RAG Indexer
+        # Build per-file entity map for entity-aware RAG chunking
+        file_entities: dict[str, list[dict]] = {}
+        for f in files:
+            analysis = analyze_file(f)
+            if analysis and analysis["entities"]:
+                try:
+                    rel = str(f.relative_to(clone_root))
+                except ValueError:
+                    rel = str(f)
+                file_entities[rel] = analysis["entities"]
+        await _update_job(db_path, job_id, progress=30)
+
+        # Stage 2b: Dependency Graph
+        dep_graph = build_dependency_graph(files, clone_root)
+        module_files: dict[str, list[str]] = {}
+        for m in module_tree:
+            try:
+                module_files[m["path"]] = [
+                    str(Path(f).relative_to(clone_root)) for f in m["files"]
+                ]
+            except (ValueError, TypeError):
+                module_files[m["path"]] = m["files"]
+        dep_summary = summarize_dependencies(dep_graph, module_files)
+        await _update_job(db_path, job_id, progress=40)
+
+        # Stage 3: RAG Indexer — entity-aware chunking with line numbers
         llm = make_llm_provider(cfg)
         embedding = make_embedding_provider(cfg)
         repo_data_dir = data_dir / "repos" / repo_id
@@ -69,19 +96,69 @@ async def run_full_index(
             index_path=repo_data_dir / "faiss.index",
             meta_path=repo_data_dir / "faiss.meta.pkl",
         )
-        await build_rag_index(files, clone_root, store, embedding)
+        await build_rag_index(files, clone_root, store, embedding, file_entities=file_entities)
         await _update_job(db_path, job_id, progress=55)
 
-        # Stage 4: Wiki Planner
-        plan = await generate_page_plan(module_tree, repo_name=name, llm=llm)
+        # Stage 4: Wiki Planner — enriched with README, deps, entities
+        plan = await generate_page_plan(
+            enhanced_tree,
+            repo_name=name,
+            llm=llm,
+            readme=readme,
+            dep_summary=dep_summary,
+            clusters=dep_graph.clusters,
+        )
         await _update_job(db_path, job_id, progress=65)
 
-        # Stage 5: Page Generator
+        # Stage 5: Page Generator — with dependency context and entity details
         wiki_dir = repo_data_dir / "wiki"
         wiki_dir.mkdir(exist_ok=True)
         total = len(plan.pages)
+
+        # Build entity details lookup per module for page generation
+        module_entity_map: dict[str, list[dict]] = {}
+        for m in enhanced_tree:
+            mod_path = m["path"]
+            entities_for_mod = []
+            for cls in m.get("classes", []):
+                entities_for_mod.append({**cls, "type": "class"})
+            for fn in m.get("functions", []):
+                entities_for_mod.append({**fn, "type": "function"})
+            # Add file paths to entities
+            for e in entities_for_mod:
+                if "file" not in e:
+                    # Find a file that contains this entity
+                    for f_path in m.get("files", []):
+                        for rel_path, ents in file_entities.items():
+                            if rel_path.endswith(f_path) or f_path.endswith(rel_path):
+                                for fe in ents:
+                                    if fe.get("name") == e.get("name"):
+                                        e["file"] = rel_path
+                                        e["start_line"] = fe.get("start_line")
+                                        e["end_line"] = fe.get("end_line")
+                                        break
+                            if "file" in e:
+                                break
+                        if "file" in e:
+                            break
+            module_entity_map[mod_path] = entities_for_mod
+
         for i, page_spec in enumerate(plan.pages):
-            result = await generate_page(page_spec, store, llm, embedding, repo_name=name)
+            # Gather entity details for all modules in this page
+            page_entities: list[dict] = []
+            page_dep_info: dict = {"depends_on": [], "depended_by": [], "external_deps": []}
+            for mod in page_spec.modules:
+                page_entities.extend(module_entity_map.get(mod, []))
+                mod_dep = dep_summary.get(mod, {})
+                for key in ("depends_on", "depended_by", "external_deps"):
+                    page_dep_info[key] = list(set(page_dep_info[key]) | set(mod_dep.get(key, [])))
+
+            result = await generate_page(
+                page_spec, store, llm, embedding,
+                repo_name=name,
+                dep_info=page_dep_info if any(page_dep_info.values()) else None,
+                entity_details=page_entities if page_entities else None,
+            )
             (wiki_dir / f"{result.slug}.md").write_text(result.content)
             async with get_session(db_path) as s:
                 page = WikiPage(
@@ -92,6 +169,7 @@ async def run_full_index(
                     content=result.content,
                     page_order=i,
                     parent_slug=page_spec.parent_slug,
+                    description=page_spec.description,
                 )
                 s.add(page)
                 await s.commit()

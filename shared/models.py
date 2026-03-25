@@ -42,6 +42,7 @@ class WikiPage(Base):
     slug: Mapped[str] = mapped_column(String, nullable=False)
     title: Mapped[str] = mapped_column(String, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     page_order: Mapped[int] = mapped_column(Integer, default=0)
     parent_slug: Mapped[str | None] = mapped_column(String, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
