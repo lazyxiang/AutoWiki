@@ -36,9 +36,11 @@ async def get_wiki_page(repo_id: str, slug: str):
     cfg = get_config()
     async with get_session(str(cfg.database_path)) as s:
         result = await s.execute(
-            select(WikiPage).where(WikiPage.repo_id == repo_id, WikiPage.slug == slug)
+            select(WikiPage)
+            .where(WikiPage.repo_id == repo_id, WikiPage.slug == slug)
+            .order_by(WikiPage.updated_at.desc())
         )
-        page = result.scalar_one_or_none()
+        page = result.scalars().first()
     if page is None:
         raise HTTPException(status_code=404, detail="Page not found")
     return {
