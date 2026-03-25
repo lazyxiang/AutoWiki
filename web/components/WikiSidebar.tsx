@@ -13,6 +13,30 @@ export function WikiSidebar({ pages, owner, repo }: Props) {
   return (
     <nav className="w-64 shrink-0 border-r h-full overflow-y-auto p-4">
       <p className="text-xs font-semibold text-muted-foreground uppercase mb-3">{owner}/{repo}</p>
+      <ul className="space-y-1 mb-4">
+        <li>
+          <Link
+            href={`/${owner}/${repo}/chat`}
+            className={cn(
+              "block text-sm px-2 py-1 rounded hover:bg-accent",
+              pathname.endsWith("/chat") && "bg-accent font-medium"
+            )}
+          >
+            Chat
+          </Link>
+        </li>
+        <li>
+          <Link
+            href={`/${owner}/${repo}/graph`}
+            className={cn(
+              "block text-sm px-2 py-1 rounded hover:bg-accent",
+              pathname.endsWith("/graph") && "bg-accent font-medium"
+            )}
+          >
+            Module Graph
+          </Link>
+        </li>
+      </ul>
       <ul className="space-y-1">
         {topLevel.map(page => (
           <li key={page.slug}>
