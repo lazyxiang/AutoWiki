@@ -39,7 +39,7 @@ async def get_session(database_path: str):
 def _apply_migrations(connection) -> None:
     """Detect and apply missing columns for schema evolution."""
     insp = inspect(connection)
-    
+
     # wiki_pages migrations
     if insp.has_table("wiki_pages"):
         columns = {col["name"] for col in insp.get_columns("wiki_pages")}
