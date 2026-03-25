@@ -6,6 +6,7 @@ from shared.config import get_config
 from shared.database import init_db
 from api.routers import repos, jobs as jobs_router
 from api.routers import wiki as wiki_router
+from api.routers import chat as chat_router
 from api.ws import jobs as ws_jobs
 
 
@@ -23,4 +24,5 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 app.include_router(repos.router)
 app.include_router(jobs_router.router)
 app.include_router(wiki_router.router)
+app.include_router(chat_router.router)
 app.include_router(ws_jobs.router)
