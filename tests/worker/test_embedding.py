@@ -1,13 +1,17 @@
-import pytest
-import numpy as np
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import numpy as np
+import pytest
+
 from worker.embedding.openai_embed import OpenAIEmbedding
 
 
 async def test_embed_returns_float32_array():
     provider = OpenAIEmbedding(api_key="test-key")
     fake_vector = [0.1] * 1536
-    with patch.object(provider._client.embeddings, "create", new_callable=AsyncMock) as mock:
+    with patch.object(
+        provider._client.embeddings, "create", new_callable=AsyncMock
+    ) as mock:
         mock.return_value = AsyncMock(data=[AsyncMock(embedding=fake_vector)])
         result = await provider.embed("hello world")
     assert isinstance(result, np.ndarray)
@@ -18,8 +22,12 @@ async def test_embed_returns_float32_array():
 async def test_embed_batch_returns_list():
     provider = OpenAIEmbedding(api_key="test-key")
     fake_vector = [0.0] * 1536
-    with patch.object(provider._client.embeddings, "create", new_callable=AsyncMock) as mock:
-        mock.return_value = AsyncMock(data=[AsyncMock(embedding=fake_vector), AsyncMock(embedding=fake_vector)])
+    with patch.object(
+        provider._client.embeddings, "create", new_callable=AsyncMock
+    ) as mock:
+        mock.return_value = AsyncMock(
+            data=[AsyncMock(embedding=fake_vector), AsyncMock(embedding=fake_vector)]
+        )
         result = await provider.embed_batch(["a", "b"])
     assert len(result) == 2
     assert all(isinstance(v, np.ndarray) for v in result)
@@ -33,6 +41,7 @@ async def test_embed_batch_empty_returns_empty():
 
 def test_make_embedding_provider_openai():
     from worker.embedding import make_embedding_provider
+
     cfg = MagicMock()
     cfg.embedding.provider = "openai"
     cfg.embedding.api_key = "test-key"
@@ -43,6 +52,7 @@ def test_make_embedding_provider_openai():
 
 def test_make_embedding_provider_unknown_raises():
     from worker.embedding import make_embedding_provider
+
     cfg = MagicMock()
     cfg.embedding.provider = "unknown"
     with pytest.raises(ValueError, match="Unknown embedding provider"):

@@ -1,5 +1,5 @@
-import typer
 import httpx
+import typer
 
 
 def list_cmd(

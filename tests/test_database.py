@@ -1,13 +1,15 @@
 import pytest
-from pathlib import Path
-from shared.database import init_db, get_session
-from shared.models import Repository, Job, WikiPage
+
+from shared.database import get_session, init_db
+from shared.models import Job, Repository, WikiPage
+
 
 @pytest.fixture
 async def db(tmp_path):
     db_path = tmp_path / "test.db"
     await init_db(str(db_path))
     return db_path
+
 
 async def test_create_repository(db):
     async with get_session(str(db)) as session:
@@ -26,6 +28,7 @@ async def test_create_repository(db):
         assert result.owner == "testowner"
         assert result.status == "pending"
 
+
 async def test_create_job(db):
     async with get_session(str(db)) as session:
         repo = Repository(id="r1", owner="o", name="n", status="pending")
@@ -39,8 +42,10 @@ async def test_create_job(db):
         assert result.status == "queued"
         assert result.progress == 0
 
+
 async def test_create_wiki_page(db):
     import uuid
+
     async with get_session(str(db)) as session:
         repo = Repository(id="r2", owner="o2", name="n2", status="pending")
         page = WikiPage(
@@ -58,9 +63,8 @@ async def test_create_wiki_page(db):
 
     async with get_session(str(db)) as session:
         from sqlalchemy import select
-        result = await session.execute(
-            select(WikiPage).where(WikiPage.repo_id == "r2")
-        )
+
+        result = await session.execute(select(WikiPage).where(WikiPage.repo_id == "r2"))
         page = result.scalar_one()
         assert page.slug == "overview"
         assert page.parent_slug is None

@@ -1,21 +1,63 @@
 from __future__ import annotations
+
 import hashlib
 from pathlib import Path
 
 # Extensions considered source code (non-exhaustive, practical set)
 SOURCE_EXTENSIONS = {
-    ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".go",
-    ".c", ".h", ".cpp", ".cc", ".hpp", ".cs", ".rs",
-    ".rb", ".php", ".swift", ".kt", ".scala", ".r",
-    ".sh", ".bash", ".yaml", ".yml", ".toml", ".json",
-    ".md", ".rst", ".txt", ".sql", ".graphql", ".proto",
+    ".py",
+    ".js",
+    ".ts",
+    ".jsx",
+    ".tsx",
+    ".java",
+    ".go",
+    ".c",
+    ".h",
+    ".cpp",
+    ".cc",
+    ".hpp",
+    ".cs",
+    ".rs",
+    ".rb",
+    ".php",
+    ".swift",
+    ".kt",
+    ".scala",
+    ".r",
+    ".sh",
+    ".bash",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".json",
+    ".md",
+    ".rst",
+    ".txt",
+    ".sql",
+    ".graphql",
+    ".proto",
 }
 
 EXCLUDED_DIRS = {
-    "node_modules", ".git", "__pycache__", ".pytest_cache",
-    "venv", ".venv", "env", "dist", "build", "target",
-    ".next", ".nuxt", "vendor", "third_party", ".gradle",
-    "coverage", ".coverage", "htmlcov",
+    "node_modules",
+    ".git",
+    "__pycache__",
+    ".pytest_cache",
+    "venv",
+    ".venv",
+    "env",
+    "dist",
+    "build",
+    "target",
+    ".next",
+    ".nuxt",
+    "vendor",
+    "third_party",
+    ".gradle",
+    "coverage",
+    ".coverage",
+    "htmlcov",
 }
 
 
@@ -58,12 +100,25 @@ def filter_files(
     return sorted(results)
 
 
+def extract_readme(root: Path, max_chars: int = 3000) -> str | None:
+    """Extract README content from the repository root."""
+    for name in ("README.md", "readme.md", "README.rst", "README.txt", "README"):
+        p = root / name
+        if p.exists() and p.is_file():
+            try:
+                return p.read_text(encoding="utf-8", errors="replace")[:max_chars]
+            except OSError:
+                continue
+    return None
+
+
 async def clone_or_fetch(clone_dir: Path, owner: str, name: str) -> str:
     """Clone or fetch a GitHub repo. Returns HEAD commit SHA.
 
     Runs blocking gitpython I/O in a thread executor to avoid stalling the event loop.
     """
     import asyncio
+
     import git
 
     def _do_clone_or_fetch() -> str:
