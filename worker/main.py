@@ -18,8 +18,10 @@ class WorkerSettings:
 
 if __name__ == "__main__":
     import os
+
     from arq import run_worker
     from arq.connections import RedisSettings
+
     WorkerSettings.redis_settings = RedisSettings.from_dsn(
         os.environ.get("REDIS_URL", "redis://localhost:6379")
     )

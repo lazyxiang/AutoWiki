@@ -1,6 +1,8 @@
-import typer
 import json
 from pathlib import Path
+
+import typer
+
 from shared.config import get_config
 
 config_app = typer.Typer(help="Manage AutoWiki configuration")

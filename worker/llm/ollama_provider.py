@@ -1,8 +1,13 @@
 from __future__ import annotations
+
 import json
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
+
 import httpx
+
 from worker.llm.base import LLMProvider
+
 
 class OllamaProvider(LLMProvider):
     def __init__(self, model: str = "llama3", base_url: str = "http://localhost:11434"):
@@ -18,8 +23,14 @@ class OllamaProvider(LLMProvider):
             resp.raise_for_status()
             return resp.json()["response"]
 
-    async def generate_structured(self, prompt: str, schema: dict[str, Any], system: str = "") -> dict[str, Any]:
-        json_prompt = f"{prompt}\n\nRespond ONLY with valid JSON matching this schema:\n{json.dumps(schema)}"
+    async def generate_structured(
+        self, prompt: str, schema: dict[str, Any], system: str = ""
+    ) -> dict[str, Any]:
+        schema_str = json.dumps(schema)
+        json_prompt = (
+            f"{prompt}\n\nRespond ONLY with valid JSON"
+            f" matching this schema:\n{schema_str}"
+        )
         raw = await self.generate(json_prompt, system=system)
         raw = raw.strip()
         if raw.startswith("```"):
@@ -30,12 +41,16 @@ class OllamaProvider(LLMProvider):
                 raw = raw.rsplit("```", 1)[0]
         return json.loads(raw)
 
-    async def generate_stream(self, prompt: str, system: str = "") -> AsyncIterator[str]:
+    async def generate_stream(
+        self, prompt: str, system: str = ""
+    ) -> AsyncIterator[str]:
         payload = {"model": self._model, "prompt": prompt, "stream": True}
         if system:
             payload["system"] = system
         async with httpx.AsyncClient(timeout=120) as client:
-            async with client.stream("POST", f"{self._base_url}/api/generate", json=payload) as resp:
+            async with client.stream(
+                "POST", f"{self._base_url}/api/generate", json=payload
+            ) as resp:
                 async for line in resp.aiter_lines():
                     if line:
                         data = json.loads(line)

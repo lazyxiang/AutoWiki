@@ -207,5 +207,20 @@ marimo/_lsp/
 __marimo__/
 .worktrees/
 
-# AutoWiki runtime
+# AI Tools
+.claude/
+.gemini/
+
+# AutoWiki runtime & data
 autowiki.yml
+*.db
+*.faiss
+*.pkl
+wiki/
+
+# Frontend (for root commands)
+node_modules/
+.next/
+out/
+build/
+\n# Allow web/lib\n!web/lib/

@@ -1,35 +1,59 @@
-import pytest
-from httpx import AsyncClient, ASGITransport
-from shared.models import Repository, WikiPage
-from shared.database import get_session
 import uuid
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from shared.database import get_session
+from shared.models import Repository, WikiPage
 
 
 @pytest.fixture
 async def client_with_wiki(tmp_path):
     import os
+
     os.environ["DATABASE_PATH"] = str(tmp_path / "test.db")
     os.environ["AUTOWIKI_DATA_DIR"] = str(tmp_path)
     from shared.config import reset_config
+
     reset_config()
     from shared.database import init_db
+
     await init_db(str(tmp_path / "test.db"))
 
     from shared.config import get_config
+
     cfg = get_config()
     async with get_session(str(cfg.database_path)) as s:
-        repo = Repository(id="r1", owner="owner", name="repo", status="ready", platform="github")
-        p1 = WikiPage(id=str(uuid.uuid4()), repo_id="r1", slug="overview",
-                      title="Overview", content="# Overview\nHello.", page_order=0)
-        p2 = WikiPage(id=str(uuid.uuid4()), repo_id="r1", slug="models",
-                      title="Models", content="# Models\nClass User.", page_order=1)
+        repo = Repository(
+            id="r1", owner="owner", name="repo", status="ready", platform="github"
+        )
+        p1 = WikiPage(
+            id=str(uuid.uuid4()),
+            repo_id="r1",
+            slug="overview",
+            title="Overview",
+            content="# Overview\nHello.",
+            page_order=0,
+        )
+        p2 = WikiPage(
+            id=str(uuid.uuid4()),
+            repo_id="r1",
+            slug="models",
+            title="Models",
+            content="# Models\nClass User.",
+            page_order=1,
+        )
         s.add_all([repo, p1, p2])
         await s.commit()
 
     from api.main import app
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as c:
         yield c
     from shared.database import dispose_db
+
     await dispose_db(str(tmp_path / "test.db"))
     reset_config()
 
