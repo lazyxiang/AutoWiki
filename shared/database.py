@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from sqlalchemy import inspect, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from shared.models import Base
@@ -41,9 +42,13 @@ def _apply_migrations(connection) -> None:
     if insp.has_table("wiki_pages"):
         columns = {col["name"] for col in insp.get_columns("wiki_pages")}
         if "description" not in columns:
-            connection.execute(
-                text("ALTER TABLE wiki_pages ADD COLUMN description TEXT")
-            )
+            try:
+                connection.execute(
+                    text("ALTER TABLE wiki_pages ADD COLUMN description TEXT")
+                )
+            except OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
 
 
 async def dispose_db(database_path: str) -> None:

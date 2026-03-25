@@ -1,4 +1,4 @@
-import { getWikiPage } from "@/lib/api";
+import { getWikiPage, ApiError } from "@/lib/api";
 import { WikiPageContent } from "@/components/WikiPage";
 import { notFound } from "next/navigation";
 import crypto from "crypto";
@@ -14,10 +14,15 @@ export default async function WikiPageRoute({
     .update(`github:${owner}/${repo}`)
     .digest("hex")
     .slice(0, 16);
-  const page = await getWikiPage(repoId, slug).catch(() => null);
 
-  if (!page) {
-    notFound();
+  let page;
+  try {
+    page = await getWikiPage(repoId, slug);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) {
+      notFound();
+    }
+    throw err;
   }
 
   return <WikiPageContent title={page.title} content={page.content} />;

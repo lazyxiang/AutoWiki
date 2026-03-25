@@ -27,8 +27,18 @@ export async function getRepoWiki(repoId: string) {
   return res.json() as Promise<{ pages: { slug: string; title: string; parent_slug: string | null }[] }>;
 }
 
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
 export async function getWikiPage(repoId: string, slug: string) {
   const res = await fetch(`${API_URL}/api/repos/${repoId}/wiki/${slug}`);
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) {
+    throw new ApiError(await res.text(), res.status);
+  }
   return res.json() as Promise<{ slug: string; title: string; content: string }>;
 }
