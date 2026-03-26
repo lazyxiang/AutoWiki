@@ -1,4 +1,5 @@
 """Async exponential backoff retry for transient LLM/embedding errors."""
+
 from __future__ import annotations
 
 import asyncio

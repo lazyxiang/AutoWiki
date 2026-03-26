@@ -145,6 +145,7 @@ async def run_full_index(
 
         # Force mode: clear all previously generated artifacts
         if force:
+
             def _remove_artifacts() -> None:
                 for p in (index_path, meta_path):
                     if p.exists():
