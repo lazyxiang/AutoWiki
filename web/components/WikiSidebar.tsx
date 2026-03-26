@@ -11,8 +11,10 @@ export function WikiSidebar({ pages, owner, repo }: Props) {
   const topLevel = pages.filter(p => !p.parent_slug);
 
   return (
-    <nav className="w-64 shrink-0 border-r h-full overflow-y-auto p-4">
-      <p className="text-xs font-semibold text-muted-foreground uppercase mb-3">{owner}/{repo}</p>
+    <nav className="w-64 shrink-0 border-r h-full overflow-y-auto p-4 bg-sidebar">
+      <p className="text-xs font-semibold text-muted-foreground uppercase mb-4 tracking-wider">
+        {owner}/{repo}
+      </p>
       <ul className="space-y-1 mb-4">
         <li>
           <Link

@@ -50,6 +50,7 @@ def _apply_migrations(connection) -> None:
                 if "duplicate column name" not in str(exc).lower():
                     raise
 
+    # repositories migrations
     if insp.has_table("repositories"):
         columns = {col["name"] for col in insp.get_columns("repositories")}
         if "wiki_structure" not in columns:
@@ -61,6 +62,7 @@ def _apply_migrations(connection) -> None:
                 if "duplicate column name" not in str(exc).lower():
                     raise
 
+    # jobs migrations
     if insp.has_table("jobs"):
         columns = {col["name"] for col in insp.get_columns("jobs")}
         if "status_description" not in columns:
