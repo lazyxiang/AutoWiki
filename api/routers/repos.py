@@ -67,7 +67,16 @@ async def submit_repo(req: IndexRequest):
         s.add(job)
         await s.commit()
 
-    await enqueue_full_index(repo_id, job_id, owner, name, force=req.force)
+    try:
+        await enqueue_full_index(repo_id, job_id, owner, name, force=req.force)
+    except Exception:
+        async with get_session(db_path) as s:
+            job = await s.get(Job, job_id)
+            if job is not None:
+                job.status = "failed"
+                job.error = "Failed to enqueue full_index job"
+                await s.commit()
+        raise
     return {"repo_id": repo_id, "job_id": job_id, "status": "queued"}
 
 
