@@ -48,10 +48,7 @@ export function useChatStream(
         wsRef.current.close();
         wsRef.current = null;
       }
-      const wsBase = typeof window !== "undefined"
-        ? window.location.origin.replace(/^http/, "ws").replace(":3000", ":3001")
-        : "ws://localhost:3001";
-      const ws = new WebSocket(`${wsBase}/ws/repos/${repoId}/chat/${sessionId}`);
+      const ws = new WebSocket(`${WS_URL}/ws/repos/${repoId}/chat/${sessionId}`);
       wsRef.current = ws;
       ws.onopen = () => ws.send(JSON.stringify({ content }));
       ws.onmessage = (e) => {

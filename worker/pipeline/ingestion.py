@@ -179,7 +179,7 @@ def get_affected_modules(changed_files: list[str], module_tree: list[dict]) -> s
     affected: set[str] = set()
     for f in changed_files:
         parts = Path(f).parts
-        # Root-level files (len==1) map to "." — they don't belong to any module
+        # Root-level files (len==1) map to the root module "."
         module = parts[0] if len(parts) > 1 else "."
         if module in module_paths:
             affected.add(module)

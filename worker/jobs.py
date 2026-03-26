@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import uuid
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -437,6 +438,7 @@ async def run_refresh_index(
         ast_dir = repo_data_dir / "ast"
         module_tree_path = ast_dir / "module_tree.json"
         if not module_tree_path.exists():
+            # No prior index — force a clean full reindex to avoid duplicate pages
             await run_full_index(
                 ctx,
                 repo_id=repo_id,
@@ -444,11 +446,12 @@ async def run_refresh_index(
                 owner=owner,
                 name=name,
                 clone_root=clone_root,
+                force=True,
             )
             return
 
-        module_tree = json.loads(module_tree_path.read_text())
-        affected_modules = get_affected_modules(changed_files, module_tree)
+        old_module_tree = json.loads(module_tree_path.read_text())
+        affected_modules = get_affected_modules(changed_files, old_module_tree)
         if not affected_modules:
             now = datetime.now(UTC)
             await _update_repo(db_path, repo_id, last_commit=new_sha, status="ready")
@@ -478,6 +481,29 @@ async def run_refresh_index(
 
         ast_dir.mkdir(parents=True, exist_ok=True)
         (ast_dir / "module_tree.json").write_text(json.dumps(module_tree))
+
+        # Detect structural changes: added or removed top-level modules
+        old_module_paths = {m["path"] for m in old_module_tree}
+        new_module_paths = {m["path"] for m in module_tree}
+        added_modules = new_module_paths - old_module_paths
+        removed_modules = old_module_paths - new_module_paths
+
+        # New modules: add to affected set so they get generated
+        affected_modules = affected_modules | added_modules
+
+        # Removed modules: we have no module→page mapping to selectively clean up,
+        # so fall back to a full force reindex which clears stale pages
+        if removed_modules:
+            await run_full_index(
+                ctx,
+                repo_id=repo_id,
+                job_id=job_id,
+                owner=owner,
+                name=name,
+                clone_root=clone_root,
+                force=True,
+            )
+            return
 
         file_entities: dict[str, list[dict]] = {}
         for f in files:
@@ -550,8 +576,19 @@ async def run_refresh_index(
         )
         await _update_job(db_path, job_id, progress=65)
 
-        # Delete old pages whose slugs will be replaced
+        # Capture existing page_orders before deletion so we can preserve stable ordering
         new_slugs = {p.slug for p in plan.pages}
+        old_page_orders: dict[str, int] = {}
+        max_existing_order = 0
+        async with get_session(db_path) as s:
+            result = await s.execute(
+                sa_select(WikiPage).where(WikiPage.repo_id == repo_id)
+            )
+            for p in result.scalars().all():
+                if p.slug in new_slugs:
+                    old_page_orders[p.slug] = p.page_order
+                max_existing_order = max(max_existing_order, p.page_order)
+
         async with get_session(db_path) as s:
             await s.execute(
                 sa_delete(WikiPage).where(
@@ -601,6 +638,8 @@ async def run_refresh_index(
                 entity_details=page_entities if page_entities else None,
                 on_retry=_on_retry,
             )
+            # Preserve original page_order for replaced pages; append truly new ones
+            page_order = old_page_orders.get(result.slug, max_existing_order + 1 + i)
             async with get_session(db_path) as s:
                 page = WikiPage(
                     id=str(uuid.uuid4()),
@@ -608,7 +647,7 @@ async def run_refresh_index(
                     slug=result.slug,
                     title=result.title,
                     content=result.content,
-                    page_order=i,
+                    page_order=page_order,
                     parent_slug=page_spec.parent_slug,
                     description=page_spec.description,
                 )
@@ -637,11 +676,18 @@ async def run_refresh_index(
                 first_page = result_row.scalar_one_or_none()
                 if first_page is not None:
                     prefix = f"## Architecture\n\n```mermaid\n{diagram}\n```\n\n"
-                    # Replace existing diagram prefix if present, else prepend
+                    # Replace existing diagram section if present, else prepend.
+                    # Use regex to strip only the architecture block so content
+                    # with blank lines inside the mermaid fence is handled correctly.
                     if first_page.content.startswith("## Architecture"):
-                        first_page.content = (
-                            prefix + first_page.content.split("\n\n", 3)[-1]
+                        stripped = re.sub(
+                            r"^## Architecture\n\n```mermaid\n.*?```\n\n",
+                            "",
+                            first_page.content,
+                            count=1,
+                            flags=re.DOTALL,
                         )
+                        first_page.content = prefix + stripped
                     else:
                         first_page.content = prefix + first_page.content
                     await s.commit()

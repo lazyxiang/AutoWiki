@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
@@ -67,7 +68,8 @@ async def ws_chat(websocket: WebSocket, repo_id: str, session_id: str):
         index_path=repo_data_dir / "faiss.index",
         meta_path=repo_data_dir / "faiss.meta.pkl",
     )
-    store.load()
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, store.load)
     llm = make_llm_provider(cfg)
 
     try:
