@@ -60,7 +60,9 @@ async def run_full_index(
     await init_db(db_path)
 
     # Retry callback — updates job status_description to show retry state
-    async def _on_retry(attempt: int, max_retries: int, wait: float, exc: Exception) -> None:
+    async def _on_retry(
+        attempt: int, max_retries: int, wait: float, exc: Exception
+    ) -> None:
         await _update_job(
             db_path,
             job_id,
@@ -143,15 +145,19 @@ async def run_full_index(
 
         # Force mode: clear all previously generated artifacts
         if force:
-            for p in (index_path, meta_path):
-                if p.exists():
-                    p.unlink()
+            def _remove_artifacts() -> None:
+                for p in (index_path, meta_path):
+                    if p.exists():
+                        p.unlink()
+                if wiki_dir.exists():
+                    for f in wiki_dir.glob("*.md"):
+                        f.unlink()
+
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, _remove_artifacts)
             async with get_session(db_path) as s:
                 await s.execute(delete(WikiPage).where(WikiPage.repo_id == repo_id))
                 await s.commit()
-            if wiki_dir.exists():
-                for f in wiki_dir.glob("*.md"):
-                    f.unlink()
 
         store = FAISSStore(
             dimension=embedding.dimension,

@@ -34,6 +34,21 @@ async def submit_repo(req: IndexRequest):
     job_id = str(uuid.uuid4())
 
     async with get_session(db_path) as s:
+        in_flight = await s.scalar(
+            select(Job.id).where(
+                Job.repo_id == repo_id,
+                Job.type == "full_index",
+                Job.status.in_(("queued", "running")),
+            ).limit(1)
+        )
+        if in_flight is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "A full index job is already queued or running"
+                    " for this repository"
+                ),
+            )
         existing = await s.get(Repository, repo_id)
         if existing is None:
             repo = Repository(

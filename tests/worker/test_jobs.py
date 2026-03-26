@@ -64,7 +64,7 @@ async def test_full_index_job_updates_status(tmp_path, mock_llm, mock_embedding)
 
 
 async def test_force_clears_existing_artifacts(tmp_path, mock_llm, mock_embedding):
-    """force=True deletes existing FAISS files and WikiPage records before regenerating."""
+    """force=True deletes existing FAISS files and WikiPage records."""
     mock_embedding.dimension = 1536
     db_path = await _setup_db(tmp_path)
 
@@ -74,7 +74,11 @@ async def test_force_clears_existing_artifacts(tmp_path, mock_llm, mock_embeddin
     # Pre-create repo, job, and a stale wiki page
     async with get_session(db_path) as s:
         repo = Repository(
-            id="r2", owner="testowner", name="simple-repo", platform="github", status="ready"
+            id="r2",
+            owner="testowner",
+            name="simple-repo",
+            platform="github",
+            status="ready",
         )
         job = Job(id="j2", repo_id="r2", type="full_index", status="queued", progress=0)
         old_page = WikiPage(
@@ -121,9 +125,11 @@ async def test_force_clears_existing_artifacts(tmp_path, mock_llm, mock_embeddin
         from sqlalchemy import select
 
         result = await s.execute(
-            select(WikiPage).where(WikiPage.repo_id == "r2", WikiPage.slug == "stale-page")
+            select(WikiPage).where(
+                WikiPage.repo_id == "r2", WikiPage.slug == "stale-page"
+            )
         )
-        assert result.scalar_one_or_none() is None, "stale page should have been cleared"
+        assert result.scalar_one_or_none() is None, "stale page should be cleared"
 
     async with get_session(db_path) as s:
         job = await s.get(Job, "j2")
@@ -140,7 +146,11 @@ async def test_resume_skips_existing_pages(tmp_path, mock_llm, mock_embedding):
 
     async with get_session(db_path) as s:
         repo = Repository(
-            id="r3", owner="testowner", name="simple-repo", platform="github", status="ready"
+            id="r3",
+            owner="testowner",
+            name="simple-repo",
+            platform="github",
+            status="ready",
         )
         job = Job(id="j3", repo_id="r3", type="full_index", status="queued", progress=0)
         # Pre-generate the "overview" page
@@ -158,7 +168,6 @@ async def test_resume_skips_existing_pages(tmp_path, mock_llm, mock_embedding):
         await s.commit()
 
     generate_page_calls: list[str] = []
-    original_generate = None
 
     async def mock_generate_page(spec, *args, **kwargs):
         generate_page_calls.append(spec.slug)

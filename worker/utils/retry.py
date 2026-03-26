@@ -4,11 +4,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any, TypeVar
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar("T")
 OnRetryCallback = Callable[[int, int, float, Exception], Awaitable[None]]
 
 # Build transient exception tuple by probing installed provider SDKs
@@ -23,7 +22,7 @@ try:
         anthropic.APIConnectionError,
         anthropic.InternalServerError,
     ]
-except ImportError:
+except (ImportError, AttributeError):
     pass
 
 try:
@@ -35,13 +34,13 @@ try:
         openai.APIConnectionError,
         openai.InternalServerError,
     ]
-except ImportError:
+except (ImportError, AttributeError):
     pass
 
 TRANSIENT_EXCEPTIONS: tuple[type[Exception], ...] = tuple(_TRANSIENT)
 
 
-async def async_retry(
+async def async_retry[T](
     fn: Callable[..., Awaitable[T]],
     *args: Any,
     max_retries: int = 3,

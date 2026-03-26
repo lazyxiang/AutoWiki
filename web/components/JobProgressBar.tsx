@@ -22,7 +22,12 @@ export function JobProgressBar({ jobId, owner, repo }: Props) {
 
   return (
     <div className="flex flex-col gap-4 w-full max-w-xl">
-      <div className="flex flex-col gap-1">
+      <div
+        className="flex flex-col gap-1"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
         <p className="text-sm font-medium text-foreground capitalize">{status}…</p>
         {statusDescription && (
           <p
