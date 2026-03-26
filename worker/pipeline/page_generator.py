@@ -7,6 +7,7 @@ from worker.embedding.base import EmbeddingProvider
 from worker.llm.base import LLMProvider
 from worker.pipeline.rag_indexer import FAISSStore
 from worker.pipeline.wiki_planner import PageSpec
+from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
 
 _SYSTEM = (
     "You are a senior technical writer creating comprehensive, "
@@ -199,6 +200,7 @@ async def generate_page(
     top_k: int = 12,
     dep_info: dict[str, Any] | None = None,
     entity_details: list[dict[str, Any]] | None = None,
+    on_retry: OnRetryCallback | None = None,
 ) -> PageResult:
     # Multi-query RAG: generate multiple semantic queries for better coverage
     queries = [f"{spec.title} {' '.join(spec.modules)}"]
@@ -215,7 +217,12 @@ async def generate_page(
     # Embed all queries and do multi-search
     query_vecs = []
     for q in queries:
-        vec = await embedding.embed(q)
+        vec = await async_retry(
+            embedding.embed,
+            q,
+            transient_exceptions=TRANSIENT_EXCEPTIONS,
+            on_retry=on_retry,
+        )
         query_vecs.append(vec)
 
     if len(query_vecs) > 1:
@@ -226,6 +233,12 @@ async def generate_page(
     prompt = _build_page_prompt(
         spec, context_chunks, repo_name, dep_info, entity_details
     )
-    content = await llm.generate(prompt, system=_SYSTEM)
+    content = await async_retry(
+        llm.generate,
+        prompt,
+        system=_SYSTEM,
+        transient_exceptions=TRANSIENT_EXCEPTIONS,
+        on_retry=on_retry,
+    )
 
     return PageResult(slug=spec.slug, title=spec.title, content=content)

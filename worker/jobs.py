@@ -7,6 +7,8 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
+from sqlalchemy import delete, select
+
 from shared.config import get_config
 from shared.database import get_session, init_db
 from shared.models import Job, Repository, WikiPage
@@ -50,11 +52,24 @@ async def run_full_index(
     owner: str,
     name: str,
     clone_root: Path | None = None,
+    force: bool = False,
 ):
     cfg = get_config()
     db_path = str(cfg.database_path)
     data_dir = cfg.data_dir
     await init_db(db_path)
+
+    # Retry callback — updates job status_description to show retry state
+    async def _on_retry(
+        attempt: int, max_retries: int, wait: float, exc: Exception
+    ) -> None:
+        await _update_job(
+            db_path,
+            job_id,
+            status_description=(
+                f"Retry {attempt}/{max_retries} in {wait:.0f}s ({type(exc).__name__})"
+            ),
+        )
 
     try:
         await _update_job(
@@ -126,6 +141,25 @@ async def run_full_index(
 
         index_path = repo_data_dir / "faiss.index"
         meta_path = repo_data_dir / "faiss.meta.pkl"
+        wiki_dir = repo_data_dir / "wiki"
+
+        # Force mode: clear all previously generated artifacts
+        if force:
+
+            def _remove_artifacts() -> None:
+                for p in (index_path, meta_path):
+                    if p.exists():
+                        p.unlink()
+                if wiki_dir.exists():
+                    for f in wiki_dir.glob("*.md"):
+                        f.unlink()
+
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, _remove_artifacts)
+            async with get_session(db_path) as s:
+                await s.execute(delete(WikiPage).where(WikiPage.repo_id == repo_id))
+                await s.commit()
+
         store = FAISSStore(
             dimension=embedding.dimension,
             index_path=index_path,
@@ -149,7 +183,12 @@ async def run_full_index(
                 status_description="Indexing code for RAG search (embedding)...",
             )
             await build_rag_index(
-                files, clone_root, store, embedding, file_entities=file_entities
+                files,
+                clone_root,
+                store,
+                embedding,
+                file_entities=file_entities,
+                on_retry=_on_retry,
             )
             await _update_job(
                 db_path,
@@ -166,11 +205,11 @@ async def run_full_index(
             readme=readme,
             dep_summary=dep_summary,
             clusters=dep_graph.clusters,
+            on_retry=_on_retry,
         )
         await _update_job(db_path, job_id, progress=65)
 
         # Stage 5: Page Generator — with dependency context and entity details
-        wiki_dir = repo_data_dir / "wiki"
         wiki_dir.mkdir(exist_ok=True)
 
         # Save wiki structure JSON
@@ -178,7 +217,6 @@ async def run_full_index(
         (wiki_dir / "wiki.json").write_text(json.dumps(structure_data, indent=2))
 
         total = len(plan.pages)
-        # ... rest of generator setup
 
         # Build entity details lookup per module for page generation
         module_entity_map: dict[str, list[dict]] = {}
@@ -208,7 +246,27 @@ async def run_full_index(
                             break
             module_entity_map[mod_path] = entities_for_mod
 
+        # Resume mode: load slugs of already-generated pages to skip them
+        existing_slugs: set[str] = set()
+        if not force:
+            async with get_session(db_path) as s:
+                result = await s.execute(
+                    select(WikiPage).where(WikiPage.repo_id == repo_id)
+                )
+                existing_slugs = {p.slug for p in result.scalars().all()}
+
         for i, page_spec in enumerate(plan.pages):
+            progress = 65 + int(35 * (i + 1) / total)
+
+            if page_spec.slug in existing_slugs:
+                await _update_job(
+                    db_path,
+                    job_id,
+                    progress=progress,
+                    status_description=f"Skipping existing page: {page_spec.title}",
+                )
+                continue
+
             # Gather entity details for all modules in this page
             page_entities: list[dict] = []
             page_dep_info: dict = {
@@ -232,6 +290,7 @@ async def run_full_index(
                 repo_name=name,
                 dep_info=page_dep_info if any(page_dep_info.values()) else None,
                 entity_details=page_entities if page_entities else None,
+                on_retry=_on_retry,
             )
             (wiki_dir / f"{result.slug}.md").write_text(result.content)
             async with get_session(db_path) as s:
@@ -247,7 +306,6 @@ async def run_full_index(
                 )
                 s.add(page)
                 await s.commit()
-            progress = 65 + int(35 * (i + 1) / total)
             await _update_job(
                 db_path,
                 job_id,

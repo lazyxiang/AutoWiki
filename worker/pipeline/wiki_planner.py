@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from worker.llm.base import LLMProvider
+from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
 
 
 @dataclass
@@ -180,12 +181,18 @@ async def generate_page_plan(
     readme: str | None = None,
     dep_summary: dict | None = None,
     clusters: list[list[str]] | None = None,
+    on_retry: OnRetryCallback | None = None,
 ) -> PagePlan:
     prompt = _build_prompt(module_tree, repo_name, readme, dep_summary, clusters)
     for attempt in range(max_retries):
         try:
-            raw = await llm.generate_structured(
-                prompt, schema=_PLAN_SCHEMA, system=_SYSTEM
+            raw = await async_retry(
+                llm.generate_structured,
+                prompt,
+                schema=_PLAN_SCHEMA,
+                system=_SYSTEM,
+                transient_exceptions=TRANSIENT_EXCEPTIONS,
+                on_retry=on_retry,
             )
             return validate_page_plan(raw)
         except (ValueError, json.JSONDecodeError, KeyError) as e:
