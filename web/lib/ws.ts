@@ -7,6 +7,7 @@ export function useJobProgress(jobId: string | null) {
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState<string>("queued");
   const [statusDescription, setStatusDescription] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
   const ws = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -17,9 +18,10 @@ export function useJobProgress(jobId: string | null) {
       setProgress(data.progress ?? 0);
       setStatus(data.status ?? "running");
       setStatusDescription(data.status_description ?? null);
+      setRetrying(data.retrying ?? false);
     };
     return () => ws.current?.close();
   }, [jobId]);
 
-  return { progress, status, statusDescription };
+  return { progress, status, statusDescription, retrying };
 }

@@ -8,6 +8,8 @@ import faiss
 import numpy as np
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
+
 
 def chunk_file(path: Path, chunk_size: int = 1000, overlap: int = 100) -> list[str]:
     """Split a source file into overlapping text chunks."""
@@ -287,6 +289,7 @@ async def build_rag_index(
     store: FAISSStore,
     embedding_provider,
     file_entities: dict[str, list[dict]] | None = None,
+    on_retry: OnRetryCallback | None = None,
 ) -> None:
     """Chunk all files, embed, and add to FAISS store.
 
@@ -316,7 +319,13 @@ async def build_rag_index(
             continue
 
         texts = [c["text"] for c in chunk_data]
-        vectors = await embedding_provider.embed_batch(texts, is_code=is_code)
+        vectors = await async_retry(
+            embedding_provider.embed_batch,
+            texts,
+            is_code=is_code,
+            transient_exceptions=TRANSIENT_EXCEPTIONS,
+            on_retry=on_retry,
+        )
 
         metas = []
         for i, cd in enumerate(chunk_data):

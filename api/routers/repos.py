@@ -18,6 +18,7 @@ router = APIRouter(prefix="/api/repos")
 
 class IndexRequest(BaseModel):
     url: str
+    force: bool = False
 
 
 @router.post("", status_code=202)
@@ -50,7 +51,7 @@ async def submit_repo(req: IndexRequest):
         s.add(job)
         await s.commit()
 
-    await enqueue_full_index(repo_id, job_id, owner, name)
+    await enqueue_full_index(repo_id, job_id, owner, name, force=req.force)
     return {"repo_id": repo_id, "job_id": job_id, "status": "queued"}
 
 
