@@ -50,6 +50,28 @@ def _apply_migrations(connection) -> None:
                 if "duplicate column name" not in str(exc).lower():
                     raise
 
+    if insp.has_table("repositories"):
+        columns = {col["name"] for col in insp.get_columns("repositories")}
+        if "wiki_structure" not in columns:
+            try:
+                connection.execute(
+                    text("ALTER TABLE repositories ADD COLUMN wiki_structure TEXT")
+                )
+            except OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
+
+    if insp.has_table("jobs"):
+        columns = {col["name"] for col in insp.get_columns("jobs")}
+        if "status_description" not in columns:
+            try:
+                connection.execute(
+                    text("ALTER TABLE jobs ADD COLUMN status_description TEXT")
+                )
+            except OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
+
 
 async def dispose_db(database_path: str) -> None:
     """Dispose engine and remove caches for a database path. Use in test teardown."""

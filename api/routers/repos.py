@@ -19,6 +19,7 @@ router = APIRouter(prefix="/api/repos")
 
 class IndexRequest(BaseModel):
     url: str
+    force: bool = False
 
 
 @router.post("", status_code=202)
@@ -34,6 +35,22 @@ async def submit_repo(req: IndexRequest):
     job_id = str(uuid.uuid4())
 
     async with get_session(db_path) as s:
+        in_flight = await s.scalar(
+            select(Job.id)
+            .where(
+                Job.repo_id == repo_id,
+                Job.type == "full_index",
+                Job.status.in_(("queued", "running")),
+            )
+            .limit(1)
+        )
+        if in_flight is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "A full index job is already queued or running for this repository"
+                ),
+            )
         existing = await s.get(Repository, repo_id)
         if existing is None:
             repo = Repository(
@@ -41,12 +58,26 @@ async def submit_repo(req: IndexRequest):
             )
             s.add(repo)
         job = Job(
-            id=job_id, repo_id=repo_id, type="full_index", status="queued", progress=0
+            id=job_id,
+            repo_id=repo_id,
+            type="full_index",
+            status="queued",
+            progress=0,
+            status_description="Queued for processing...",
         )
         s.add(job)
         await s.commit()
 
-    await enqueue_full_index(repo_id, job_id, owner, name)
+    try:
+        await enqueue_full_index(repo_id, job_id, owner, name, force=req.force)
+    except Exception:
+        async with get_session(db_path) as s:
+            job = await s.get(Job, job_id)
+            if job is not None:
+                job.status = "failed"
+                job.error = "Failed to enqueue full_index job"
+                await s.commit()
+        raise
     return {"repo_id": repo_id, "job_id": job_id, "status": "queued"}
 
 

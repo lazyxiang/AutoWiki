@@ -9,7 +9,7 @@ def index_cmd(
 ):
     """Index a GitHub repository."""
     try:
-        resp = httpx.post(f"{api_url}/api/repos", json={"url": url}, timeout=10)
+        resp = httpx.post(f"{api_url}/api/repos", json={"url": url, "force": force}, timeout=10)
         resp.raise_for_status()
         data = resp.json()
         typer.echo(f"Indexing started. Job ID: {data['job_id']}")
