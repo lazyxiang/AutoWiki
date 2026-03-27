@@ -106,9 +106,10 @@ Before every commit, run and resolve all issues from:
 ```bash
 uv run ruff check .
 uv run ruff format --check .
+npm run lint          # run from web/
 ```
 
-All lint errors and format violations **must be fixed** before committing. Do not commit with outstanding `ruff` errors.
+All lint errors and format violations **must be fixed** before committing. Do not commit with outstanding `ruff` errors or `npm run lint` errors.
 
 ## Testing
 

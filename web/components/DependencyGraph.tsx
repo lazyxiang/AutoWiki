@@ -1,26 +1,33 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useReducer } from "react";
 import { ReactFlow, type Node, type Edge, Background, Controls } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { getRepoGraph } from "@/lib/api";
 
+type State = { nodes: Node[]; edges: Edge[]; error: string | null; loaded: boolean };
+type Action =
+  | { type: "reset" }
+  | { type: "success"; nodes: Node[]; edges: Edge[] }
+  | { type: "error"; message: string };
+
+function reducer(_: State, action: Action): State {
+  switch (action.type) {
+    case "reset": return { nodes: [], edges: [], error: null, loaded: false };
+    case "success": return { nodes: action.nodes, edges: action.edges, error: null, loaded: true };
+    case "error": return { nodes: [], edges: [], error: action.message, loaded: true };
+  }
+}
+
 export default function DependencyGraph({ repoId }: { repoId: string }) {
-  const [nodes, setNodes] = useState<Node[]>([]);
-  const [edges, setEdges] = useState<Edge[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [loaded, setLoaded] = useState(false);
+  const [{ nodes, edges, error, loaded }, dispatch] = useReducer(reducer, { nodes: [], edges: [], error: null, loaded: false });
 
   useEffect(() => {
-    setError(null);
-    setLoaded(false);
+    dispatch({ type: "reset" });
     getRepoGraph(repoId)
       .then((data) => {
         const count = data.nodes.length;
-        setError(null);
         if (count === 0) {
-          setNodes([]);
-          setEdges([]);
-          setLoaded(true);
+          dispatch({ type: "success", nodes: [], edges: [] });
           return;
         }
         const radius = Math.max(200, count * 40);
@@ -39,11 +46,9 @@ export default function DependencyGraph({ repoId }: { repoId: string }) {
           target: e.target,
           animated: false,
         }));
-        setNodes(flowNodes);
-        setEdges(flowEdges);
-        setLoaded(true);
+        dispatch({ type: "success", nodes: flowNodes, edges: flowEdges });
       })
-      .catch((e) => { setError(e.message); setLoaded(true); });
+      .catch((e: Error) => dispatch({ type: "error", message: e.message }));
   }, [repoId]);
 
   if (error) return <p style={{ color: "#ef4444" }}>Failed to load graph: {error}</p>;
