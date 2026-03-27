@@ -158,6 +158,8 @@ async def _setup_db(tmp_path):
 
 async def test_force_clears_existing_artifacts(tmp_path, mock_llm, mock_embedding):
     """force=True deletes existing FAISS files and WikiPage records."""
+    from shared.database import dispose_db
+
     mock_embedding.dimension = 1536
     db_path = await _setup_db(tmp_path)
 
@@ -211,23 +213,28 @@ async def test_force_clears_existing_artifacts(tmp_path, mock_llm, mock_embeddin
             force=True,
         )
 
-    async with get_session(db_path) as s:
-        from sqlalchemy import select
+    try:
+        async with get_session(db_path) as s:
+            from sqlalchemy import select
 
-        result = await s.execute(
-            select(WikiPage).where(
-                WikiPage.repo_id == "r2", WikiPage.slug == "stale-page"
+            result = await s.execute(
+                select(WikiPage).where(
+                    WikiPage.repo_id == "r2", WikiPage.slug == "stale-page"
+                )
             )
-        )
-        assert result.scalar_one_or_none() is None, "stale page should be cleared"
+            assert result.scalar_one_or_none() is None, "stale page should be cleared"
 
-    async with get_session(db_path) as s:
-        job = await s.get(Job, "j2")
-        assert job.status == "done"
+        async with get_session(db_path) as s:
+            job = await s.get(Job, "j2")
+            assert job.status == "done"
+    finally:
+        await dispose_db(db_path)
 
 
 async def test_resume_skips_existing_pages(tmp_path, mock_llm, mock_embedding):
     """Default (force=False) skips pages whose slugs already exist in the DB."""
+    from shared.database import dispose_db
+
     mock_embedding.dimension = 1536
     db_path = await _setup_db(tmp_path)
 
@@ -282,10 +289,13 @@ async def test_resume_skips_existing_pages(tmp_path, mock_llm, mock_embedding):
             force=False,
         )
 
-    assert "overview" not in generate_page_calls, (
-        "overview page should have been skipped in resume mode"
-    )
+    try:
+        assert "overview" not in generate_page_calls, (
+            "overview page should have been skipped in resume mode"
+        )
 
-    async with get_session(db_path) as s:
-        job = await s.get(Job, "j3")
-        assert job.status == "done"
+        async with get_session(db_path) as s:
+            job = await s.get(Job, "j3")
+            assert job.status == "done"
+    finally:
+        await dispose_db(db_path)

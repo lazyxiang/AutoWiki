@@ -576,7 +576,7 @@ async def run_refresh_index(
         )
         await _update_job(db_path, job_id, progress=65)
 
-        # Capture existing page_orders before deletion so we can preserve stable ordering
+        # Capture existing page_orders before deletion to preserve stable ordering
         new_slugs = {p.slug for p in plan.pages}
         old_page_orders: dict[str, int] = {}
         max_existing_order = 0

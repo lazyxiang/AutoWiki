@@ -34,6 +34,9 @@ def chat_cmd(
     if repo_resp.status_code == 404:
         typer.echo("Repository not found. Run `autowiki index` first.", err=True)
         raise typer.Exit(1)
+    if repo_resp.status_code >= 400:
+        typer.echo(f"API error {repo_resp.status_code}: {repo_resp.text}", err=True)
+        raise typer.Exit(1)
     if repo_resp.json().get("status") != "ready":
         typer.echo("Repository is not ready. Wait for indexing to complete.", err=True)
         raise typer.Exit(1)

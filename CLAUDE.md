@@ -99,6 +99,17 @@ autowiki config set <key> <value>
 ### MCP Tools (Phase 3, not yet implemented)
 `read_wiki_structure`, `read_wiki_page`, `search_wiki`, `ask_question`, `deep_research`
 
+## Pre-Commit Checks (Required)
+
+Before every commit, run and resolve all issues from:
+
+```bash
+uv run ruff check .
+uv run ruff format --check .
+```
+
+All lint errors and format violations **must be fixed** before committing. Do not commit with outstanding `ruff` errors.
+
 ## Testing
 
 - **Framework**: pytest with `asyncio_mode = "auto"` (no `@pytest.mark.asyncio` needed)

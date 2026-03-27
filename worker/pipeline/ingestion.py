@@ -169,7 +169,7 @@ async def get_changed_files(clone_dir: Path, old_sha: str, new_sha: str) -> list
             return []
         return [line for line in diff_output.split("\n") if line.strip()]
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _do_diff)
 
 
