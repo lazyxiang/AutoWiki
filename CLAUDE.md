@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-AutoWiki **Phase 1 is complete** (tagged `v0.1.0-phase1`). The full source code is implemented and tested. Phase 2 planning is next.
+AutoWiki **Phase 1 and Phase 2 are complete**. Phase 1 tagged `v0.1.0-phase1`; Phase 2 (chat, diagrams, incremental refresh) merged via PR #4.
 
 ## What AutoWiki Is
 
@@ -99,6 +99,11 @@ autowiki config set <key> <value>
 ### MCP Tools (Phase 3, not yet implemented)
 `read_wiki_structure`, `read_wiki_page`, `search_wiki`, `ask_question`, `deep_research`
 
+## Model Selection
+
+- **Planning** (architecture, design, writing plans): use `claude-opus-4-6`
+- **Executing** (implementation, refactoring, code changes): use `claude-sonnet-4-6`
+
 ## Pre-Commit Checks (Required)
 
 Before every commit, run and resolve all issues from:
@@ -129,7 +134,7 @@ Non-Docker: `autowiki serve` spawns API + worker + Next.js as subprocesses.
 ## Phased Delivery
 
 - **Phase 1** ✅ — Core pipeline (index + static wiki + REST API + web UI + CLI)
-- **Phase 2** — Incremental refresh + Q&A chat + `.autowikiignore` + diagram synthesis
+- **Phase 2** ✅ — Incremental refresh + Q&A chat + dependency diagrams (merged PR #4)
 - **Phase 3** — Deep Research mode + MCP server
 - **Phase 4** — GitHub webhooks + user steering (`.autowiki/wiki.json`)
 - **Phase 5** — GitLab/Bitbucket + hybrid search
