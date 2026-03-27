@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import uuid
 from dataclasses import asdict
@@ -36,6 +37,8 @@ from worker.pipeline.ingestion import (
 from worker.pipeline.page_generator import generate_page
 from worker.pipeline.rag_indexer import FAISSStore, build_rag_index
 from worker.pipeline.wiki_planner import generate_page_plan
+
+logger = logging.getLogger("worker.task")
 
 
 async def _update_job(db_path: str, job_id: str, **kwargs):
@@ -86,6 +89,7 @@ async def run_full_index(
         )
 
     try:
+        logger.info("Job starting for %s/%s", owner, name)
         await _update_job(
             db_path,
             job_id,
@@ -96,14 +100,23 @@ async def run_full_index(
         await _update_repo(db_path, repo_id, status="indexing")
 
         # Stage 1: Ingestion
+        logger.info("Stage 1: Ingestion starting for %s/%s", owner, name)
         repo_data_dir = data_dir / "repos" / repo_id
         repo_data_dir.mkdir(parents=True, exist_ok=True)
         if clone_root is None:
             clone_root = repo_data_dir / "clone"
         head_sha = await clone_or_fetch(clone_root, owner, name)
+        logger.info("Clone complete. HEAD SHA: %s", head_sha)
+
         autowikiignore = clone_root / ".autowikiignore"
         files = filter_files(clone_root, ignore_file=autowikiignore)
+        logger.info("Filtered files: found %d candidate files", len(files))
+
         readme = extract_readme(clone_root)
+        if readme:
+            logger.info("README extracted: %d chars", len(readme))
+        else:
+            logger.info("No README found")
         await _update_job(
             db_path,
             job_id,
@@ -112,8 +125,11 @@ async def run_full_index(
         )
 
         # Stage 2: AST Analysis — enhanced module tree with entity summaries
+        logger.info("Stage 2: AST Analysis starting")
         module_tree = build_module_tree(clone_root, files)
+        logger.info("Module tree built: %d modules", len(module_tree))
         enhanced_tree = build_enhanced_module_tree(clone_root, files)
+        logger.info("Enhanced tree built: %d modules", len(enhanced_tree))
 
         # Persist module tree for incremental refresh and graph API
         ast_dir = repo_data_dir / "ast"
@@ -130,6 +146,9 @@ async def run_full_index(
                 except ValueError:
                     rel = str(f)
                 file_entities[rel] = analysis["entities"]
+        logger.info(
+            "File entities analyzed: found entities in %d files", len(file_entities)
+        )
         await _update_job(
             db_path,
             job_id,
@@ -138,7 +157,15 @@ async def run_full_index(
         )
 
         # Stage 2b: Dependency Graph
+        logger.info("Stage 2b: Dependency Graph starting")
         dep_graph = build_dependency_graph(files, clone_root)
+        num_nodes = sum(len(c) for c in dep_graph.clusters)
+        num_edges = sum(len(e) for e in dep_graph.edges.values())
+        logger.info(
+            "Dependency graph built: %d nodes, %d edges",
+            num_nodes,
+            num_edges,
+        )
         module_files: dict[str, list[str]] = {}
         for m in module_tree:
             try:
@@ -148,10 +175,20 @@ async def run_full_index(
             except (ValueError, TypeError):
                 module_files[m["path"]] = m["files"]
         dep_summary = summarize_dependencies(dep_graph, module_files)
+        logger.info(
+            "Dependency summary created: summarized %d modules", len(dep_summary)
+        )
 
         # Stage 3: RAG Indexer — entity-aware chunking with line numbers
+        logger.info("Stage 3: RAG Indexer starting")
         llm = make_llm_provider(cfg)
         embedding = make_embedding_provider(cfg)
+        logger.info(
+            "Using embedding provider: %s, model: %s (dim=%d)",
+            cfg.embedding.provider,
+            cfg.embedding.model,
+            embedding.dimension,
+        )
 
         index_path = repo_data_dir / "faiss.index"
         meta_path = repo_data_dir / "faiss.meta.pkl"
@@ -187,6 +224,7 @@ async def run_full_index(
                 progress=55,
                 status_description="Using existing code index...",
             )
+            logger.info("Loading existing RAG index from %s", index_path)
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, store.load)
         else:
@@ -196,6 +234,7 @@ async def run_full_index(
                 progress=40,
                 status_description="Indexing code for RAG search (embedding)...",
             )
+            logger.info("Building new RAG index at %s", index_path)
             await build_rag_index(
                 files,
                 clone_root,
@@ -204,6 +243,7 @@ async def run_full_index(
                 file_entities=file_entities,
                 on_retry=_on_retry,
             )
+            logger.info("RAG index build complete")
             await _update_job(
                 db_path,
                 job_id,
@@ -212,6 +252,7 @@ async def run_full_index(
             )
 
         # Stage 4: Wiki Planner — enriched with README, deps, entities
+        logger.info("Stage 4: Wiki Planner starting")
         plan = await generate_page_plan(
             enhanced_tree,
             repo_name=name,
@@ -221,9 +262,13 @@ async def run_full_index(
             clusters=dep_graph.clusters,
             on_retry=_on_retry,
         )
+        logger.info(
+            "Wiki plan generated: %d pages planned for %s", len(plan.pages), name
+        )
         await _update_job(db_path, job_id, progress=65)
 
         # Stage 5: Page Generator — with dependency context and entity details
+        logger.info("Stage 5: Page Generator starting")
         wiki_dir.mkdir(exist_ok=True)
 
         # Save wiki structure JSON
@@ -305,6 +350,12 @@ async def run_full_index(
                 entity_details=page_entities if page_entities else None,
                 on_retry=_on_retry,
             )
+            logger.info(
+                "Page generated: %s (%s), %d chars",
+                result.title,
+                result.slug,
+                len(result.content),
+            )
             async with get_session(db_path) as s:
                 page = WikiPage(
                     id=str(uuid.uuid4()),
@@ -327,36 +378,42 @@ async def run_full_index(
             )
 
         # Stage 6: Architecture Diagram Synthesis
+        logger.info("Stage 6: Architecture Diagram Synthesis starting")
         diagram = await synthesize_diagrams(module_tree, repo_name=name, llm=llm)
-        if diagram is not None and plan.pages:
-            first_slug = plan.pages[0].slug
-            async with get_session(db_path) as s:
-                result_row = await s.execute(
-                    sa_select(WikiPage).where(
-                        WikiPage.repo_id == repo_id,
-                        WikiPage.slug == first_slug,
-                    )
-                )
-                first_page = result_row.scalar_one_or_none()
-                if first_page is not None:
-                    prefix = f"## Architecture\n\n```mermaid\n{diagram}\n```\n\n"
-                    if first_page.content.startswith("## Architecture"):
-                        stripped = re.sub(
-                            r"^## Architecture\n\n```mermaid\n.*?```\n\n",
-                            "",
-                            first_page.content,
-                            count=1,
-                            flags=re.DOTALL,
+        if diagram is not None:
+            logger.info("Architecture diagram synthesized: %d chars", len(diagram))
+            if plan.pages:
+                first_slug = plan.pages[0].slug
+                async with get_session(db_path) as s:
+                    result_row = await s.execute(
+                        sa_select(WikiPage).where(
+                            WikiPage.repo_id == repo_id,
+                            WikiPage.slug == first_slug,
                         )
-                        first_page.content = prefix + stripped
-                    else:
-                        first_page.content = prefix + first_page.content
-                    await s.commit()
-                    wiki_file = wiki_dir / f"{first_page.slug}.md"
-                    await _write_text_async(wiki_file, first_page.content)
-            await _write_text_async(ast_dir / "architecture.mmd", diagram)
+                    )
+                    first_page = result_row.scalar_one_or_none()
+                    if first_page is not None:
+                        prefix = f"## Architecture\n\n```mermaid\n{diagram}\n```\n\n"
+                        if first_page.content.startswith("## Architecture"):
+                            stripped = re.sub(
+                                r"^## Architecture\n\n```mermaid\n.*?```\n\n",
+                                "",
+                                first_page.content,
+                                count=1,
+                                flags=re.DOTALL,
+                            )
+                            first_page.content = prefix + stripped
+                        else:
+                            first_page.content = prefix + first_page.content
+                        await s.commit()
+                        wiki_file = wiki_dir / f"{first_page.slug}.md"
+                        await _write_text_async(wiki_file, first_page.content)
+                await _write_text_async(ast_dir / "architecture.mmd", diagram)
+        else:
+            logger.info("No architecture diagram synthesized")
 
         now = datetime.now(UTC)
+        logger.info("Full index job complete for %s/%s", owner, name)
         await _update_job(
             db_path,
             job_id,
@@ -377,6 +434,7 @@ async def run_full_index(
 
     except Exception as e:
         now = datetime.now(UTC)
+        logger.exception("Job failed for %s/%s: %s", owner, name, str(e))
         await _update_job(
             db_path,
             job_id,
@@ -416,6 +474,7 @@ async def run_refresh_index(
         )
 
     try:
+        logger.info("Job starting for %s/%s", owner, name)
         await _update_job(
             db_path,
             job_id,
@@ -425,10 +484,12 @@ async def run_refresh_index(
         )
 
         # Stage 1: Clone/fetch to get new HEAD
+        logger.info("Stage 1: Ingestion starting for %s/%s", owner, name)
         repo_data_dir = data_dir / "repos" / repo_id
         if clone_root is None:
             clone_root = repo_data_dir / "clone"
         new_sha = await clone_or_fetch(clone_root, owner, name)
+        logger.info("Fetch complete. New HEAD SHA: %s", new_sha)
 
         # Check if anything changed
         async with get_session(db_path) as s:
@@ -436,6 +497,9 @@ async def run_refresh_index(
             old_sha = repo.last_commit or ""
 
         if old_sha == new_sha:
+            logger.info(
+                "Repository %s/%s is already up to date at %s", owner, name, new_sha
+            )
             now = datetime.now(UTC)
             await _update_repo(db_path, repo_id, status="ready")
             await _update_job(
@@ -455,7 +519,13 @@ async def run_refresh_index(
             changed_files = (
                 await get_changed_files(clone_root, old_sha, new_sha) if old_sha else []
             )
+            logger.info("Changed files detected: %d files", len(changed_files))
         except Exception:
+            logger.warning(
+                "Could not calculate diff from %s to %s. Falling back to full reindex.",
+                old_sha,
+                new_sha,
+            )
             await run_full_index(
                 ctx,
                 repo_id=repo_id,
@@ -469,6 +539,7 @@ async def run_refresh_index(
         ast_dir = repo_data_dir / "ast"
         module_tree_path = ast_dir / "module_tree.json"
         if not module_tree_path.exists():
+            logger.info("No existing module tree found. Falling back to full reindex.")
             # No prior index — force a clean full reindex to avoid duplicate pages
             await run_full_index(
                 ctx,
@@ -481,9 +552,12 @@ async def run_refresh_index(
             )
             return
 
-        old_module_tree = json.loads(module_tree_path.read_text())
+        loop = asyncio.get_running_loop()
+        content = await loop.run_in_executor(None, module_tree_path.read_text)
+        old_module_tree = json.loads(content)
         affected_modules = get_affected_modules(changed_files, old_module_tree)
         if not affected_modules:
+            logger.info("No affected modules found for changed files.")
             now = datetime.now(UTC)
             await _update_repo(db_path, repo_id, last_commit=new_sha, status="ready")
             await _update_job(
@@ -496,6 +570,7 @@ async def run_refresh_index(
             )
             return
 
+        logger.info("Affected modules: %s", ", ".join(affected_modules))
         await _update_job(
             db_path,
             job_id,
@@ -504,11 +579,17 @@ async def run_refresh_index(
         )
 
         # Stage 2: Re-analyze AST with full quality enhancements
+        logger.info("Stage 2: AST Analysis starting")
         autowikiignore = clone_root / ".autowikiignore"
         files = filter_files(clone_root, ignore_file=autowikiignore)
+        logger.info("Filtered files: found %d candidate files", len(files))
         readme = extract_readme(clone_root)
+        if readme:
+            logger.info("README extracted: %d chars", len(readme))
         module_tree = build_module_tree(clone_root, files)
+        logger.info("Module tree built: %d modules", len(module_tree))
         enhanced_tree = build_enhanced_module_tree(clone_root, files)
+        logger.info("Enhanced tree built: %d modules", len(enhanced_tree))
 
         ast_dir.mkdir(parents=True, exist_ok=True)
         await _write_text_async(ast_dir / "module_tree.json", json.dumps(module_tree))
@@ -520,11 +601,17 @@ async def run_refresh_index(
         removed_modules = old_module_paths - new_module_paths
 
         # New modules: add to affected set so they get generated
-        affected_modules = affected_modules | added_modules
+        if added_modules:
+            logger.info("Added modules detected: %s", ", ".join(added_modules))
+            affected_modules = affected_modules | added_modules
 
         # Removed modules: we have no module→page mapping to selectively clean up,
         # so fall back to a full force reindex which clears stale pages
         if removed_modules:
+            logger.info(
+                "Removed modules detected (%s). Falling back to full reindex.",
+                ", ".join(removed_modules),
+            )
             await run_full_index(
                 ctx,
                 repo_id=repo_id,
@@ -545,6 +632,9 @@ async def run_refresh_index(
                 except ValueError:
                     rel = str(f)
                 file_entities[rel] = analysis["entities"]
+        logger.info(
+            "File entities analyzed: found entities in %d files", len(file_entities)
+        )
         await _update_job(
             db_path,
             job_id,
@@ -553,7 +643,11 @@ async def run_refresh_index(
         )
 
         # Stage 2b: Dependency Graph
+        logger.info("Stage 2b: Dependency Graph starting")
         dep_graph = build_dependency_graph(files, clone_root)
+        num_nodes = sum(len(c) for c in dep_graph.clusters)
+        num_edges = sum(len(e) for e in dep_graph.edges.values())
+        logger.info("Dependency graph built: %d nodes, %d edges", num_nodes, num_edges)
         module_files: dict[str, list[str]] = {}
         for m in module_tree:
             try:
@@ -563,6 +657,9 @@ async def run_refresh_index(
             except (ValueError, TypeError):
                 module_files[m["path"]] = m["files"]
         dep_summary = summarize_dependencies(dep_graph, module_files)
+        logger.info(
+            "Dependency summary created: summarized %d modules", len(dep_summary)
+        )
         await _update_job(
             db_path,
             job_id,
@@ -571,14 +668,22 @@ async def run_refresh_index(
         )
 
         # Stage 3: Rebuild FAISS index
+        logger.info("Stage 3: RAG Indexer starting")
         llm = make_llm_provider(cfg)
         embedding = make_embedding_provider(cfg)
+        logger.info(
+            "Using embedding provider: %s, model: %s (dim=%d)",
+            cfg.embedding.provider,
+            cfg.embedding.model,
+            embedding.dimension,
+        )
         repo_data_dir.mkdir(parents=True, exist_ok=True)
         store = FAISSStore(
             dimension=embedding.dimension,
             index_path=repo_data_dir / "faiss.index",
             meta_path=repo_data_dir / "faiss.meta.pkl",
         )
+        logger.info("Rebuilding RAG index...")
         await build_rag_index(
             files,
             clone_root,
@@ -587,6 +692,7 @@ async def run_refresh_index(
             file_entities=file_entities,
             on_retry=_on_retry,
         )
+        logger.info("RAG index build complete")
         await _update_job(
             db_path,
             job_id,
@@ -595,6 +701,10 @@ async def run_refresh_index(
         )
 
         # Stage 4: Re-plan for affected modules with quality enrichment
+        logger.info(
+            "Stage 4: Wiki Planner starting for %d affected modules",
+            len(affected_modules),
+        )
         affected_enhanced = [m for m in enhanced_tree if m["path"] in affected_modules]
         plan = await generate_page_plan(
             affected_enhanced,
@@ -604,6 +714,9 @@ async def run_refresh_index(
             dep_summary=dep_summary,
             clusters=dep_graph.clusters,
             on_retry=_on_retry,
+        )
+        logger.info(
+            "Wiki plan generated: %d pages updated for %s", len(plan.pages), name
         )
         await _update_job(db_path, job_id, progress=65)
 
@@ -630,6 +743,7 @@ async def run_refresh_index(
             await s.commit()
 
         # Stage 5: Regenerate pages with quality enrichment
+        logger.info("Stage 5: Page Generator starting")
         wiki_dir = repo_data_dir / "wiki"
         wiki_dir.mkdir(exist_ok=True)
         total = len(plan.pages)
@@ -669,6 +783,12 @@ async def run_refresh_index(
                 entity_details=page_entities if page_entities else None,
                 on_retry=_on_retry,
             )
+            logger.info(
+                "Page updated: %s (%s), %d chars",
+                result.title,
+                result.slug,
+                len(result.content),
+            )
             # Preserve original page_order for replaced pages; append truly new ones
             page_order = old_page_orders.get(result.slug, max_existing_order + 1 + i)
             async with get_session(db_path) as s:
@@ -694,8 +814,10 @@ async def run_refresh_index(
             )
 
         # Stage 6: Rebuild architecture diagram and update first wiki page
+        logger.info("Stage 6: Architecture Diagram Synthesis starting")
         diagram = await synthesize_diagrams(module_tree, repo_name=name, llm=llm)
         if diagram:
+            logger.info("Architecture diagram synthesized: %d chars", len(diagram))
             await _write_text_async(ast_dir / "architecture.mmd", diagram)
             async with get_session(db_path) as s:
                 result_row = await s.execute(
@@ -726,6 +848,8 @@ async def run_refresh_index(
                     await _write_text_async(
                         wiki_dir / f"{first_page.slug}.md", first_page.content
                     )
+        else:
+            logger.info("No architecture diagram synthesized")
 
         # Rebuild and persist wiki structure so navigation stays consistent
         async with get_session(db_path) as s:
@@ -753,6 +877,7 @@ async def run_refresh_index(
         )
 
         now = datetime.now(UTC)
+        logger.info("Incremental refresh job complete for %s/%s", owner, name)
         await _update_job(
             db_path,
             job_id,
@@ -773,6 +898,7 @@ async def run_refresh_index(
 
     except Exception as e:
         now = datetime.now(UTC)
+        logger.exception("Job failed for %s/%s: %s", owner, name, str(e))
         await _update_job(
             db_path,
             job_id,

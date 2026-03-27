@@ -45,11 +45,25 @@ class Config(BaseSettings):
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
     chat: ChatConfig = Field(default_factory=ChatConfig)
+    debug: bool = Field(default=False)
     data_dir: Path = Field(
         default_factory=lambda: Path(
             os.environ.get("AUTOWIKI_DATA_DIR", Path.home() / ".autowiki")
         )
     )
+
+    @property
+    def error_log_path(self) -> Path:
+        return self.data_dir / "error.log"
+
+    @property
+    def task_log_path(self) -> Path:
+        return self.data_dir / "task.log"
+
+    @property
+    def llm_log_path(self) -> Path:
+        return self.data_dir / "llm.log"
+
     database_path: Path = Field(
         default_factory=lambda: Path(
             os.environ.get("DATABASE_PATH", Path.home() / ".autowiki" / "autowiki.db")
