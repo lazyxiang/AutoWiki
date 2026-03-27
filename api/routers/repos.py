@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import json as _json
 import uuid
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from api.queue import enqueue_full_index
+from api.queue import enqueue_full_index, enqueue_refresh_index
 from shared.config import get_config
 from shared.database import get_session
 from shared.models import Job, Repository
@@ -108,3 +109,43 @@ async def get_repo(repo_id: str):
             "status": repo.status,
             "indexed_at": repo.indexed_at,
         }
+
+
+@router.post("/{repo_id}/refresh", status_code=202)
+async def refresh_repo(repo_id: str):
+    cfg = get_config()
+    db_path = str(cfg.database_path)
+    async with get_session(db_path) as s:
+        repo = await s.get(Repository, repo_id)
+        if repo is None:
+            raise HTTPException(status_code=404, detail="Repository not found")
+        if repo.status not in ("ready", "error"):
+            raise HTTPException(
+                status_code=409, detail="Repository is not in a refreshable state"
+            )
+        owner, name = repo.owner, repo.name
+        job_id = str(uuid.uuid4())
+        job = Job(
+            id=job_id, repo_id=repo_id, type="refresh", status="queued", progress=0
+        )
+        s.add(job)
+        repo.status = "indexing"
+        await s.commit()
+    await enqueue_refresh_index(repo_id, job_id, owner, name)
+    return {"repo_id": repo_id, "job_id": job_id, "status": "queued"}
+
+
+@router.get("/{repo_id}/graph")
+async def get_repo_graph(repo_id: str):
+    cfg = get_config()
+    module_tree_path = cfg.data_dir / "repos" / repo_id / "ast" / "module_tree.json"
+    if not module_tree_path.exists():
+        raise HTTPException(
+            status_code=404, detail="Graph not available — run index first"
+        )
+    module_tree = _json.loads(module_tree_path.read_text())
+    nodes = [
+        {"id": m["path"], "label": m["path"], "file_count": len(m.get("files", []))}
+        for m in module_tree
+    ]
+    return {"nodes": nodes, "edges": []}

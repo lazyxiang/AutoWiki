@@ -1,4 +1,4 @@
-from worker.jobs import run_full_index
+from worker.jobs import run_full_index, run_refresh_index
 
 
 async def startup(ctx):
@@ -10,7 +10,7 @@ async def shutdown(ctx):
 
 
 class WorkerSettings:
-    functions = [run_full_index]
+    functions = [run_full_index, run_refresh_index]
     on_startup = startup
     on_shutdown = shutdown
     redis_settings = None  # set from REDIS_URL env at runtime

@@ -42,3 +42,26 @@ export async function getWikiPage(repoId: string, slug: string) {
   }
   return res.json() as Promise<{ slug: string; title: string; content: string }>;
 }
+
+export async function createChatSession(repoId: string): Promise<{ session_id: string }> {
+  const res = await fetch(`${API_URL}/api/repos/${repoId}/chat`, { method: "POST" });
+  if (!res.ok) throw new Error(`Failed to create chat session: ${res.status}`);
+  return res.json();
+}
+
+export async function getChatHistory(repoId: string, sessionId: string): Promise<{
+  messages: Array<{ role: string; content: string }>;
+}> {
+  const res = await fetch(`${API_URL}/api/repos/${repoId}/chat/${sessionId}`);
+  if (!res.ok) throw new Error(`Failed to get chat history: ${res.status}`);
+  return res.json();
+}
+
+export async function getRepoGraph(repoId: string): Promise<{
+  nodes: Array<{ id: string; label: string; file_count: number }>;
+  edges: Array<{ source: string; target: string }>;
+}> {
+  const res = await fetch(`${API_URL}/api/repos/${repoId}/graph`);
+  if (!res.ok) throw new Error(`Failed to get graph: ${res.status}`);
+  return res.json();
+}

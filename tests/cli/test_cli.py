@@ -55,3 +55,41 @@ def test_config_set(runner, tmp_path):
         result = cli.invoke(app, ["config", "set", "llm.provider", "openai"])
     assert result.exit_code == 0
     assert "openai" in result.output
+
+
+def test_refresh_cmd_success(runner):
+    cli, app = runner
+    with (
+        patch("cli.commands.refresh.httpx.post") as mock_post,
+        patch("cli.commands.refresh.httpx.get") as mock_get,
+    ):
+        mock_post.return_value = MagicMock(
+            status_code=202,
+            json=lambda: {"repo_id": "abc", "job_id": "job1", "status": "queued"},
+        )
+        mock_get.return_value = MagicMock(
+            status_code=200, json=lambda: {"status": "done", "progress": 100}
+        )
+        result = cli.invoke(app, ["refresh", "github.com/psf/requests"])
+    assert result.exit_code == 0
+    assert "Refresh complete" in result.output
+
+
+def test_chat_cmd_prints_response(runner):
+    cli, app = runner
+    with (
+        patch("cli.commands.chat_cmd.httpx.get") as mock_get,
+        patch("cli.commands.chat_cmd.httpx.post") as mock_post,
+        patch("cli.commands.chat_cmd.asyncio.run", return_value="It does foo things."),
+    ):
+        mock_get.return_value = MagicMock(
+            status_code=200, json=lambda: {"id": "r1", "status": "ready"}
+        )
+        mock_post.return_value = MagicMock(
+            status_code=201, json=lambda: {"session_id": "s1"}
+        )
+        result = cli.invoke(
+            app, ["chat", "github.com/psf/requests", "What does foo do?"]
+        )
+    assert result.exit_code == 0
+    assert "It does foo things." in result.output
