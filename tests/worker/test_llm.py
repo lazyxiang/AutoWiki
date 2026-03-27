@@ -65,6 +65,7 @@ def test_make_llm_provider_anthropic():
     cfg.llm.provider = "anthropic"
     cfg.llm.api_key = "test-key"
     cfg.llm.model = "claude-sonnet-4-6"
+    cfg.debug = False
     provider = make_llm_provider(cfg)
     assert isinstance(provider, AnthropicProvider)
 
@@ -75,6 +76,7 @@ def test_make_llm_provider_unknown_raises():
     cfg = MagicMock()
     cfg.llm.provider = "unknown"
     cfg.llm.api_key = ""
+    cfg.debug = False
     with pytest.raises(ValueError, match="Unknown LLM provider"):
         make_llm_provider(cfg)
 

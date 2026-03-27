@@ -159,10 +159,12 @@ async def run_full_index(
         # Stage 2b: Dependency Graph
         logger.info("Stage 2b: Dependency Graph starting")
         dep_graph = build_dependency_graph(files, clone_root)
+        num_nodes = sum(len(c) for c in dep_graph.clusters)
+        num_edges = sum(len(e) for e in dep_graph.edges.values())
         logger.info(
             "Dependency graph built: %d nodes, %d edges",
-            len(dep_graph.nodes),
-            len(dep_graph.edges),
+            num_nodes,
+            num_edges,
         )
         module_files: dict[str, list[str]] = {}
         for m in module_tree:
@@ -261,9 +263,7 @@ async def run_full_index(
             on_retry=_on_retry,
         )
         logger.info(
-            "Wiki plan generated: %d pages planned for %s",
-            len(plan.pages),
-            plan.repo_name,
+            "Wiki plan generated: %d pages planned for %s", len(plan.pages), name
         )
         await _update_job(db_path, job_id, progress=65)
 
