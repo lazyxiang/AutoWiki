@@ -3,9 +3,9 @@
 This plan outlines the implementation of enhanced logging capabilities for AutoWiki, including separate log files for errors, task status (with critical I/O), and LLM interactions, as well as a debug mode for the worker.
 
 ## Objectives
-- **Error Logging**: Record caught exceptions into `/data/error.log`.
-- **Task Logging**: Record task execution status and critical inputs/outputs of pipeline stages into `/data/task.log`.
-- **LLM Logging**: Record all LLM inputs and outputs into `/data/llm.log` when debug mode is enabled.
+- **Error Logging**: Record caught exceptions into `{data_dir}/error.log`.
+- **Task Logging**: Record task execution status and critical inputs/outputs of pipeline stages into `{data_dir}/task.log`.
+- **LLM Logging**: Record all LLM inputs and outputs into `{data_dir}/llm.log` when debug mode is enabled.
 - **Debug Mode**: Add a `--debug` flag to the worker and CLI to toggle detailed logging and LLM interaction capture.
 - **Stdio**: Print LLM interaction logs to stdout at the DEBUG level when debug mode is enabled.
 
@@ -34,7 +34,7 @@ This plan outlines the implementation of enhanced logging capabilities for AutoW
             - Add `RotatingFileHandler` for `llm.log` with level `DEBUG` (specifically for `worker.llm` logger).
             - Add a `StreamHandler` to `stdout` with level `DEBUG`.
 
-### 2. Worker & CLI CLI Enhancements
+### 2. Worker & CLI Enhancements
 - **`worker/main.py`**:
     - Use `argparse` to parse a `--debug` flag.
     - Call `setup_logging` with the flag value.
@@ -66,7 +66,7 @@ This plan outlines the implementation of enhanced logging capabilities for AutoW
 ## Verification & Testing
 - **Manual Verification**:
     - Start the worker with `--debug` and run a full index.
-    - Verify that `error.log`, `task.log`, and `llm.log` are created in the data directory.
+    - Verify that `{data_dir}/error.log`, `{data_dir}/task.log`, and `{data_dir}/llm.log` are created in the data directory.
     - Check `task.log` for pipeline I/O details.
     - Check `llm.log` for LLM interaction history.
     - Check `stdout` for debug logs.

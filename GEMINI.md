@@ -77,7 +77,7 @@ Default LLM: `claude-sonnet-4-6`. Supported providers: `anthropic`, `openai`, `o
 ## API Surface
 
 ### REST/WebSocket (Phase 1)
-```
+```http
 POST  /api/repos                              # Submit repo for indexing
 GET   /api/repos                             # List all repos
 GET   /api/repos/{repo_id}                   # Status + metadata
@@ -88,10 +88,10 @@ WS    /ws/jobs/{job_id}                      # Stream job progress
 ```
 
 ### CLI (Phase 1)
-```
+```bash
 autowiki index github.com/owner/repo
 autowiki list
-autowiki serve [--port 3000]
+autowiki serve [--port 3000] [--debug]
 autowiki config show
 autowiki config set <key> <value>
 ```

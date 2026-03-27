@@ -9,6 +9,13 @@ from typing import Any
 logger = logging.getLogger("worker.llm")
 
 
+def _truncate(text: str, max_len: int = 2000) -> str:
+    """Truncate long text for logging."""
+    if len(text) <= max_len:
+        return text
+    return text[:max_len] + f"... [truncated {len(text) - max_len} chars]"
+
+
 class LLMProvider(ABC):
     @abstractmethod
     async def generate(self, prompt: str, system: str = "") -> str:
@@ -34,9 +41,13 @@ class LoggingLLMProvider(LLMProvider):
         self._provider = provider
 
     async def generate(self, prompt: str, system: str = "") -> str:
-        logger.debug("LLM REQUEST (generate): system=%s, prompt=%s", system, prompt)
+        logger.debug(
+            "LLM REQUEST (generate): system=%s, prompt=%s",
+            _truncate(system),
+            _truncate(prompt),
+        )
         response = await self._provider.generate(prompt, system)
-        logger.debug("LLM RESPONSE (generate): %s", response)
+        logger.debug("LLM RESPONSE (generate): %s", _truncate(response))
         return response
 
     async def generate_structured(
@@ -44,21 +55,27 @@ class LoggingLLMProvider(LLMProvider):
     ) -> dict[str, Any]:
         logger.debug(
             "LLM REQUEST (structured): system=%s, schema=%s, prompt=%s",
-            system,
+            _truncate(system),
             json.dumps(schema),
-            prompt,
+            _truncate(prompt),
         )
         response = await self._provider.generate_structured(prompt, schema, system)
-        logger.debug("LLM RESPONSE (structured): %s", json.dumps(response))
+        logger.debug("LLM RESPONSE (structured): %s", _truncate(json.dumps(response)))
         return response
 
     async def generate_stream(
         self, prompt: str, system: str = ""
     ) -> AsyncIterator[str]:
-        logger.debug("LLM REQUEST (stream): system=%s, prompt=%s", system, prompt)
+        logger.debug(
+            "LLM REQUEST (stream): system=%s, prompt=%s",
+            _truncate(system),
+            _truncate(prompt),
+        )
         logger.debug("LLM RESPONSE (stream): [STARTING STREAM]")
         full_response = []
         async for chunk in self._provider.generate_stream(prompt, system):
             full_response.append(chunk)
             yield chunk
-        logger.debug("LLM RESPONSE (stream): [FINISHED] %s", "".join(full_response))
+        logger.debug(
+            "LLM RESPONSE (stream): [FINISHED] %s", _truncate("".join(full_response))
+        )

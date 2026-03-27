@@ -12,11 +12,13 @@ from api.routers import wiki as wiki_router
 from api.ws import jobs as ws_jobs
 from shared.config import get_config
 from shared.database import init_db
+from shared.logging_config import setup_logging
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     cfg = get_config()
+    setup_logging(cfg)
     cfg.database_path.parent.mkdir(parents=True, exist_ok=True)
     await init_db(str(cfg.database_path))
     yield

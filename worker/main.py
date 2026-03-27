@@ -31,7 +31,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     cfg = get_config()
-    setup_logging(cfg, debug_override=args.debug)
+    if args.debug:
+        cfg.debug = True
+    setup_logging(cfg)
 
     WorkerSettings.redis_settings = RedisSettings.from_dsn(
         os.environ.get("REDIS_URL", "redis://localhost:6379")
