@@ -497,7 +497,9 @@ async def run_refresh_index(
             old_sha = repo.last_commit or ""
 
         if old_sha == new_sha:
-            logger.info("Repository %s/%s is already up to date at %s", owner, name, new_sha)
+            logger.info(
+                "Repository %s/%s is already up to date at %s", owner, name, new_sha
+            )
             now = datetime.now(UTC)
             await _update_repo(db_path, repo_id, status="ready")
             await _update_job(
@@ -519,7 +521,11 @@ async def run_refresh_index(
             )
             logger.info("Changed files detected: %d files", len(changed_files))
         except Exception:
-            logger.warning("Could not calculate diff from %s to %s. Falling back to full reindex.", old_sha, new_sha)
+            logger.warning(
+                "Could not calculate diff from %s to %s. Falling back to full reindex.",
+                old_sha,
+                new_sha,
+            )
             await run_full_index(
                 ctx,
                 repo_id=repo_id,
@@ -602,7 +608,10 @@ async def run_refresh_index(
         # Removed modules: we have no module→page mapping to selectively clean up,
         # so fall back to a full force reindex which clears stale pages
         if removed_modules:
-            logger.info("Removed modules detected (%s). Falling back to full reindex.", ", ".join(removed_modules))
+            logger.info(
+                "Removed modules detected (%s). Falling back to full reindex.",
+                ", ".join(removed_modules),
+            )
             await run_full_index(
                 ctx,
                 repo_id=repo_id,
@@ -623,7 +632,9 @@ async def run_refresh_index(
                 except ValueError:
                     rel = str(f)
                 file_entities[rel] = analysis["entities"]
-        logger.info("File entities analyzed: found entities in %d files", len(file_entities))
+        logger.info(
+            "File entities analyzed: found entities in %d files", len(file_entities)
+        )
         await _update_job(
             db_path,
             job_id,
@@ -646,7 +657,9 @@ async def run_refresh_index(
             except (ValueError, TypeError):
                 module_files[m["path"]] = m["files"]
         dep_summary = summarize_dependencies(dep_graph, module_files)
-        logger.info("Dependency summary created: summarized %d modules", len(dep_summary))
+        logger.info(
+            "Dependency summary created: summarized %d modules", len(dep_summary)
+        )
         await _update_job(
             db_path,
             job_id,
@@ -658,7 +671,12 @@ async def run_refresh_index(
         logger.info("Stage 3: RAG Indexer starting")
         llm = make_llm_provider(cfg)
         embedding = make_embedding_provider(cfg)
-        logger.info("Using embedding provider: %s, model: %s (dim=%d)", cfg.embedding.provider, cfg.embedding.model, embedding.dimension)
+        logger.info(
+            "Using embedding provider: %s, model: %s (dim=%d)",
+            cfg.embedding.provider,
+            cfg.embedding.model,
+            embedding.dimension,
+        )
         repo_data_dir.mkdir(parents=True, exist_ok=True)
         store = FAISSStore(
             dimension=embedding.dimension,
@@ -683,7 +701,10 @@ async def run_refresh_index(
         )
 
         # Stage 4: Re-plan for affected modules with quality enrichment
-        logger.info("Stage 4: Wiki Planner starting for %d affected modules", len(affected_modules))
+        logger.info(
+            "Stage 4: Wiki Planner starting for %d affected modules",
+            len(affected_modules),
+        )
         affected_enhanced = [m for m in enhanced_tree if m["path"] in affected_modules]
         plan = await generate_page_plan(
             affected_enhanced,
@@ -694,7 +715,9 @@ async def run_refresh_index(
             clusters=dep_graph.clusters,
             on_retry=_on_retry,
         )
-        logger.info("Wiki plan generated: %d pages updated for %s", len(plan.pages), name)
+        logger.info(
+            "Wiki plan generated: %d pages updated for %s", len(plan.pages), name
+        )
         await _update_job(db_path, job_id, progress=65)
 
         # Capture existing page_orders before deletion to preserve stable ordering
@@ -760,7 +783,12 @@ async def run_refresh_index(
                 entity_details=page_entities if page_entities else None,
                 on_retry=_on_retry,
             )
-            logger.info("Page updated: %s (%s), %d chars", result.title, result.slug, len(result.content))
+            logger.info(
+                "Page updated: %s (%s), %d chars",
+                result.title,
+                result.slug,
+                len(result.content),
+            )
             # Preserve original page_order for replaced pages; append truly new ones
             page_order = old_page_orders.get(result.slug, max_existing_order + 1 + i)
             async with get_session(db_path) as s:
