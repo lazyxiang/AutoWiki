@@ -54,6 +54,11 @@ async def _update_repo(db_path: str, repo_id: str, **kwargs):
         await s.commit()
 
 
+async def _write_text_async(path: Path, content: str) -> None:
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, path.write_text, content)
+
+
 async def run_full_index(
     ctx: dict,
     repo_id: str,
@@ -113,7 +118,7 @@ async def run_full_index(
         # Persist module tree for incremental refresh and graph API
         ast_dir = repo_data_dir / "ast"
         ast_dir.mkdir(parents=True, exist_ok=True)
-        (ast_dir / "module_tree.json").write_text(json.dumps(module_tree))
+        await _write_text_async(ast_dir / "module_tree.json", json.dumps(module_tree))
 
         # Build per-file entity map for entity-aware RAG chunking
         file_entities: dict[str, list[dict]] = {}
@@ -223,7 +228,9 @@ async def run_full_index(
 
         # Save wiki structure JSON
         structure_data = asdict(plan)
-        (wiki_dir / "wiki.json").write_text(json.dumps(structure_data, indent=2))
+        await _write_text_async(
+            wiki_dir / "wiki.json", json.dumps(structure_data, indent=2)
+        )
 
         total = len(plan.pages)
 
@@ -311,7 +318,7 @@ async def run_full_index(
                 )
                 s.add(page)
                 await s.commit()
-            (wiki_dir / f"{result.slug}.md").write_text(result.content)
+            await _write_text_async(wiki_dir / f"{result.slug}.md", result.content)
             await _update_job(
                 db_path,
                 job_id,
@@ -333,11 +340,21 @@ async def run_full_index(
                 first_page = result_row.scalar_one_or_none()
                 if first_page is not None:
                     prefix = f"## Architecture\n\n```mermaid\n{diagram}\n```\n\n"
-                    first_page.content = prefix + first_page.content
+                    if first_page.content.startswith("## Architecture"):
+                        stripped = re.sub(
+                            r"^## Architecture\n\n```mermaid\n.*?```\n\n",
+                            "",
+                            first_page.content,
+                            count=1,
+                            flags=re.DOTALL,
+                        )
+                        first_page.content = prefix + stripped
+                    else:
+                        first_page.content = prefix + first_page.content
                     await s.commit()
                     wiki_file = wiki_dir / f"{first_page.slug}.md"
-                    wiki_file.write_text(first_page.content)
-            (ast_dir / "architecture.mmd").write_text(diagram)
+                    await _write_text_async(wiki_file, first_page.content)
+            await _write_text_async(ast_dir / "architecture.mmd", diagram)
 
         now = datetime.now(UTC)
         await _update_job(
@@ -432,9 +449,23 @@ async def run_refresh_index(
             return
 
         # Find changed files and affected modules
-        changed_files = (
-            await get_changed_files(clone_root, old_sha, new_sha) if old_sha else []
-        )
+        # Falls back to a forced full reindex if the stored SHA is unreachable
+        # (e.g. shallow clone that no longer contains the base commit).
+        try:
+            changed_files = (
+                await get_changed_files(clone_root, old_sha, new_sha) if old_sha else []
+            )
+        except Exception:
+            await run_full_index(
+                ctx,
+                repo_id=repo_id,
+                job_id=job_id,
+                owner=owner,
+                name=name,
+                clone_root=clone_root,
+                force=True,
+            )
+            return
         ast_dir = repo_data_dir / "ast"
         module_tree_path = ast_dir / "module_tree.json"
         if not module_tree_path.exists():
@@ -480,7 +511,7 @@ async def run_refresh_index(
         enhanced_tree = build_enhanced_module_tree(clone_root, files)
 
         ast_dir.mkdir(parents=True, exist_ok=True)
-        (ast_dir / "module_tree.json").write_text(json.dumps(module_tree))
+        await _write_text_async(ast_dir / "module_tree.json", json.dumps(module_tree))
 
         # Detect structural changes: added or removed top-level modules
         old_module_paths = {m["path"] for m in old_module_tree}
@@ -653,7 +684,7 @@ async def run_refresh_index(
                 )
                 s.add(page)
                 await s.commit()
-            (wiki_dir / f"{result.slug}.md").write_text(result.content)
+            await _write_text_async(wiki_dir / f"{result.slug}.md", result.content)
             progress = 65 + int(30 * (i + 1) / total) if total > 0 else 95
             await _update_job(
                 db_path,
@@ -665,7 +696,7 @@ async def run_refresh_index(
         # Stage 6: Rebuild architecture diagram and update first wiki page
         diagram = await synthesize_diagrams(module_tree, repo_name=name, llm=llm)
         if diagram:
-            (ast_dir / "architecture.mmd").write_text(diagram)
+            await _write_text_async(ast_dir / "architecture.mmd", diagram)
             async with get_session(db_path) as s:
                 result_row = await s.execute(
                     sa_select(WikiPage)
@@ -691,9 +722,35 @@ async def run_refresh_index(
                     else:
                         first_page.content = prefix + first_page.content
                     await s.commit()
-                    wiki_dir = repo_data_dir / "wiki"
                     wiki_dir.mkdir(parents=True, exist_ok=True)
-                    (wiki_dir / f"{first_page.slug}.md").write_text(first_page.content)
+                    await _write_text_async(
+                        wiki_dir / f"{first_page.slug}.md", first_page.content
+                    )
+
+        # Rebuild and persist wiki structure so navigation stays consistent
+        async with get_session(db_path) as s:
+            result_all = await s.execute(
+                sa_select(WikiPage)
+                .where(WikiPage.repo_id == repo_id)
+                .order_by(WikiPage.page_order)
+            )
+            all_pages = result_all.scalars().all()
+        structure_data = {
+            "pages": [
+                {
+                    "title": p.title,
+                    "slug": p.slug,
+                    "modules": [],
+                    "parent_slug": p.parent_slug,
+                    "description": p.description,
+                }
+                for p in all_pages
+            ]
+        }
+        wiki_dir.mkdir(parents=True, exist_ok=True)
+        await _write_text_async(
+            wiki_dir / "wiki.json", json.dumps(structure_data, indent=2)
+        )
 
         now = datetime.now(UTC)
         await _update_job(
@@ -710,6 +767,8 @@ async def run_refresh_index(
             status="ready",
             last_commit=new_sha,
             indexed_at=now,
+            wiki_path=str(wiki_dir),
+            wiki_structure=json.dumps(structure_data),
         )
 
     except Exception as e:

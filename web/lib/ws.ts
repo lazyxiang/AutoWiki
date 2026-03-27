@@ -44,7 +44,10 @@ export function useChatStream(
 
   const sendMessage = useCallback(
     (content: string) => {
-      if (!sessionId) return;
+      if (!sessionId) {
+        onError("Chat session is still initializing. Please retry.");
+        return;
+      }
       // Close any existing connection before opening a new one
       if (wsRef.current) {
         wsRef.current.onmessage = null;
