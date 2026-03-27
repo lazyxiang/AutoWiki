@@ -60,19 +60,19 @@ async def ws_chat(websocket: WebSocket, repo_id: str, session_id: str):
 
     await websocket.accept()
 
-    # Load store once outside the message loop
-    repo_data_dir = data_dir / "repos" / repo_id
-    embedding = make_embedding_provider(cfg)
-    store = FAISSStore(
-        dimension=embedding.dimension,
-        index_path=repo_data_dir / "faiss.index",
-        meta_path=repo_data_dir / "faiss.meta.pkl",
-    )
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, store.load)
-    llm = make_llm_provider(cfg)
-
     try:
+        # Load store once outside the message loop
+        repo_data_dir = data_dir / "repos" / repo_id
+        embedding = make_embedding_provider(cfg)
+        store = FAISSStore(
+            dimension=embedding.dimension,
+            index_path=repo_data_dir / "faiss.index",
+            meta_path=repo_data_dir / "faiss.meta.pkl",
+        )
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, store.load)
+        llm = make_llm_provider(cfg)
+
         while True:
             data = await websocket.receive_json()
             user_message = data.get("content", "").strip()

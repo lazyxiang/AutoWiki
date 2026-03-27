@@ -11,6 +11,8 @@ export default function DependencyGraph({ repoId }: { repoId: string }) {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
+    setError(null);
+    setLoaded(false);
     getRepoGraph(repoId)
       .then((data) => {
         const count = data.nodes.length;
