@@ -146,6 +146,16 @@ def _build_module_entity_map(
                                 break
                     if "file" in e:
                         break
+        # Append file-level entities not captured by the enhanced_tree summary
+        # (e.g. entities beyond the 10-class/15-function cap or nested members)
+        seen_names = {e.get("name") for e in entities_for_mod}
+        for f_path in m.get("files", []):
+            for rel_path, ents in file_entities.items():
+                if rel_path.endswith(f_path) or f_path.endswith(rel_path):
+                    for fe in ents:
+                        if fe.get("name") not in seen_names:
+                            entities_for_mod.append({**fe, "file": rel_path})
+                            seen_names.add(fe.get("name"))
         module_entity_map[mod_path] = entities_for_mod
     return module_entity_map
 
