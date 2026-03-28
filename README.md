@@ -10,7 +10,7 @@ Self-hosted, open-source AI-powered wiki generator for GitHub repositories. Poin
 4. Asks an LLM to plan a hierarchical wiki structure
 5. Generates each wiki page with RAG-retrieved context
 
-The result is served via a REST API and displayed in a Next.js web UI with sidebar navigation.
+The result is served via a REST API and displayed in a Next.js web UI with sidebar navigation, interactive dependency diagrams, and a conversational Q&A chat interface.
 
 ---
 
@@ -179,13 +179,18 @@ autowiki config set <key> <value>  # Dot-separated key, e.g. llm.provider, embed
 ## API
 
 ```text
-POST  /api/repos                         Submit a repo for indexing → {repo_id, job_id, status}
-GET   /api/repos                         List all repos
-GET   /api/repos/{repo_id}               Repo status and metadata
-GET   /api/repos/{repo_id}/wiki          List wiki pages (ordered)
-GET   /api/repos/{repo_id}/wiki/{slug}   Get a wiki page (Markdown + metadata)
-GET   /api/jobs/{job_id}                 Job status and progress (0–100)
-WS    /ws/jobs/{job_id}                  Stream {progress, status} until done/failed
+POST  /api/repos                                      Submit a repo for indexing → {repo_id, job_id, status}
+GET   /api/repos                                      List all repos
+GET   /api/repos/{repo_id}                            Repo status and metadata
+POST  /api/repos/{repo_id}/refresh                    Trigger incremental refresh → {job_id}
+GET   /api/repos/{repo_id}/graph                      Dependency graph (nodes + edges)
+GET   /api/repos/{repo_id}/wiki                       List wiki pages (ordered)
+GET   /api/repos/{repo_id}/wiki/{slug}                Get a wiki page (Markdown + metadata)
+POST  /api/repos/{repo_id}/chat                       Create a new chat session → {session_id}
+GET   /api/repos/{repo_id}/chat/{session_id}          Get chat history
+GET   /api/jobs/{job_id}                              Job status and progress (0–100)
+WS    /ws/jobs/{job_id}                               Stream {progress, status} until done/failed
+WS    /ws/repos/{repo_id}/chat/{session_id}           Stream chat responses in real time
 ```
 
 Example:
@@ -236,7 +241,7 @@ AutoWiki/
 ├── shared/                 # Config, SQLAlchemy models, database
 ├── cli/                    # Typer CLI (index, list, serve, config)
 ├── web/                    # Next.js 16 frontend
-└── tests/                  # pytest suite (63 tests, 80% coverage)
+└── tests/                  # pytest suite (127 tests, 80% coverage)
 ```
 
 ---
@@ -329,9 +334,10 @@ WS /ws/jobs/{job_id}                 → streams {progress, status} every second
 
 ## Roadmap
 
-- **Phase 2** — Incremental refresh, Q&A chat, diagram synthesis, `.autowikiignore`
+- **Phase 1** ✅ — Core pipeline (index + static wiki + REST API + web UI + CLI)
+- **Phase 2** ✅ — Incremental refresh, Q&A chat, dependency diagrams
 - **Phase 3** — Deep Research mode, MCP server
-- **Phase 4** — GitHub webhooks, user-steered wiki structure
+- **Phase 4** — GitHub webhooks, user-steered wiki structure (`.autowiki/wiki.json`)
 - **Phase 5** — GitLab/Bitbucket, hybrid search
 
 ---
