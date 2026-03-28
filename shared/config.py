@@ -54,15 +54,15 @@ class Config(BaseSettings):
 
     @property
     def error_log_path(self) -> Path:
-        return self.data_dir / "error.log"
+        return self.data_dir / "logs" / "error.log"
 
     @property
     def task_log_path(self) -> Path:
-        return self.data_dir / "task.log"
+        return self.data_dir / "logs" / "task.log"
 
     @property
     def llm_log_path(self) -> Path:
-        return self.data_dir / "llm.log"
+        return self.data_dir / "logs" / "llm.log"
 
     database_path: Path = Field(
         default_factory=lambda: Path(

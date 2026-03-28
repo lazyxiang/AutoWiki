@@ -18,8 +18,8 @@ def setup_logging(config: Config) -> None:
     if _listener:
         _listener.stop()
 
-    # Ensure data directory exists for log files
-    config.data_dir.mkdir(parents=True, exist_ok=True)
+    # Ensure data directory and logs subdirectory exist for log files
+    config.error_log_path.parent.mkdir(parents=True, exist_ok=True)
 
     debug_enabled = config.debug
     log_level = logging.DEBUG if debug_enabled else logging.INFO
