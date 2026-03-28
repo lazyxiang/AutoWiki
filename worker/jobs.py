@@ -171,16 +171,14 @@ def _collect_page_context(
 def _prepend_architecture_diagram(content: str, diagram: str) -> str:
     """Prepend (or replace) the Architecture mermaid block at the top of a page."""
     prefix = f"## Architecture\n\n```mermaid\n{diagram}\n```\n\n"
-    if content.startswith("## Architecture"):
-        stripped = re.sub(
-            r"^## Architecture\n\n```mermaid\n.*?```\n\n",
-            "",
-            content,
-            count=1,
-            flags=re.DOTALL,
-        )
-        return prefix + stripped
-    return prefix + content
+    stripped = re.sub(
+        r"^## Architecture\s*\n+```mermaid\n.*?```\s*\n*",
+        "",
+        content,
+        count=1,
+        flags=re.DOTALL,
+    )
+    return prefix + stripped
 
 
 def _make_faiss_store(repo_data_dir: Path, embedding) -> FAISSStore:
@@ -230,9 +228,13 @@ async def run_full_index(
             clone_root = repo_data_dir / "clone"
         head_sha = await clone_or_fetch(clone_root, owner, name)
         logger.info("Clone complete. HEAD SHA: %s", head_sha)
-        files = filter_files(clone_root, ignore_file=clone_root / ".autowikiignore")
+        loop = asyncio.get_running_loop()
+        ignore_file = clone_root / ".autowikiignore"
+        files = await loop.run_in_executor(
+            None, lambda: filter_files(clone_root, ignore_file=ignore_file)
+        )
         logger.info("Filtered files: found %d candidate files", len(files))
-        readme = extract_readme(clone_root)
+        readme = await loop.run_in_executor(None, extract_readme, clone_root)
         logger.info(
             "README extracted: %d chars", len(readme)
         ) if readme else logger.info("No README found")
@@ -252,7 +254,9 @@ async def run_full_index(
         enhanced_tree = build_enhanced_module_tree(clone_root, files)
         logger.info("Enhanced tree built: %d modules", len(enhanced_tree))
         await _write_text_async(ast_dir / "module_tree.json", json.dumps(module_tree))
-        file_entities = _build_file_entities(files, clone_root)
+        file_entities = await loop.run_in_executor(
+            None, _build_file_entities, files, clone_root
+        )
         logger.info(
             "File entities analyzed: found entities in %d files", len(file_entities)
         )
@@ -611,9 +615,13 @@ async def run_refresh_index(
 
         # Stage 2: Re-analyze AST
         logger.info("Stage 2: AST Analysis starting")
-        files = filter_files(clone_root, ignore_file=clone_root / ".autowikiignore")
+        loop = asyncio.get_running_loop()
+        ignore_file = clone_root / ".autowikiignore"
+        files = await loop.run_in_executor(
+            None, lambda: filter_files(clone_root, ignore_file=ignore_file)
+        )
         logger.info("Filtered files: found %d candidate files", len(files))
-        readme = extract_readme(clone_root)
+        readme = await loop.run_in_executor(None, extract_readme, clone_root)
         if readme:
             logger.info("README extracted: %d chars", len(readme))
         module_tree = build_module_tree(clone_root, files)
@@ -649,7 +657,9 @@ async def run_refresh_index(
             )
             return
 
-        file_entities = _build_file_entities(files, clone_root)
+        file_entities = await loop.run_in_executor(
+            None, _build_file_entities, files, clone_root
+        )
         logger.info(
             "File entities analyzed: found entities in %d files", len(file_entities)
         )
