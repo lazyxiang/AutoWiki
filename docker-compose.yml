@@ -1,3 +1,19 @@
+x-common-env: &common-env
+  - REDIS_URL=redis://redis:6379
+  - DATABASE_PATH=/data/autowiki.db
+  - AUTOWIKI_DATA_DIR=/data
+  - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+  - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+  - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+  - AUTOWIKI_LLM_PROVIDER=${AUTOWIKI_LLM_PROVIDER:-}
+  - AUTOWIKI_LLM_MODEL=${AUTOWIKI_LLM_MODEL:-}
+  - AUTOWIKI_LLM_API_KEY=${AUTOWIKI_LLM_API_KEY:-}
+  - AUTOWIKI_LLM_BASE_URL=${AUTOWIKI_LLM_BASE_URL:-}
+  - AUTOWIKI_EMBEDDING_PROVIDER=${AUTOWIKI_EMBEDDING_PROVIDER:-}
+  - AUTOWIKI_EMBEDDING_MODEL=${AUTOWIKI_EMBEDDING_MODEL:-}
+  - AUTOWIKI_EMBEDDING_API_KEY=${AUTOWIKI_EMBEDDING_API_KEY:-}
+  - AUTOWIKI_DEBUG=${AUTOWIKI_DEBUG:-false}
+
 services:
   api:
     build:
@@ -5,21 +21,7 @@ services:
       dockerfile: api/Dockerfile
     ports:
       - "127.0.0.1:3001:3001"
-    environment:
-      - REDIS_URL=redis://redis:6379
-      - DATABASE_PATH=/data/autowiki.db
-      - AUTOWIKI_DATA_DIR=/data
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
-      - AUTOWIKI_LLM_PROVIDER=${AUTOWIKI_LLM_PROVIDER:-}
-      - AUTOWIKI_LLM_MODEL=${AUTOWIKI_LLM_MODEL:-}
-      - AUTOWIKI_LLM_API_KEY=${AUTOWIKI_LLM_API_KEY:-}
-      - AUTOWIKI_LLM_BASE_URL=${AUTOWIKI_LLM_BASE_URL:-}
-      - AUTOWIKI_EMBEDDING_PROVIDER=${AUTOWIKI_EMBEDDING_PROVIDER:-}
-      - AUTOWIKI_EMBEDDING_MODEL=${AUTOWIKI_EMBEDDING_MODEL:-}
-      - AUTOWIKI_EMBEDDING_API_KEY=${AUTOWIKI_EMBEDDING_API_KEY:-}
-      - AUTOWIKI_DEBUG=${AUTOWIKI_DEBUG:-false}
+    environment: *common-env
     volumes:
       - autowiki_data:/data
     depends_on:
@@ -30,21 +32,7 @@ services:
     build:
       context: .
       dockerfile: worker/Dockerfile
-    environment:
-      - REDIS_URL=redis://redis:6379
-      - DATABASE_PATH=/data/autowiki.db
-      - AUTOWIKI_DATA_DIR=/data
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
-      - AUTOWIKI_LLM_PROVIDER=${AUTOWIKI_LLM_PROVIDER:-}
-      - AUTOWIKI_LLM_MODEL=${AUTOWIKI_LLM_MODEL:-}
-      - AUTOWIKI_LLM_API_KEY=${AUTOWIKI_LLM_API_KEY:-}
-      - AUTOWIKI_LLM_BASE_URL=${AUTOWIKI_LLM_BASE_URL:-}
-      - AUTOWIKI_EMBEDDING_PROVIDER=${AUTOWIKI_EMBEDDING_PROVIDER:-}
-      - AUTOWIKI_EMBEDDING_MODEL=${AUTOWIKI_EMBEDDING_MODEL:-}
-      - AUTOWIKI_EMBEDDING_API_KEY=${AUTOWIKI_EMBEDDING_API_KEY:-}
-      - AUTOWIKI_DEBUG=${AUTOWIKI_DEBUG:-false}
+    environment: *common-env
     volumes:
       - autowiki_data:/data
     depends_on:

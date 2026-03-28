@@ -156,8 +156,8 @@ async def _setup_db(tmp_path):
     return str(tmp_path / "test.db")
 
 
-async def test_force_clears_existing_artifacts(tmp_path, mock_llm, mock_embedding):
-    """force=True deletes existing FAISS files and WikiPage records."""
+async def test_always_clears_existing_artifacts(tmp_path, mock_llm, mock_embedding):
+    """run_full_index always clears existing FAISS files and WikiPage records."""
     from shared.database import dispose_db
 
     mock_embedding.dimension = 1536
@@ -210,7 +210,6 @@ async def test_force_clears_existing_artifacts(tmp_path, mock_llm, mock_embeddin
             owner="testowner",
             name="simple-repo",
             clone_root=Path("tests/fixtures/simple-repo"),
-            force=True,
         )
 
     try:
@@ -226,76 +225,6 @@ async def test_force_clears_existing_artifacts(tmp_path, mock_llm, mock_embeddin
 
         async with get_session(db_path) as s:
             job = await s.get(Job, "j2")
-            assert job.status == "done"
-    finally:
-        await dispose_db(db_path)
-
-
-async def test_resume_skips_existing_pages(tmp_path, mock_llm, mock_embedding):
-    """Default (force=False) skips pages whose slugs already exist in the DB."""
-    from shared.database import dispose_db
-
-    mock_embedding.dimension = 1536
-    db_path = await _setup_db(tmp_path)
-
-    from shared.database import get_session
-    from shared.models import Job, Repository, WikiPage
-
-    async with get_session(db_path) as s:
-        repo = Repository(
-            id="r3",
-            owner="testowner",
-            name="simple-repo",
-            platform="github",
-            status="ready",
-        )
-        job = Job(id="j3", repo_id="r3", type="full_index", status="queued", progress=0)
-        existing_page = WikiPage(
-            id="wp-overview",
-            repo_id="r3",
-            slug="overview",
-            title="Overview",
-            content="existing overview content",
-            page_order=0,
-        )
-        s.add(repo)
-        s.add(job)
-        s.add(existing_page)
-        await s.commit()
-
-    generate_page_calls: list[str] = []
-
-    async def mock_generate_page(spec, *args, **kwargs):
-        generate_page_calls.append(spec.slug)
-        from worker.pipeline.page_generator import PageResult
-
-        return PageResult(slug=spec.slug, title=spec.title, content="generated")
-
-    with (
-        patch("worker.jobs.clone_or_fetch", return_value="abc"),
-        patch("worker.jobs.make_llm_provider", return_value=mock_llm),
-        patch("worker.jobs.make_embedding_provider", return_value=mock_embedding),
-        patch("worker.jobs.generate_page", side_effect=mock_generate_page),
-    ):
-        from worker.jobs import run_full_index
-
-        await run_full_index(
-            ctx={},
-            repo_id="r3",
-            job_id="j3",
-            owner="testowner",
-            name="simple-repo",
-            clone_root=Path("tests/fixtures/simple-repo"),
-            force=False,
-        )
-
-    try:
-        assert "overview" not in generate_page_calls, (
-            "overview page should have been skipped in resume mode"
-        )
-
-        async with get_session(db_path) as s:
-            job = await s.get(Job, "j3")
             assert job.status == "done"
     finally:
         await dispose_db(db_path)

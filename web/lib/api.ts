@@ -5,11 +5,11 @@ const API_URL =
     ? (process.env.INTERNAL_API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001")
     : (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001");
 
-export async function submitRepo(url: string, force: boolean = false) {
+export async function submitRepo(url: string) {
   const res = await fetch(`${API_URL}/api/repos`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url, force }),
+    body: JSON.stringify({ url }),
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json() as Promise<{ repo_id: string; job_id: string; status: string }>;
