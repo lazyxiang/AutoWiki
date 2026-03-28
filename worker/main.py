@@ -14,6 +14,8 @@ class WorkerSettings:
     on_startup = startup
     on_shutdown = shutdown
     redis_settings = None  # set from REDIS_URL env at runtime
+    # Disable ARQ's hard job kill — per-call retries in async_retry handle timeouts.
+    job_timeout = None
 
 
 if __name__ == "__main__":

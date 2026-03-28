@@ -7,7 +7,6 @@ import { submitRepo } from "@/lib/api";
 
 export function IndexForm() {
   const [url, setUrl] = useState("");
-  const [force, setForce] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const router = useRouter();
@@ -17,7 +16,7 @@ export function IndexForm() {
     setLoading(true);
     setError("");
     try {
-      const { repo_id, job_id } = await submitRepo(url, force);
+      const { repo_id, job_id } = await submitRepo(url);
       const match = url.replace(/^https?:\/\//, "").match(/github\.com\/([^/]+)\/([^/]+)/);
       const owner = match?.[1] ?? "";
       const repo = match?.[2]?.replace(/\.git$/, "") ?? "";
@@ -39,16 +38,6 @@ export function IndexForm() {
         disabled={loading}
         className="font-mono"
       />
-      <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer select-none">
-        <input
-          type="checkbox"
-          checked={force}
-          onChange={(e) => setForce(e.target.checked)}
-          disabled={loading}
-          className="rounded"
-        />
-        Force full regeneration
-      </label>
       <Button type="submit" disabled={loading || !url.trim()}>
         {loading ? "Submitting…" : "Generate Wiki"}
       </Button>

@@ -16,16 +16,13 @@ async def _enqueue(job_name: str, **kwargs) -> None:
         await redis.close()
 
 
-async def enqueue_full_index(
-    repo_id: str, job_id: str, owner: str, name: str, force: bool = False
-) -> str:
+async def enqueue_full_index(repo_id: str, job_id: str, owner: str, name: str) -> str:
     await _enqueue(
         "run_full_index",
         repo_id=repo_id,
         job_id=job_id,
         owner=owner,
         name=name,
-        force=force,
     )
     return job_id
 

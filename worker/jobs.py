@@ -147,15 +147,18 @@ def _build_module_entity_map(
                     if "file" in e:
                         break
         # Append file-level entities not captured by the enhanced_tree summary
-        # (e.g. entities beyond the 10-class/15-function cap or nested members)
-        seen_names = {e.get("name") for e in entities_for_mod}
+        # (e.g. entities beyond the 10-class/15-function cap or nested members).
+        # Key on (name, file) so same-named symbols across different files/classes
+        # (e.g. __init__, run) are all included.
+        seen = {(e.get("name"), e.get("file")) for e in entities_for_mod}
         for f_path in m.get("files", []):
             for rel_path, ents in file_entities.items():
                 if rel_path.endswith(f_path) or f_path.endswith(rel_path):
                     for fe in ents:
-                        if fe.get("name") not in seen_names:
+                        key = (fe.get("name"), rel_path)
+                        if key not in seen:
                             entities_for_mod.append({**fe, "file": rel_path})
-                            seen_names.add(fe.get("name"))
+                            seen.add(key)
         module_entity_map[mod_path] = entities_for_mod
     return module_entity_map
 
@@ -211,7 +214,6 @@ async def run_full_index(
     owner: str,
     name: str,
     clone_root: Path | None = None,
-    force: bool = False,
 ):
     cfg = get_config()
     db_path = str(cfg.database_path)
@@ -307,54 +309,42 @@ async def run_full_index(
         meta_path = repo_data_dir / "faiss.meta.pkl"
         wiki_dir = repo_data_dir / "wiki"
 
-        if force:
+        def _remove_artifacts() -> None:
+            for p in (index_path, meta_path):
+                if p.exists():
+                    p.unlink()
+            if wiki_dir.exists():
+                for f in wiki_dir.glob("*.md"):
+                    f.unlink()
 
-            def _remove_artifacts() -> None:
-                for p in (index_path, meta_path):
-                    if p.exists():
-                        p.unlink()
-                if wiki_dir.exists():
-                    for f in wiki_dir.glob("*.md"):
-                        f.unlink()
-
-            await asyncio.get_running_loop().run_in_executor(None, _remove_artifacts)
-            async with get_session(db_path) as s:
-                await s.execute(sa_delete(WikiPage).where(WikiPage.repo_id == repo_id))
-                await s.commit()
+        await asyncio.get_running_loop().run_in_executor(None, _remove_artifacts)
+        async with get_session(db_path) as s:
+            await s.execute(sa_delete(WikiPage).where(WikiPage.repo_id == repo_id))
+            await s.commit()
 
         store = _make_faiss_store(repo_data_dir, embedding)
-        if index_path.exists() and meta_path.exists():
-            await _update_job(
-                db_path,
-                job_id,
-                progress=55,
-                status_description="Using existing code index...",
-            )
-            logger.info("Loading existing RAG index from %s", index_path)
-            await asyncio.get_running_loop().run_in_executor(None, store.load)
-        else:
-            await _update_job(
-                db_path,
-                job_id,
-                progress=40,
-                status_description="Indexing code for RAG search (embedding)...",
-            )
-            logger.info("Building new RAG index at %s", index_path)
-            await build_rag_index(
-                files,
-                clone_root,
-                store,
-                embedding,
-                file_entities=file_entities,
-                on_retry=_on_retry,
-            )
-            logger.info("RAG index build complete")
-            await _update_job(
-                db_path,
-                job_id,
-                progress=55,
-                status_description="Planning wiki structure...",
-            )
+        await _update_job(
+            db_path,
+            job_id,
+            progress=40,
+            status_description="Indexing code for RAG search (embedding)...",
+        )
+        logger.info("Building new RAG index at %s", index_path)
+        await build_rag_index(
+            files,
+            clone_root,
+            store,
+            embedding,
+            file_entities=file_entities,
+            on_retry=_on_retry,
+        )
+        logger.info("RAG index build complete")
+        await _update_job(
+            db_path,
+            job_id,
+            progress=55,
+            status_description="Planning wiki structure...",
+        )
 
         # Stage 4: Wiki Planner
         logger.info("Stage 4: Wiki Planner starting")
@@ -382,24 +372,8 @@ async def run_full_index(
         total = len(plan.pages)
         module_entity_map = _build_module_entity_map(enhanced_tree, file_entities)
 
-        existing_slugs: set[str] = set()
-        if not force:
-            async with get_session(db_path) as s:
-                result = await s.execute(
-                    sa_select(WikiPage).where(WikiPage.repo_id == repo_id)
-                )
-                existing_slugs = {p.slug for p in result.scalars().all()}
-
         for i, page_spec in enumerate(plan.pages):
             progress = 65 + int(30 * (i + 1) / total)
-            if page_spec.slug in existing_slugs:
-                await _update_job(
-                    db_path,
-                    job_id,
-                    progress=progress,
-                    status_description=f"Skipping existing page: {page_spec.title}",
-                )
-                continue
             page_entities, page_dep_info = _collect_page_context(
                 page_spec, module_entity_map, dep_summary
             )
@@ -576,7 +550,6 @@ async def run_refresh_index(
                 owner=owner,
                 name=name,
                 clone_root=clone_root,
-                force=True,
             )
             return
 
@@ -584,7 +557,6 @@ async def run_refresh_index(
         module_tree_path = ast_dir / "module_tree.json"
         if not module_tree_path.exists():
             logger.info("No existing module tree found. Falling back to full reindex.")
-            # No prior index — force a clean full reindex to avoid duplicate pages
             await run_full_index(
                 ctx,
                 repo_id=repo_id,
@@ -592,7 +564,6 @@ async def run_refresh_index(
                 owner=owner,
                 name=name,
                 clone_root=clone_root,
-                force=True,
             )
             return
 
@@ -663,7 +634,6 @@ async def run_refresh_index(
                 owner=owner,
                 name=name,
                 clone_root=clone_root,
-                force=True,
             )
             return
 
