@@ -32,7 +32,7 @@ Total file: ~880 lines → ~660 lines
 
 ## 2. Deduplicate LLM provider JSON parsing
 
-Added `_parse_json_response(raw: str) -> dict` to `worker/llm/base.py`. Strips optional markdown code fences (` ```json ` / ` ``` `) and calls `json.loads`.
+Added `_parse_json_response(raw: str) -> dict` to `worker/llm/base.py`. Strips optional Markdown code fences (` ```json ` / ` ``` `) and calls `json.loads`.
 
 Replaced identical 6-line fence-stripping block in `generate_structured` of:
 - `worker/llm/anthropic_provider.py`

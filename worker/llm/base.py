@@ -10,10 +10,11 @@ logger = logging.getLogger("worker.llm")
 
 
 def _parse_json_response(raw: str) -> dict:
-    """Strip optional markdown code fence and parse JSON."""
+    """Strip optional Markdown code fence and parse JSON."""
     raw = raw.strip()
     if raw.startswith("```"):
-        raw = raw.split("\n", 1)[1]
+        parts = raw.split("\n", 1)
+        raw = parts[1] if len(parts) > 1 else parts[0][3:]
         if "```" in raw:
             raw = raw.rsplit("```", 1)[0]
     return json.loads(raw)
