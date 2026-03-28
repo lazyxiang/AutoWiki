@@ -246,7 +246,8 @@ async def run_full_index(
                     p.unlink()
             if wiki_dir.exists():
                 for f in wiki_dir.iterdir():
-                    f.unlink()
+                    if f.is_file():
+                        f.unlink()
             for name_ in ("architecture.mmd",):
                 p = ast_dir / name_
                 if p.exists():

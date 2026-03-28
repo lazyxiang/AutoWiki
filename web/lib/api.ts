@@ -57,7 +57,7 @@ export async function getChatHistory(repoId: string, sessionId: string): Promise
   return res.json();
 }
 
-export async function refreshRepo(repoId: string): Promise<{ repo_id: string; job_id: string }> {
+export async function refreshRepo(repoId: string): Promise<{ repo_id: string; job_id: string; status: string }> {
   const res = await fetch(`${API_URL}/api/repos/${repoId}/refresh`, { method: "POST" });
   if (!res.ok) throw new Error(await res.text());
   return res.json();

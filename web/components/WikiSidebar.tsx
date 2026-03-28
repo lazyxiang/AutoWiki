@@ -19,7 +19,7 @@ export function WikiSidebar({ pages, owner, repo }: Props) {
     setError("");
     try {
       const { job_id } = await refreshRepo(repoId(owner, repo));
-      router.push(`/jobs/${job_id}?repo_id=${repoId(owner, repo)}&owner=${owner}&repo=${repo}`);
+      router.push(`/jobs/${job_id}?repo_id=${repoId(owner, repo)}&owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Refresh failed");
       setRefreshing(false);
