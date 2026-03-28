@@ -9,6 +9,16 @@ from typing import Any
 logger = logging.getLogger("worker.llm")
 
 
+def _parse_json_response(raw: str) -> dict:
+    """Strip optional markdown code fence and parse JSON."""
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1]
+        if "```" in raw:
+            raw = raw.rsplit("```", 1)[0]
+    return json.loads(raw)
+
+
 def _truncate(text: str, max_len: int = 2000) -> str:
     """Truncate long text for logging."""
     if len(text) <= max_len:

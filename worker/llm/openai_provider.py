@@ -6,7 +6,7 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
-from worker.llm.base import LLMProvider
+from worker.llm.base import LLMProvider, _parse_json_response
 
 
 class OpenAIProvider(LLMProvider):
@@ -35,14 +35,7 @@ class OpenAIProvider(LLMProvider):
             f" matching this schema:\n{schema_str}"
         )
         raw = await self.generate(json_prompt, system=system)
-        raw = raw.strip()
-        if raw.startswith("```"):
-            # Strip opening fence line (may include language tag like ```json)
-            raw = raw.split("\n", 1)[1]
-            # Strip closing fence
-            if "```" in raw:
-                raw = raw.rsplit("```", 1)[0]
-        return json.loads(raw)
+        return _parse_json_response(raw)
 
     async def generate_stream(
         self, prompt: str, system: str = ""
