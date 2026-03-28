@@ -232,10 +232,33 @@ async def run_full_index(
         )
         await _update_repo(db_path, repo_id, status="indexing")
 
-        # Stage 1: Ingestion
-        logger.info("Stage 1: Ingestion starting for %s/%s", owner, name)
+        # Clear all artifacts from any previous run before starting fresh.
         repo_data_dir = data_dir / "repos" / repo_id
         repo_data_dir.mkdir(parents=True, exist_ok=True)
+
+        def _clear_repo_artifacts() -> None:
+            index_path = repo_data_dir / "faiss.index"
+            meta_path = repo_data_dir / "faiss.meta.pkl"
+            wiki_dir = repo_data_dir / "wiki"
+            ast_dir = repo_data_dir / "ast"
+            for p in (index_path, meta_path):
+                if p.exists():
+                    p.unlink()
+            if wiki_dir.exists():
+                for f in wiki_dir.iterdir():
+                    f.unlink()
+            for name_ in ("architecture.mmd",):
+                p = ast_dir / name_
+                if p.exists():
+                    p.unlink()
+
+        await asyncio.get_running_loop().run_in_executor(None, _clear_repo_artifacts)
+        async with get_session(db_path) as s:
+            await s.execute(sa_delete(WikiPage).where(WikiPage.repo_id == repo_id))
+            await s.commit()
+
+        # Stage 1: Ingestion
+        logger.info("Stage 1: Ingestion starting for %s/%s", owner, name)
         if clone_root is None:
             clone_root = repo_data_dir / "clone"
         head_sha = await clone_or_fetch(clone_root, owner, name)
@@ -306,22 +329,7 @@ async def run_full_index(
         )
 
         index_path = repo_data_dir / "faiss.index"
-        meta_path = repo_data_dir / "faiss.meta.pkl"
         wiki_dir = repo_data_dir / "wiki"
-
-        def _remove_artifacts() -> None:
-            for p in (index_path, meta_path):
-                if p.exists():
-                    p.unlink()
-            if wiki_dir.exists():
-                for f in wiki_dir.glob("*.md"):
-                    f.unlink()
-
-        await asyncio.get_running_loop().run_in_executor(None, _remove_artifacts)
-        async with get_session(db_path) as s:
-            await s.execute(sa_delete(WikiPage).where(WikiPage.repo_id == repo_id))
-            await s.commit()
-
         store = _make_faiss_store(repo_data_dir, embedding)
         await _update_job(
             db_path,
