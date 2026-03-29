@@ -25,16 +25,18 @@ Storage (SQLite + FAISS + Markdown files at ~/.autowiki/)
 
 ### Core Components
 - **API Gateway** (`api/`) — FastAPI, REST + WebSocket endpoints, job enqueuing via ARQ
-- **Worker Service** (`worker/`) — ARQ background jobs, 5-stage generation pipeline
+- **Worker Service** (`worker/`) — ARQ background jobs, 7-stage generation pipeline
 - **Frontend** (`web/`) — Next.js 16.2.1 + TypeScript + Tailwind v4 + shadcn/ui, stateless SPA
 - **Storage** — SQLite for metadata, FAISS for vector index, Markdown files for wiki pages
 
-### Generation Pipeline (5 Stages — Phase 1)
+### Generation Pipeline (7 Stages)
 1. **Repo Ingestion** (`worker/pipeline/ingestion.py`) — shallow clone, file filtering, commit SHA
-2. **AST Analysis** (`worker/pipeline/ast_analysis.py`) — Tree-Sitter entity extraction, module tree
-3. **RAG Indexer** (`worker/pipeline/rag_indexer.py`) — LangChain chunking, FAISS IndexFlatIP
-4. **Wiki Planner** (`worker/pipeline/wiki_planner.py`) — LLM → hierarchical JSON page plan, retry + fallback
-5. **Page Generator** (`worker/pipeline/page_generator.py`) — RAG retrieval + LLM per-page Markdown
+2. **AST Analysis** (`worker/pipeline/ast_analysis.py`) — single-pass Tree-Sitter entity extraction → `FileAnalysis`
+3. **Dependency Graph** (`worker/pipeline/dependency_graph.py`) — file-level import graph + clusters
+4. **RAG Indexer** (`worker/pipeline/rag_indexer.py`) — LangChain chunking, FAISS IndexFlatIP
+5. **Wiki Planner** (`worker/pipeline/wiki_planner.py`) — LLM generates logical page tree with file assignments → `WikiPlan`
+6. **Page Generator** (`worker/pipeline/page_generator.py`) — RAG retrieval + LLM per-page Markdown
+7. **Architecture Diagram** (`worker/pipeline/diagram_synthesis.py`) — Mermaid diagram from wiki plan
 
 Supported AST languages: Python, JavaScript/JSX, TypeScript/TSX, Java, Go, Rust, C, C++, C#
 
@@ -46,7 +48,12 @@ Supported AST languages: Python, JavaScript/JSX, TypeScript/TSX, Java, Go, Rust,
     clone/                  ← shallow git clone
     faiss.index             ← vector index
     faiss.meta.pkl          ← chunk metadata
-    wiki/                   ← Markdown pages
+    ast/
+      wiki_plan.json        ← internal wiki plan with file mappings (for refresh)
+      architecture.mmd      ← Mermaid architecture diagram
+    wiki/
+      wiki.json             ← user-facing wiki structure (for Phase 4 steering)
+      *.md                  ← generated Markdown pages
   logs/
 ```
 
@@ -73,6 +80,9 @@ Default LLM: `claude-sonnet-4-6`. Supported providers: `anthropic`, `openai`, `o
 - **Next.js 16.2.1**: Tailwind v4 (CSS-only, no `tailwind.config.ts`), `@base-ui/react` not `@radix-ui/react`
 - **Gemini providers**: `google-generativeai` is deprecated; both files have Phase 2 migration notes for `google-genai`
 - **ARQ worker**: blocking I/O must use `run_in_executor`; `clone_or_fetch` already wrapped
+- **Wiki plan**: LLM generates logical page hierarchy with file assignments; slugs derived from titles, not stored in wiki.json
+- **wiki.json format**: user-facing (title/purpose/parent/page_notes); `ast/wiki_plan.json` is internal (includes files); `Repository.wiki_structure` is API-compatible (includes derived slugs/parent_slugs for frontend)
+- **FileAnalysis**: single-pass AST analysis — `analyze_all_files()` replaces both `build_enhanced_module_tree()` and `_build_file_entities()`
 
 ## API Surface
 

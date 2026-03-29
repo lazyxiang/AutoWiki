@@ -6,9 +6,11 @@ Self-hosted, open-source AI-powered wiki generator for GitHub repositories. Poin
 
 1. Clones the repository (shallow)
 2. Parses source files with Tree-Sitter (Python, JS/TS, Java, Go, Rust, C/C++, C#)
-3. Chunks and embeds code into a FAISS vector index
-4. Asks an LLM to plan a hierarchical wiki structure
-5. Generates each wiki page with RAG-retrieved context
+3. Builds a file-level dependency graph from imports
+4. Chunks and embeds code into a FAISS vector index
+5. Asks an LLM to generate a logical page hierarchy with file assignments
+6. Generates each wiki page with RAG-retrieved context
+7. Synthesizes an architecture diagram
 
 The result is served via a REST API and displayed in a Next.js web UI with sidebar navigation, interactive dependency diagrams, and a conversational Q&A chat interface.
 
@@ -235,7 +237,7 @@ AutoWiki/
 │   ├── routers/            # REST endpoints (repos, jobs, wiki)
 │   └── ws/                 # WebSocket job progress
 ├── worker/                 # ARQ background worker
-│   ├── pipeline/           # 5-stage generation pipeline
+│   ├── pipeline/           # 7-stage generation pipeline
 │   ├── llm/                # LLM provider adapters
 │   └── embedding/          # Embedding provider adapters
 ├── shared/                 # Config, SQLAlchemy models, database
@@ -273,7 +275,7 @@ Browser / CLI
          ▼
 ┌─────────────────┐
 │     Worker      │  (ARQ background process)
-│  (5-stage pipe) │
+│  (7-stage pipe) │
 └────────┬────────┘
          │ write results
          ▼
@@ -287,24 +289,30 @@ Browser / CLI
 
 The API gateway is stateless — it accepts requests, reads from SQLite, and pushes jobs onto a Redis queue. The worker runs the pipeline and writes results back to SQLite and disk. The Next.js frontend talks only to the API; it never touches the worker or storage directly.
 
-### Pipeline (5 stages)
+### Pipeline (7 stages)
 
-Each indexing job runs five stages in sequence:
+Each indexing job runs seven stages in sequence:
 
 **Stage 1 — Repo ingestion** (`worker/pipeline/ingestion.py`)
 Shallow-clones the repository with GitPython and records the HEAD commit SHA. Files are filtered by extension and size (max 1 MB); binary files, vendored dependencies (`node_modules`, `.git`, `vendor`, etc.), and generated code are excluded.
 
 **Stage 2 — AST analysis** (`worker/pipeline/ast_analysis.py`)
-Every source file is parsed with Tree-Sitter to extract named entities — classes, functions, structs, interfaces. Results are grouped into a *module tree* (top-level directories become modules), which the wiki planner uses to decide page scope.
+Every source file is parsed with Tree-Sitter in a single pass to extract named entities — classes, functions, structs, interfaces. Results are stored in a `FileAnalysis` structure (per-file entity lists with counts and summaries), which feeds all downstream stages.
 
-**Stage 3 — RAG indexing** (`worker/pipeline/rag_indexer.py`)
-Source files are split into overlapping chunks with LangChain's `RecursiveCharacterTextSplitter`, embedded in batches by the configured embedding provider, and stored in a FAISS `IndexFlatIP` (inner-product / cosine similarity). The index and chunk metadata are persisted to disk so they survive restarts.
+**Stage 3 — Dependency graph** (`worker/pipeline/dependency_graph.py`)
+Import statements are extracted from each file using language-specific regex patterns and resolved to known repo files. The result is a file-level dependency graph with connected-component clusters, used by the wiki planner to understand code relationships.
 
-**Stage 4 — Wiki planning** (`worker/pipeline/wiki_planner.py`)
-The LLM receives the module tree and produces a JSON page plan: a list of pages with titles, URL slugs, and the modules each page should cover. If the LLM output is invalid, the planner retries up to three times with the error appended to the prompt, then falls back to a flat one-page-per-module structure.
+**Stage 4 — RAG indexing** (`worker/pipeline/rag_indexer.py`)
+Source files are split into overlapping chunks with LangChain's `RecursiveCharacterTextSplitter`, embedded in batches by the configured embedding provider, and stored in a FAISS `IndexFlatIP` (inner-product / cosine similarity). Entity-aware chunking keeps whole functions/classes together when possible.
 
-**Stage 5 — Page generation** (`worker/pipeline/page_generator.py`)
-For each page in the plan, the page title and module list are embedded and used to retrieve the top-8 most relevant code chunks from the FAISS index. Those chunks, together with file paths, are assembled into a prompt and sent to the LLM, which writes a Markdown wiki page grounded in the actual source. Pages are stored in SQLite and written as `.md` files.
+**Stage 5 — Wiki planning** (`worker/pipeline/wiki_planner.py`)
+The LLM receives file-level summaries, the dependency graph, and the README, then generates a logical page hierarchy — grouping files by semantic purpose rather than directory structure. Each page has a title, purpose, optional parent reference, and assigned source files. The output is saved as `wiki.json` (user-facing, for future Phase 4 steering) and `wiki_plan.json` (internal, with file mappings for incremental refresh).
+
+**Stage 6 — Page generation** (`worker/pipeline/page_generator.py`)
+For each page in the plan, the page title and file list are embedded and used to retrieve the most relevant code chunks from the FAISS index. Those chunks, together with entity details and dependency context, are assembled into a prompt and sent to the LLM, which writes a Markdown wiki page grounded in the actual source.
+
+**Stage 7 — Architecture diagram** (`worker/pipeline/diagram_synthesis.py`)
+The LLM generates a Mermaid architecture diagram based on the wiki plan's page hierarchy, showing how major components relate to each other.
 
 ### Data flow (single indexing request)
 
@@ -316,10 +324,12 @@ POST /api/repos {"url": "github.com/owner/repo"}
 
 Worker picks up job:
   Stage 1  clone/fetch → files[]           progress 5→20
-  Stage 2  AST parse  → module_tree[]      progress   →35
-  Stage 3  embed+index → FAISSStore        progress   →55
-  Stage 4  LLM plan   → PagePlan           progress   →65
-  Stage 5  per-page LLM → WikiPage rows    progress   →100
+  Stage 2  AST parse  → FileAnalysis       progress   →35
+  Stage 3  dep graph  → DependencyGraph    progress   →45
+  Stage 4  embed+index → FAISSStore        progress   →55
+  Stage 5  LLM plan   → WikiPlan           progress   →70
+  Stage 6  per-page LLM → WikiPage rows    progress   →97
+  Stage 7  architecture diagram            progress   →100
 
   Job status  → "done"
   Repo status → "ready"
