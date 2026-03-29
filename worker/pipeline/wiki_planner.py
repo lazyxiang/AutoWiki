@@ -1,3 +1,25 @@
+"""Stage 5 of the generation pipeline — LLM-generated logical wiki page plan.
+
+Given a :class:`~worker.pipeline.ast_analysis.FileAnalysis` and an optional
+:class:`~worker.pipeline.dependency_graph.DependencyGraph`, this module asks
+the configured LLM to produce a hierarchical wiki plan: a JSON structure that
+maps *every* source file in the repository to exactly one page.
+
+The main entry point is :func:`generate_wiki_plan`, which:
+
+1. Builds a text prompt from the file summary, README, and dependency info.
+2. Calls the LLM with a structured JSON schema via ``async_retry``.
+3. Validates and normalises the response with :func:`validate_wiki_plan`.
+4. Retries up to *max_retries* times if validation fails, appending the error
+   to the prompt.
+5. Falls back to a flat cluster-based plan if all retries are exhausted.
+
+The plan is represented as a :class:`WikiPlan` (a list of
+:class:`WikiPageSpec` objects) and can be serialised to three different JSON
+shapes via :meth:`WikiPlan.to_wiki_json`, :meth:`WikiPlan.to_internal_json`,
+and :meth:`WikiPlan.to_api_structure`.
+"""
+
 from __future__ import annotations
 
 import json
@@ -10,6 +32,28 @@ from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retr
 
 @dataclass
 class WikiPageSpec:
+    """Specification for a single wiki page within the plan.
+
+    Each :class:`WikiPageSpec` captures everything the page-generator stage
+    needs to produce one Markdown page:
+
+    * **title** — Human-readable concept name (e.g. ``"API Gateway"``).
+    * **purpose** — One or two sentences explaining what the page covers and
+      why a developer would read it.
+    * **parent** — Title of the parent page, or ``None`` for top-level pages.
+      Stored as the parent's *title string*, not its slug, so that the
+      hierarchy survives slug-derivation changes.
+    * **page_notes** — Freeform list of note dicts (default one empty note).
+      Reserved for future Phase-4 user-steering support.
+    * **files** — List of repository-relative file paths assigned to this page
+      by the LLM.  Used for RAG retrieval and incremental refresh.
+
+    Note:
+        ``slug`` and ``parent_slug`` are *derived* properties computed from
+        ``title`` and ``parent`` respectively; they are never stored in the
+        dataclass fields to avoid redundancy.
+    """
+
     title: str
     purpose: str  # replaces "description"
     parent: str | None = None  # parent page TITLE string (not slug)
@@ -18,11 +62,42 @@ class WikiPageSpec:
 
     @property
     def slug(self) -> str:
-        """Derive URL slug from title."""
+        """URL-safe slug derived from the page title.
+
+        Converts the title to lowercase, replaces any run of non-alphanumeric
+        characters with a hyphen, and strips leading/trailing hyphens.
+
+        Returns:
+            str: A URL-safe slug suitable for use as a filesystem name and
+            URL path segment.
+
+        Example:
+            >>> WikiPageSpec(title="API Gateway", purpose="...").slug
+            'api-gateway'
+            >>> WikiPageSpec(title="  Worker / Job Queue  ", purpose="...").slug
+            'worker-job-queue'
+        """
         return re.sub(r"[^a-z0-9-]+", "-", self.title.lower()).strip("-")
 
     @property
     def parent_slug(self) -> str | None:
+        """URL-safe slug derived from the parent page title.
+
+        Applies the same slug-derivation logic as :attr:`slug` to
+        :attr:`parent`.
+
+        Returns:
+            str | None: The parent page's slug, or ``None`` if this page has
+            no parent (i.e. it is a top-level page).
+
+        Example:
+            >>> spec = WikiPageSpec(title="Routes", purpose="...",
+            ...                     parent="API Gateway")
+            >>> spec.parent_slug
+            'api-gateway'
+            >>> WikiPageSpec(title="Overview", purpose="...").parent_slug is None
+            True
+        """
         if self.parent is None:
             return None
         return re.sub(r"[^a-z0-9-]+", "-", self.parent.lower()).strip("-")
@@ -30,11 +105,45 @@ class WikiPageSpec:
 
 @dataclass
 class WikiPlan:
+    """Container for the full set of wiki pages produced by the planner.
+
+    Holds optional repository-level notes (``repo_notes``) and the ordered
+    list of :class:`WikiPageSpec` objects that make up the planned wiki.
+
+    The three serialisation methods produce different JSON shapes for
+    different consumers:
+
+    * :meth:`to_wiki_json` — user-facing ``wiki.json`` (no slugs, no files).
+    * :meth:`to_internal_json` — pipeline-internal ``ast/wiki_plan.json``
+      (includes ``files`` for incremental refresh).
+    * :meth:`to_api_structure` — API response shape (includes derived
+      ``slug``/``parent_slug`` for the frontend).
+    """
+
     repo_notes: list[dict] = field(default_factory=lambda: [{"content": ""}])
     pages: list[WikiPageSpec] = field(default_factory=list)
 
     def to_wiki_json(self) -> dict:
-        """User-facing wiki.json: no slugs, no files field."""
+        """Serialise to the user-facing ``wiki.json`` format.
+
+        Omits ``slug``, ``parent_slug``, and ``files`` fields so the file
+        remains human-editable for future Phase-4 user-steering.
+
+        Returns:
+            dict: A dictionary with keys:
+
+            * ``"repo_notes"`` (list[dict]): Repository-level notes.
+            * ``"pages"`` (list[dict]): Each page dict has ``"title"``,
+              ``"purpose"``, ``"page_notes"``, and optionally ``"parent"``.
+
+        Example:
+            >>> plan = WikiPlan(pages=[WikiPageSpec(
+            ...     title="Overview", purpose="Project overview.")])
+            >>> plan.to_wiki_json()
+            {'repo_notes': [{'content': ''}],
+             'pages': [{'title': 'Overview', 'purpose': 'Project overview.',
+                        'page_notes': [{'content': ''}]}]}
+        """
         return {
             "repo_notes": self.repo_notes,
             "pages": [
@@ -49,7 +158,23 @@ class WikiPlan:
         }
 
     def to_internal_json(self) -> dict:
-        """Pipeline-internal: includes files for incremental refresh."""
+        """Serialise to the pipeline-internal ``ast/wiki_plan.json`` format.
+
+        Includes the ``files`` field for each page so that the incremental
+        refresh logic can determine which pages are affected by a given set
+        of changed files.
+
+        Returns:
+            dict: A dictionary with keys:
+
+            * ``"repo_notes"`` (list[dict]): Repository-level notes.
+            * ``"pages"`` (list[dict]): Each page dict has ``"title"``,
+              ``"purpose"``, ``"files"``, and optionally ``"parent"``.
+
+        Example:
+            >>> plan.to_internal_json()["pages"][0]["files"]
+            ['api/routes.py', 'api/models.py']
+        """
         return {
             "repo_notes": self.repo_notes,
             "pages": [
@@ -64,7 +189,21 @@ class WikiPlan:
         }
 
     def to_api_structure(self) -> dict:
-        """API-compatible: slug/parent_slug/description for frontend."""
+        """Serialise to the API response format consumed by the frontend.
+
+        Derives ``slug`` and ``parent_slug`` from titles and renames
+        ``purpose`` to ``description`` to match the existing REST contract.
+
+        Returns:
+            dict: A dictionary with key ``"pages"``, a list of dicts each
+            containing ``"title"``, ``"slug"``, ``"parent_slug"``, and
+            ``"description"``.
+
+        Example:
+            >>> plan.to_api_structure()
+            {'pages': [{'title': 'Overview', 'slug': 'overview',
+                        'parent_slug': None, 'description': 'Project overview.'}]}
+        """
         return {
             "pages": [
                 {
@@ -132,6 +271,39 @@ def _build_prompt(
     clusters: list[list[str]] | None = None,
     all_files: list[str] | None = None,
 ) -> str:
+    """Assemble the full LLM prompt for the wiki-planning step.
+
+    Builds a multi-section prompt by concatenating available information
+    about the repository.  Each optional section is only appended when the
+    corresponding argument is not ``None``:
+
+    * **README section** — Provides a human-written project overview; limited
+      to the first 2000 characters to avoid exceeding context limits.
+    * **File summaries section** — The text produced by
+      ``FileAnalysis.to_llm_summary()``, listing each file with its detected
+      entities and docstrings.
+    * **Dependency relationships section** — The formatted dependency graph
+      text, showing which files import which.
+    * **Cluster suggestions section** — Up to 8 import-graph clusters (up to
+      10 files each shown) as hints for grouping related files.
+    * **Planning guidelines section** — Instructions and the JSON schema the
+      LLM must conform to.
+
+    Args:
+        file_summary: Pre-formatted text output of
+            ``FileAnalysis.to_llm_summary()``.
+        repo_name: Human-readable repository name (e.g. ``"owner/repo"``).
+        readme: Optional README content (truncated internally to 2000 chars).
+        dep_info: Optional pre-formatted dependency graph text.
+        clusters: Optional list of file-path lists representing import-graph
+            clusters detected by the dependency analysis stage.
+        all_files: Optional list of all relative file paths; used to embed
+            the exact file count in the planning guidelines so the LLM knows
+            it must cover every file.
+
+    Returns:
+        str: The full prompt string, with sections separated by blank lines.
+    """
     sections = [f"Repository: {repo_name}"]
 
     if readme:
@@ -178,13 +350,56 @@ def validate_wiki_plan(
     all_files: list[str] | None = None,
     existing_titles: set[str] | None = None,
 ) -> WikiPlan:
-    """Validate LLM output and return WikiPlan. Fixes orphaned files.
+    """Validate an LLM-produced wiki plan dict and return a :class:`WikiPlan`.
+
+    Performs the following checks and normalisations:
+
+    1. Raises :exc:`ValueError` if ``"pages"`` key is missing or empty.
+    2. Raises :exc:`ValueError` if any page is missing ``"title"`` or
+       ``"purpose"``.
+    3. Raises :exc:`ValueError` if two or more pages produce the same slug
+       (duplicate titles after slug derivation).
+    4. Silently drops ``parent`` references that point to unknown titles
+       rather than raising an error, to tolerate minor LLM hallucinations.
+    5. Appends any *orphaned* files (not assigned to any page) to the
+       ``"Overview"`` page, or to the first page if no Overview exists.
 
     Args:
-        raw: Raw LLM output dict with "pages" list.
-        all_files: Full file list; orphans are appended to Overview.
-        existing_titles: Titles from the unchanged portion of an existing plan
-            (used during partial refresh so cross-slice parent refs are kept).
+        raw: Raw dict decoded from the LLM's JSON response.  Must contain a
+            ``"pages"`` key whose value is a list of page dicts.
+        all_files: Optional list of all relative file paths in the repository.
+            When provided, any file not referenced by any page is treated as an
+            orphan and appended to the first matching page.
+        existing_titles: Optional set of page titles from the *unchanged*
+            portion of an existing wiki plan (used during partial incremental
+            refresh so cross-slice ``parent`` references remain valid).
+
+    Returns:
+        WikiPlan: A validated and normalised :class:`WikiPlan` instance.
+
+    Raises:
+        ValueError: If ``"pages"`` key is missing, the pages list is empty,
+            any page dict is missing ``"title"`` or ``"purpose"``, or two
+            or more pages share the same derived slug.
+
+    Example:
+        Normal case — all files assigned, no orphans:
+
+        >>> raw = {"pages": [
+        ...     {"title": "Overview", "purpose": "Top level.", "files": ["main.py"]},
+        ... ]}
+        >>> plan = validate_wiki_plan(raw, all_files=["main.py"])
+        >>> plan.pages[0].title
+        'Overview'
+
+        Orphan case — ``utils.py`` not assigned; it gets appended to Overview:
+
+        >>> raw = {"pages": [
+        ...     {"title": "Overview", "purpose": "...", "files": ["main.py"]},
+        ... ]}
+        >>> plan = validate_wiki_plan(raw, all_files=["main.py", "utils.py"])
+        >>> "utils.py" in plan.pages[0].files
+        True
     """
     if "pages" not in raw:
         raise ValueError("Missing 'pages' key")
@@ -250,6 +465,61 @@ async def generate_wiki_plan(
     on_retry: OnRetryCallback | None = None,
     existing_titles: set[str] | None = None,
 ) -> WikiPlan:
+    """Generate a hierarchical wiki plan for a repository using an LLM.
+
+    Orchestrates the full planning workflow:
+
+    1. Converts *file_analysis* to an LLM-readable text summary.
+    2. Formats dependency info and cluster hints from *dep_graph* (if given).
+    3. Builds the prompt via :func:`_build_prompt`.
+    4. Calls ``llm.generate_structured`` with ``_WIKI_PLAN_SCHEMA`` inside an
+       ``async_retry`` wrapper (for transient API errors).
+    5. Validates the LLM output with :func:`validate_wiki_plan`; if validation
+       raises, appends the error to the prompt and retries up to *max_retries*
+       times in total.
+    6. If all retries are exhausted, falls back to a flat plan: one
+       ``"Overview"`` page plus one ``"Component N"`` page per import-graph
+       cluster (clusters are split into sub-pages of at most 20 files).  All
+       files not placed in a cluster page are routed to Overview.
+
+    Args:
+        file_analysis: A :class:`~worker.pipeline.ast_analysis.FileAnalysis`
+            instance containing the per-file entity data for the repository.
+        repo_name: Human-readable repository name used in prompts and fallback
+            page purposes (e.g. ``"owner/repo"``).
+        llm: An :class:`~worker.llm.base.LLMProvider` instance used to call
+            the LLM for structured JSON generation.
+        dep_graph: Optional
+            :class:`~worker.pipeline.dependency_graph.DependencyGraph`
+            providing import relationships and cluster suggestions.
+        max_retries: Maximum number of LLM call + validation attempts before
+            the fallback plan is used.  Defaults to ``3``.
+        readme: Optional README text extracted by
+            :func:`~worker.pipeline.ingestion.extract_readme`; included in the
+            prompt when provided.
+        on_retry: Optional callback passed to ``async_retry`` for progress
+            reporting on transient embedding/LLM failures.
+        existing_titles: Optional set of page titles from the *unchanged*
+            portion of an existing wiki plan (for partial incremental refresh).
+            Passed through to :func:`validate_wiki_plan`.
+
+    Returns:
+        WikiPlan: A validated :class:`WikiPlan` where every source file in
+        *file_analysis* is assigned to exactly one page.
+
+    Example:
+        >>> plan = await generate_wiki_plan(
+        ...     file_analysis=analysis,
+        ...     repo_name="owner/my-repo",
+        ...     llm=llm_provider,
+        ...     dep_graph=dep_graph,
+        ...     readme=readme_text,
+        ... )
+        >>> len(plan.pages)
+        12
+        >>> plan.pages[0].title
+        'Overview'
+    """
     from worker.pipeline.ast_analysis import FileAnalysis  # noqa: F401
     from worker.pipeline.dependency_graph import (  # noqa: F401
         DependencyGraph,

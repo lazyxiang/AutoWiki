@@ -1,3 +1,17 @@
+"""Stage 1 of the generation pipeline.
+
+Covers repository cloning, file filtering, and diff detection.
+
+This module handles everything that happens before analysis:
+  - Parsing GitHub URLs into owner/name tuples
+  - Hashing repo identifiers to stable storage keys
+  - Walking the local clone to collect indexable source files
+  - Extracting the README for later use in the wiki plan prompt
+  - Cloning or fetching a GitHub repo via gitpython (in a thread executor)
+  - Computing which files changed between two commits
+  - Mapping changed files to wiki pages that must be regenerated
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -9,7 +23,8 @@ import pathspec
 if TYPE_CHECKING:
     from worker.pipeline.wiki_planner import WikiPlan
 
-# Extensions considered source code (non-exhaustive, practical set)
+# Allowlist of file extensions treated as indexable source/documentation.
+# Files with extensions not in this set are silently skipped by filter_files().
 SOURCE_EXTENSIONS = {
     ".py",
     ".js",
@@ -45,6 +60,8 @@ SOURCE_EXTENSIONS = {
     ".proto",
 }
 
+# Directory names that are always skipped to avoid indexing build artefacts,
+# caches, vendored code, and VCS metadata that would pollute the wiki.
 EXCLUDED_DIRS = {
     "node_modules",
     ".git",
@@ -68,7 +85,33 @@ EXCLUDED_DIRS = {
 
 
 def parse_github_url(url: str) -> tuple[str, str]:
-    """Parse 'github.com/owner/repo' or full URL into (owner, name)."""
+    """Parse a GitHub URL or bare path into an (owner, name) tuple.
+
+    Accepts full HTTPS URLs as well as short-form ``github.com/owner/repo``
+    strings.  The ``.git`` suffix is stripped if present.
+
+    Args:
+        url: A GitHub repository URL in any of these forms:
+            ``https://github.com/owner/repo``,
+            ``http://github.com/owner/repo``,
+            ``github.com/owner/repo``, or
+            ``github.com/owner/repo.git``.
+
+    Returns:
+        tuple[str, str]: A two-element tuple ``(owner, name)`` where *owner*
+        is the GitHub organisation or user and *name* is the repository name
+        without the ``.git`` suffix.
+
+    Raises:
+        ValueError: If ``url`` does not contain ``github.com`` followed by at
+            least two path segments (owner and repo name).
+
+    Example:
+        >>> parse_github_url("https://github.com/anthropics/anthropic-sdk-python")
+        ('anthropics', 'anthropic-sdk-python')
+        >>> parse_github_url("github.com/owner/repo.git")
+        ('owner', 'repo')
+    """
     url = url.replace("https://", "").replace("http://", "").rstrip("/")
     parts = url.split("/")
     # Find 'github.com' and take the next two parts
@@ -80,6 +123,25 @@ def parse_github_url(url: str) -> tuple[str, str]:
 
 
 def get_repo_hash(platform: str, owner: str, name: str) -> str:
+    """Return a stable, short hash that uniquely identifies a repository.
+
+    The hash is derived from a ``platform:owner/name`` key so that the same
+    repository always maps to the same storage directory regardless of which
+    URL form was used to request it.
+
+    Args:
+        platform: Hosting platform identifier, e.g. ``"github"``.
+        owner: Repository owner (organisation or user), e.g. ``"anthropics"``.
+        name: Repository name, e.g. ``"anthropic-sdk-python"``.
+
+    Returns:
+        str: The first 16 hexadecimal characters of the SHA-256 digest of the
+        key string ``"{platform}:{owner}/{name}"``.
+
+    Example:
+        >>> get_repo_hash("github", "owner", "repo")
+        '...'  # deterministic 16-char hex string
+    """
     key = f"{platform}:{owner}/{name}"
     return hashlib.sha256(key.encode()).hexdigest()[:16]
 
@@ -89,10 +151,40 @@ def filter_files(
     max_file_bytes: int = 1024 * 1024,  # 1MB per file
     ignore_file: Path | None = None,
 ) -> list[Path]:
-    """Return all indexable source files under root.
+    """Return all indexable source files under *root*, sorted by path.
 
-    If ignore_file exists and is a valid .gitignore-style file, patterns in it
-    are applied to exclude additional paths.
+    Walks the directory tree recursively and applies the following filters in
+    order:
+
+    1. Skip directories listed in :data:`EXCLUDED_DIRS` (build artefacts,
+       caches, VCS metadata, etc.).
+    2. Skip files whose extension is not in :data:`SOURCE_EXTENSIONS`.
+    3. Skip files larger than *max_file_bytes* (default 1 MB).
+    4. If *ignore_file* is provided and is a valid ``.gitignore``-style file,
+       skip files whose relative path matches any pattern in that file.
+       AutoWiki uses ``{clone_dir}/.autowikiignore`` by convention.
+
+    Args:
+        root: Absolute path to the repository root directory to walk.
+        max_file_bytes: Maximum file size in bytes; files larger than this are
+            excluded.  Defaults to ``1_048_576`` (1 MiB).
+        ignore_file: Optional path to a ``.gitignore``-style ignore file
+            (e.g. ``root / ".autowikiignore"``).  If ``None`` or the file does
+            not exist, no additional patterns are applied.
+
+    Returns:
+        list[Path]: Absolute ``Path`` objects for all files that passed every
+        filter, sorted lexicographically by their full path.
+
+    Example:
+        >>> files = filter_files(Path("/tmp/my-repo"))
+        >>> [str(f.relative_to("/tmp/my-repo")) for f in files[:3]]
+        ['README.md', 'src/main.py', 'src/utils.py']
+
+    Note:
+        To exclude additional paths from indexing, create a
+        ``.autowikiignore`` file in the repository root using the same
+        ``.gitignore`` pattern syntax.
     """
     spec: pathspec.PathSpec | None = None
     if ignore_file is not None and ignore_file.is_file():
@@ -121,7 +213,27 @@ def filter_files(
 
 
 def extract_readme(root: Path, max_chars: int = 3000) -> str | None:
-    """Extract README content from the repository root."""
+    """Extract README content from the repository root directory.
+
+    Tries several common README filenames in priority order and returns the
+    content of the first one found, truncated to *max_chars* characters.  The
+    content is used as context in the wiki-plan prompt to give the LLM a
+    high-level description of the project.
+
+    Args:
+        root: Absolute path to the repository root directory.
+        max_chars: Maximum number of characters to return.  Defaults to
+            ``3000`` to keep the LLM prompt manageable.
+
+    Returns:
+        str | None: The first *max_chars* characters of the README content, or
+        ``None`` if no recognised README file exists or all reads fail.
+
+    Example:
+        >>> readme = extract_readme(Path("/tmp/my-repo"))
+        >>> readme[:50] if readme else "No README found"
+        '# My Project\\n\\nA short description...'
+    """
     for name in ("README.md", "readme.md", "README.rst", "README.txt", "README"):
         p = root / name
         if p.exists() and p.is_file():
@@ -133,9 +245,34 @@ def extract_readme(root: Path, max_chars: int = 3000) -> str | None:
 
 
 async def clone_or_fetch(clone_dir: Path, owner: str, name: str) -> str:
-    """Clone or fetch a GitHub repo. Returns HEAD commit SHA.
+    """Clone a GitHub repository, or fetch and reset an existing clone.
 
-    Runs blocking gitpython I/O in a thread executor to avoid stalling the event loop.
+    Performs a *shallow* clone (``depth=1``) on first run to minimise disk
+    usage and network time.  On subsequent calls it fetches the latest changes
+    from ``origin`` and hard-resets ``HEAD`` to ``FETCH_HEAD``.
+
+    Blocking gitpython I/O is offloaded to the default thread-pool executor
+    via :func:`asyncio.get_event_loop().run_in_executor` so the ARQ event
+    loop is never blocked.
+
+    Args:
+        clone_dir: Local directory where the repository should be cloned.
+            Created automatically if it does not exist.
+        owner: GitHub repository owner (organisation or user).
+        name: GitHub repository name.
+
+    Returns:
+        str: The 40-character hexadecimal SHA of the HEAD commit after the
+        clone or fetch completes.
+
+    Raises:
+        git.exc.GitCommandError: If the remote is unreachable, authentication
+            fails, or any git operation returns a non-zero exit code.
+
+    Example:
+        >>> sha = await clone_or_fetch(Path("/tmp/clones/my-repo"), "owner", "repo")
+        >>> len(sha)
+        40
     """
     import asyncio
 
@@ -157,10 +294,34 @@ async def clone_or_fetch(clone_dir: Path, owner: str, name: str) -> str:
 
 
 async def get_changed_files(clone_dir: Path, old_sha: str, new_sha: str) -> list[str]:
-    """Return list of file paths changed between two git SHAs.
+    """Return the list of file paths that changed between two git commits.
 
-    Raises git.exc.GitCommandError if either SHA is not reachable in the repo
-    history (e.g. shallow clones missing the old commit).
+    Uses ``git diff --name-only`` to determine which files were added,
+    modified, or deleted between *old_sha* and *new_sha*.  The diff runs in a
+    thread executor to avoid blocking the event loop.
+
+    Args:
+        clone_dir: Path to the local git repository (must contain a ``.git``
+            directory).
+        old_sha: The earlier commit SHA (base of the diff).
+        new_sha: The later commit SHA (tip of the diff).
+
+    Returns:
+        list[str]: Relative file paths (as reported by git) for every file
+        that was added, modified, or deleted between the two commits.  Returns
+        an empty list if there are no differences.
+
+    Raises:
+        git.exc.GitCommandError: If either SHA is not reachable in the
+            repository history — for example because a shallow clone does not
+            contain *old_sha*.
+
+    Example:
+        >>> changed = await get_changed_files(
+        ...     Path("/tmp/clones/my-repo"), "abc123", "def456"
+        ... )
+        >>> changed
+        ['src/main.py', 'tests/test_main.py']
     """
     import asyncio
 
@@ -180,12 +341,34 @@ async def get_changed_files(clone_dir: Path, old_sha: str, new_sha: str) -> list
 def get_affected_pages(changed_files: list[str], wiki_plan: WikiPlan) -> set[str]:
     """Return titles of wiki pages whose assigned files overlap with changed_files.
 
+    Used during incremental refresh to determine which wiki pages need to be
+    regenerated: only pages that reference at least one of the changed files
+    are included in the result.
+
     Args:
-        changed_files: List of relative file paths that changed.
-        wiki_plan: The WikiPlan to check against.
+        changed_files: List of relative file paths (as returned by
+            :func:`get_changed_files`) that have been modified.
+        wiki_plan: The :class:`~worker.pipeline.wiki_planner.WikiPlan`
+            describing the current page-to-file assignments.
 
     Returns:
-        Set of page titles that need to be regenerated.
+        set[str]: Page titles (strings matching ``WikiPageSpec.title``) for
+        every page that references at least one changed file.
+
+    Example:
+        >>> from worker.pipeline.wiki_planner import WikiPlan, WikiPageSpec
+        >>> plan = WikiPlan(pages=[
+        ...     WikiPageSpec(title="API Layer", purpose="...",
+        ...                  files=["api/routes.py", "api/models.py"]),
+        ...     WikiPageSpec(title="Worker", purpose="...",
+        ...                  files=["worker/jobs.py"]),
+        ... ])
+        >>> get_affected_pages(["api/routes.py"], plan)
+        {'API Layer'}
+        >>> get_affected_pages(["api/routes.py", "worker/jobs.py"], plan)
+        {'API Layer', 'Worker'}
+        >>> get_affected_pages(["unrelated/file.py"], plan)
+        set()
     """
     changed = set(changed_files)
     affected: set[str] = set()
