@@ -71,3 +71,21 @@ export async function getRepoGraph(repoId: string): Promise<{
   if (!res.ok) throw new Error(`Failed to get graph: ${res.status}`);
   return res.json();
 }
+
+export interface Repository {
+  id: string;
+  owner: string;
+  name: string;
+  description: string;
+  stars?: number;
+  language?: string;
+  status: string;
+  indexed_at: string;
+  indexed_at_formatted: string;
+}
+
+export async function getRepositories(): Promise<Repository[]> {
+  const res = await fetch(`${API_URL}/api/repos`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
