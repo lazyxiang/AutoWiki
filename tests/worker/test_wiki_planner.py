@@ -1,3 +1,5 @@
+import pytest
+
 from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
 from worker.pipeline.wiki_planner import (
     WikiPageSpec,
@@ -162,6 +164,40 @@ def test_wiki_plan_to_internal_json():
     # files must not be absent
     for page in internal["pages"]:
         assert "files" in page
+
+
+def test_validate_wiki_plan_duplicate_slugs_rejected():
+    raw = {
+        "pages": [
+            {"title": "Overview", "purpose": "Top.", "files": ["a.py"]},
+            # "Over view" slugifies to "over-view" — different from "overview"
+            # but "Overview" and "overview" both slug to "overview"
+            {"title": "Overview", "purpose": "Duplicate.", "files": ["b.py"]},
+        ]
+    }
+    with pytest.raises(ValueError, match="Duplicate page slugs"):
+        validate_wiki_plan(raw)
+
+
+def test_validate_wiki_plan_existing_titles_keeps_cross_slice_parent():
+    """A parent that lives outside the partial refresh slice should not be dropped."""
+    raw = {
+        "pages": [
+            {
+                "title": "Engine",
+                "purpose": "Core engine.",
+                "parent": "Overview",  # Overview is NOT in this partial batch
+                "files": ["engine.py"],
+            }
+        ]
+    }
+    # Without existing_titles, "Overview" parent would be dropped
+    plan_no_ctx = validate_wiki_plan(raw)
+    assert plan_no_ctx.pages[0].parent is None
+
+    # With existing_titles, the parent is preserved
+    plan_with_ctx = validate_wiki_plan(raw, existing_titles={"Overview"})
+    assert plan_with_ctx.pages[0].parent == "Overview"
 
 
 def test_wiki_page_spec_parent_slug():

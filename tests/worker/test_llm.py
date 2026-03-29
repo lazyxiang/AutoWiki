@@ -23,7 +23,10 @@ async def test_anthropic_generate_calls_api():
 
 async def test_anthropic_generate_structured_returns_dict():
     provider = AnthropicProvider(api_key="test-key", model="claude-sonnet-4-6")
-    raw = '{"pages": [{"title": "Overview", "purpose": "Overview of project.", "files": ["main.py"]}]}'
+    raw = (
+        '{"pages": [{"title": "Overview", "purpose": "Overview of project.",'
+        ' "files": ["main.py"]}]}'
+    )
     with patch.object(
         provider._client.messages, "create", new_callable=AsyncMock
     ) as mock_create:

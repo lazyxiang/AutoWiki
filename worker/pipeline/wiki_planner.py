@@ -173,8 +173,19 @@ def _build_prompt(
     return "\n\n".join(sections)
 
 
-def validate_wiki_plan(raw: dict, all_files: list[str] | None = None) -> WikiPlan:
-    """Validate LLM output and return WikiPlan. Fixes orphaned files."""
+def validate_wiki_plan(
+    raw: dict,
+    all_files: list[str] | None = None,
+    existing_titles: set[str] | None = None,
+) -> WikiPlan:
+    """Validate LLM output and return WikiPlan. Fixes orphaned files.
+
+    Args:
+        raw: Raw LLM output dict with "pages" list.
+        all_files: Full file list; orphans are appended to Overview.
+        existing_titles: Titles from the unchanged portion of an existing plan
+            (used during partial refresh so cross-slice parent refs are kept).
+    """
     if "pages" not in raw:
         raise ValueError("Missing 'pages' key")
     if not raw["pages"]:
@@ -182,6 +193,18 @@ def validate_wiki_plan(raw: dict, all_files: list[str] | None = None) -> WikiPla
 
     pages = []
     titles = {p["title"] for p in raw["pages"] if "title" in p}
+    # Titles valid as parent references: new pages + any unchanged pages passed in
+    all_known_titles = titles | (existing_titles or set())
+
+    # Detect duplicate slugs before building the plan
+    slug_counts: dict[str, int] = {}
+    for p in raw["pages"]:
+        if "title" in p:
+            slug = re.sub(r"[^a-z0-9-]+", "-", p["title"].lower()).strip("-")
+            slug_counts[slug] = slug_counts.get(slug, 0) + 1
+    dupes = [slug for slug, count in slug_counts.items() if count > 1]
+    if dupes:
+        raise ValueError(f"Duplicate page slugs detected: {', '.join(dupes)}")
 
     for p in raw["pages"]:
         if "title" not in p:
@@ -189,8 +212,8 @@ def validate_wiki_plan(raw: dict, all_files: list[str] | None = None) -> WikiPla
         if "purpose" not in p:
             raise ValueError(f"Page missing 'purpose': {p}")
         parent = p.get("parent")
-        # Validate parent references an existing title
-        if parent and parent not in titles:
+        # Validate parent references a known title (new or unchanged)
+        if parent and parent not in all_known_titles:
             parent = None  # Drop invalid parent rather than failing
         pages.append(
             WikiPageSpec(
@@ -225,6 +248,7 @@ async def generate_wiki_plan(
     max_retries: int = 3,
     readme: str | None = None,
     on_retry: OnRetryCallback | None = None,
+    existing_titles: set[str] | None = None,
 ) -> WikiPlan:
     from worker.pipeline.ast_analysis import FileAnalysis  # noqa: F401
     from worker.pipeline.dependency_graph import (  # noqa: F401
@@ -256,12 +280,15 @@ async def generate_wiki_plan(
                 transient_exceptions=TRANSIENT_EXCEPTIONS,
                 on_retry=on_retry,
             )
-            return validate_wiki_plan(raw, all_files=all_files)
+            return validate_wiki_plan(
+                raw, all_files=all_files, existing_titles=existing_titles
+            )
         except (ValueError, json.JSONDecodeError, KeyError) as e:
             if attempt < max_retries - 1:
                 prompt += f"\n\nPrevious attempt failed: {e}. Please fix and retry."
 
-    # Fallback: flat plan - Overview + one page per dependency cluster
+    # Fallback: flat plan - Overview + one page per dependency cluster.
+    # Every file must be assigned exactly once.
     fallback_pages = [
         WikiPageSpec(
             title="Overview",
@@ -269,21 +296,31 @@ async def generate_wiki_plan(
                 f"High-level overview of the {repo_name} project "
                 "architecture and components."
             ),
-            files=all_files[:5] if all_files else [],
+            files=[],
         )
     ]
     if clusters:
-        for i, cluster in enumerate(clusters[:10]):
-            if cluster:
+        assigned: set[str] = set()
+        page_num = 1
+        for cluster in clusters:
+            # Split large clusters into pages of up to 20 files each
+            for offset in range(0, max(1, len(cluster)), 20):
+                chunk = cluster[offset : offset + 20]
+                if not chunk:
+                    continue
+                suffix = f" (part {offset // 20 + 1})" if len(cluster) > 20 else ""
                 fallback_pages.append(
                     WikiPageSpec(
-                        title=f"Component {i + 1}",
-                        purpose=f"Documentation for component {i + 1}.",
-                        files=cluster[:20],
+                        title=f"Component {page_num}{suffix}",
+                        purpose=f"Documentation for component {page_num}.",
+                        files=chunk,
                     )
                 )
-    elif all_files:
-        # No clusters: put remaining files in overview
-        if fallback_pages:
-            fallback_pages[0].files = all_files
+                assigned.update(chunk)
+            page_num += 1
+        # Route any file not placed in a cluster page to Overview
+        fallback_pages[0].files = [f for f in (all_files or []) if f not in assigned]
+    else:
+        # No clusters: put all files in Overview
+        fallback_pages[0].files = list(all_files or [])
     return WikiPlan(pages=fallback_pages)

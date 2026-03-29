@@ -131,6 +131,10 @@ async def refresh_repo(repo_id: str):
 @router.get("/{repo_id}/graph")
 async def get_repo_graph(repo_id: str):
     cfg = get_config()
+    async with get_session(str(cfg.database_path)) as s:
+        repo = await s.get(Repository, repo_id)
+        if repo is None:
+            raise HTTPException(status_code=404, detail="Repository not found")
     wiki_plan_path = cfg.data_dir / "repos" / repo_id / "ast" / "wiki_plan.json"
     if not wiki_plan_path.exists():
         raise HTTPException(

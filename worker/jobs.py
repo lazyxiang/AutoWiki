@@ -500,14 +500,36 @@ async def run_refresh_index(
             None, wiki_plan_path.read_text
         )
         plan_data = json.loads(content)
+
+        # Load user-facing wiki.json to preserve any user-edited page_notes
+        wiki_json_path = repo_data_dir / "wiki" / "wiki.json"
+        saved_page_notes: dict[str, list[dict]] = {}
+        saved_repo_notes: list[dict] = []
+        if wiki_json_path.exists():
+            try:
+                wiki_json_data = json.loads(
+                    await asyncio.get_running_loop().run_in_executor(
+                        None, wiki_json_path.read_text
+                    )
+                )
+                saved_repo_notes = wiki_json_data.get("repo_notes", [])
+                for wp in wiki_json_data.get("pages", []):
+                    if "title" in wp and "page_notes" in wp:
+                        saved_page_notes[wp["title"]] = wp["page_notes"]
+            except Exception:
+                pass  # Corrupt or missing wiki.json — proceed without notes
+
         old_plan = WikiPlan(
-            repo_notes=plan_data.get("repo_notes", [{"content": ""}]),
+            repo_notes=(
+                saved_repo_notes or plan_data.get("repo_notes", [{"content": ""}])
+            ),
             pages=[
                 WikiPageSpec(
                     title=p["title"],
                     purpose=p.get("purpose", ""),
                     parent=p.get("parent"),
                     files=p.get("files", []),
+                    page_notes=saved_page_notes.get(p["title"], [{"content": ""}]),
                 )
                 for p in plan_data.get("pages", [])
             ],
@@ -661,6 +683,9 @@ async def run_refresh_index(
                 if rel in affected_files_set
             }
         )
+        unaffected_titles = {
+            p.title for p in old_plan.pages if p.title not in affected_page_titles
+        }
         plan = await generate_wiki_plan(
             affected_file_analysis,
             repo_name=name,
@@ -668,14 +693,20 @@ async def run_refresh_index(
             dep_graph=dep_graph,
             readme=readme,
             on_retry=_on_retry,
+            existing_titles=unaffected_titles,
         )
         logger.info(
             "Wiki plan generated: %d pages updated for %s", len(plan.pages), name
         )
         await _update_job(db_path, job_id, progress=65)
 
+        # Collect slugs of the affected OLD pages — these are what we delete.
+        # Using old slugs (not new) handles the case where the LLM retitles a page.
+        affected_old_slugs = {
+            p.slug for p in old_plan.pages if p.title in affected_page_titles
+        }
+
         # Capture existing page_orders before deletion to preserve stable ordering
-        new_slugs = {p.slug for p in plan.pages}
         old_page_orders: dict[str, int] = {}
         max_existing_order = 0
         async with get_session(db_path) as s:
@@ -683,14 +714,14 @@ async def run_refresh_index(
                 sa_select(WikiPage).where(WikiPage.repo_id == repo_id)
             )
             for p in result.scalars().all():
-                if p.slug in new_slugs:
+                if p.slug in affected_old_slugs:
                     old_page_orders[p.slug] = p.page_order
                 max_existing_order = max(max_existing_order, p.page_order)
 
         async with get_session(db_path) as s:
             await s.execute(
                 sa_delete(WikiPage).where(
-                    WikiPage.repo_id == repo_id, WikiPage.slug.in_(new_slugs)
+                    WikiPage.repo_id == repo_id, WikiPage.slug.in_(affected_old_slugs)
                 )
             )
             await s.commit()
@@ -746,9 +777,11 @@ async def run_refresh_index(
             )
 
         # Build a merged plan reflecting the full updated wiki structure.
-        # Use old_plan pages for unchanged entries to preserve their files assignments.
-        new_slugs = {p.slug for p in plan.pages}
-        preserved_pages = [p for p in old_plan.pages if p.slug not in new_slugs]
+        # Unchanged pages are identified by title, not slug, so a retitled page
+        # in the new plan doesn't accidentally preserve the stale old entry.
+        preserved_pages = [
+            p for p in old_plan.pages if p.title not in affected_page_titles
+        ]
         merged_pages = list(plan.pages) + preserved_pages
         merged_plan = WikiPlan(repo_notes=old_plan.repo_notes, pages=merged_pages)
 
