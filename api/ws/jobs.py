@@ -63,7 +63,7 @@ async def ws_job_progress(websocket: WebSocket, job_id: str):
         {"progress": 15,  "status": "running",
          "status_description": "Cloning repo...", "retrying": false}
         {"progress": 80,  "status": "running",
-         "status_description": "Retry 1/3: page generation", "retrying": true}
+         "status_description": "Retry 1/3 in 5s (RateLimitError)", "retrying": true}
         {"progress": 100, "status": "done",
          "status_description": "Wiki generated", "retrying": false}
     """
@@ -78,7 +78,7 @@ async def ws_job_progress(websocket: WebSocket, job_id: str):
                 break
             # Detect whether the worker is currently in a retry cycle by
             # inspecting the status_description prefix written by the worker's
-            # retry wrapper (format: "Retry N/M: <stage name>").
+            # retry wrapper (format: "Retry N/M in Xs (ExcType)").
             retrying = (
                 job.status == "running"
                 and bool(job.status_description)

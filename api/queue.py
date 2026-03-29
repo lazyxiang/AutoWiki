@@ -1,7 +1,7 @@
 """Async helpers that enqueue ARQ background jobs into Redis.
 
 Each public function in this module corresponds to one named ARQ worker task
-(defined in ``worker/tasks.py``).  A fresh Redis connection pool is created
+(defined in ``worker/jobs.py``).  A fresh Redis connection pool is created
 and closed for every call — this keeps the API process stateless and avoids
 holding idle connections between requests.
 """
