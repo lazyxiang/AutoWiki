@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 
 @dataclass
@@ -191,53 +190,69 @@ def _compute_clusters(
     return [sorted(g) for g in sorted(groups.values(), key=lambda g: (-len(g), g[0]))]
 
 
-def summarize_dependencies(
-    graph: DependencyGraph,
-    module_files: dict[str, list[str]],
-) -> dict[str, dict[str, Any]]:
-    """Summarize dependency information per module.
+def format_for_llm_prompt(graph: DependencyGraph, max_edges: int = 150) -> str:
+    """Format dependency graph as a compact string for the LLM planner prompt.
 
-    Args:
-        graph: The dependency graph.
-        module_files: Mapping of module_path -> list of file paths in that module.
+    Shows file → [imports] relationships, capped at max_edges total edges,
+    sorted by number of dependencies (most connected files first).
+    """
+    # Build list of (file, deps) sorted by len(deps) descending
+    sorted_entries = sorted(
+        graph.edges.items(), key=lambda item: len(item[1]), reverse=True
+    )
+
+    lines: list[str] = []
+    total_edges = 0
+    cutoff_index = None
+    for i, (src, deps) in enumerate(sorted_entries):
+        if total_edges + len(deps) > max_edges:
+            cutoff_index = i
+            break
+        lines.append(f"{src} → {', '.join(deps)}")
+        total_edges += len(deps)
+
+    if cutoff_index is not None:
+        remaining = sum(len(d) for _, d in sorted_entries[cutoff_index:])
+        lines.append(f"... ({remaining} more edges not shown)")
+
+    if not lines:
+        return "(no internal dependencies detected)"
+    return "\n".join(lines)
+
+
+def summarize_page_deps(page_files: list[str], graph: DependencyGraph) -> dict:
+    """Summarize dependency info for a page's set of files.
 
     Returns:
-        Dict keyed by module_path with 'depends_on' and 'depended_by' lists.
-    """
-    # Build reverse mapping: file -> module
-    file_to_module: dict[str, str] = {}
-    for mod, files in module_files.items():
-        for f in files:
-            file_to_module[f] = mod
-
-    result: dict[str, dict[str, Any]] = {}
-    for mod in module_files:
-        depends_on: set[str] = set()
-        depended_by: set[str] = set()
-
-        for f in module_files[mod]:
-            for target in graph.edges.get(f, []):
-                target_mod = file_to_module.get(target)
-                if target_mod and target_mod != mod:
-                    depends_on.add(target_mod)
-
-        # Reverse edges
-        for src, targets in graph.edges.items():
-            src_mod = file_to_module.get(src)
-            if src_mod and src_mod != mod:
-                for target in targets:
-                    if file_to_module.get(target) == mod:
-                        depended_by.add(src_mod)
-
-        result[mod] = {
-            "depends_on": sorted(depends_on),
-            "depended_by": sorted(depended_by),
-            "external_deps": sorted(
-                {
-                    dep
-                    for f in module_files[mod]
-                    for dep in graph.external_deps.get(f, [])
-                }
-            ),
+        {
+            "depends_on": [files outside this page that this page imports],
+            "depended_by": [files outside this page that import from this page],
+            "external_deps": [external package names imported by files in this page],
         }
-    return result
+    """
+    page_set = set(page_files)
+
+    depends_on: set[str] = set()
+    depended_by: set[str] = set()
+    external_deps: set[str] = set()
+
+    for f in page_files:
+        # outgoing: files this page imports that are outside the page
+        for dep in graph.edges.get(f, []):
+            if dep not in page_set:
+                depends_on.add(dep)
+        # external packages
+        external_deps.update(graph.external_deps.get(f, []))
+
+    # incoming: files outside this page that import from files in this page
+    for src, targets in graph.edges.items():
+        if src not in page_set:
+            for t in targets:
+                if t in page_set:
+                    depended_by.add(src)
+
+    return {
+        "depends_on": sorted(depends_on),
+        "depended_by": sorted(depended_by),
+        "external_deps": sorted(external_deps),
+    }

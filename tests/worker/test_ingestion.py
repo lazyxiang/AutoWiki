@@ -106,13 +106,21 @@ async def test_get_changed_files_returns_diff(tmp_path):
     assert "b.py" in changed
 
 
-def test_get_affected_modules():
-    from worker.pipeline.ingestion import get_affected_modules
+def test_get_affected_pages():
+    from worker.pipeline.ingestion import get_affected_pages
+    from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan
 
-    module_tree = [{"path": "api", "files": []}, {"path": "worker", "files": []}]
-    affected = get_affected_modules(["api/main.py", "README.md"], module_tree)
-    assert "api" in affected
-    assert "worker" not in affected
+    plan = WikiPlan(
+        pages=[
+            WikiPageSpec(title="API", purpose="API endpoints.", files=["api/main.py"]),
+            WikiPageSpec(
+                title="Worker", purpose="Background jobs.", files=["worker/main.py"]
+            ),
+        ]
+    )
+    affected = get_affected_pages(["api/main.py", "README.md"], plan)
+    assert affected == {"API"}
+    assert get_affected_pages([], plan) == set()
 
 
 def test_extract_readme_finds_markdown(tmp_path):

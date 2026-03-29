@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from worker.llm.base import LLMProvider
+from worker.pipeline.wiki_planner import WikiPlan
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ def validate_mermaid(diagram: str) -> bool:
 
 
 async def synthesize_diagrams(
-    module_tree: list[dict[str, Any]],
+    wiki_plan: WikiPlan,
     repo_name: str,
     llm: LLMProvider,
     max_retries: int = 3,
@@ -58,7 +58,12 @@ async def synthesize_diagrams(
     Returns the validated diagram string, or None if all retries are exhausted.
     """
     module_list = "\n".join(
-        f"- {m['path']} ({len(m.get('files', []))} files)" for m in module_tree
+        (
+            f"- {p.title} [child of: {p.parent}] ({len(p.files or [])} files)"
+            if p.parent is not None
+            else f"- {p.title} ({len(p.files or [])} files)"
+        )
+        for p in wiki_plan.pages
     )
     base_prompt = _DIAGRAM_PROMPT_TEMPLATE.format(
         repo_name=repo_name, module_list=module_list

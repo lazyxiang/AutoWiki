@@ -59,7 +59,7 @@ async def test_full_index_job_updates_status(tmp_path, mock_llm, mock_embedding)
         assert repo.status == "ready"
 
 
-async def test_run_full_index_persists_module_tree(tmp_path, mock_llm, mock_embedding):
+async def test_run_full_index_persists_wiki_plan(tmp_path, mock_llm, mock_embedding):
     import json
 
     from shared.database import dispose_db, get_session, init_db
@@ -115,10 +115,11 @@ async def test_run_full_index_persists_module_tree(tmp_path, mock_llm, mock_embe
         )
 
     try:
-        module_tree_path = tmp_path / "repos" / repo_id / "ast" / "module_tree.json"
-        assert module_tree_path.exists()
-        tree = json.loads(module_tree_path.read_text())
-        assert isinstance(tree, list)
+        wiki_plan_path = tmp_path / "repos" / repo_id / "ast" / "wiki_plan.json"
+        assert wiki_plan_path.exists()
+        plan_data = json.loads(wiki_plan_path.read_text())
+        assert "pages" in plan_data
+        assert isinstance(plan_data["pages"], list)
 
         # Verify Stage 6: diagram prepended to first wiki page in DB
         from sqlalchemy import select as sa_select

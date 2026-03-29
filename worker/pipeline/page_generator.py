@@ -6,7 +6,7 @@ from typing import Any
 from worker.embedding.base import EmbeddingProvider
 from worker.llm.base import LLMProvider
 from worker.pipeline.rag_indexer import FAISSStore
-from worker.pipeline.wiki_planner import PageSpec
+from worker.pipeline.wiki_planner import WikiPageSpec
 from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
 
 _SYSTEM = (
@@ -86,7 +86,7 @@ def _format_context_chunks(context_chunks: list[dict]) -> str:
 
 
 def _build_page_prompt(
-    spec: PageSpec,
+    spec: WikiPageSpec,
     context_chunks: list[dict],
     repo_name: str,
     dep_info: dict[str, Any] | None = None,
@@ -99,10 +99,10 @@ def _build_page_prompt(
         f"Page: {spec.title}",
     ]
 
-    if spec.description:
-        sections.append(f"Purpose: {spec.description}")
+    if spec.purpose:
+        sections.append(f"Purpose: {spec.purpose}")
 
-    sections.append(f"Modules: {', '.join(spec.modules)}")
+    sections.append(f"Source files: {', '.join(spec.files or [])}")
 
     # Dependency context
     if dep_info:
@@ -192,7 +192,7 @@ def _build_page_prompt(
 
 
 async def generate_page(
-    spec: PageSpec,
+    spec: WikiPageSpec,
     store: FAISSStore,
     llm: LLMProvider,
     embedding: EmbeddingProvider,
@@ -203,10 +203,10 @@ async def generate_page(
     on_retry: OnRetryCallback | None = None,
 ) -> PageResult:
     # Multi-query RAG: generate multiple semantic queries for better coverage
-    queries = [f"{spec.title} {' '.join(spec.modules)}"]
+    queries = [f"{spec.title} {' '.join((spec.files or [])[:5])}"]
 
-    if spec.description:
-        queries.append(spec.description)
+    if spec.purpose:
+        queries.append(spec.purpose)
 
     # Add entity names as queries for targeted retrieval
     if entity_details:

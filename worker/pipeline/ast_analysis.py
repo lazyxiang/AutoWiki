@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -169,83 +170,69 @@ def _extract_entities(node: Any, source: bytes) -> list[dict[str, Any]]:
     return results
 
 
-def build_module_tree(root: Path, files: list[Path]) -> list[dict[str, Any]]:
-    """Group files into modules by top-level directory under root."""
-    modules: dict[str, list[Path]] = {}
+@dataclass
+class FileInfo:
+    rel_path: str
+    entities: list[dict] = field(default_factory=list)
+    class_count: int = 0
+    function_count: int = 0
+    summary: str = ""  # comma-joined top-20 entity names
+
+
+@dataclass
+class FileAnalysis:
+    files: dict[str, FileInfo] = field(default_factory=dict)  # keyed by rel_path
+
+    def to_llm_summary(self, max_files: int = 200) -> str:
+        """Return compact per-file summaries for LLM planner prompt.
+
+        Format for each file (truncated to max_files):
+        - path/to/file.py: 3 classes, 7 functions [ClassName, func_one, func_two, ...]
+        """
+        lines = []
+        sorted_keys = sorted(self.files.keys())
+        truncated = sorted_keys[:max_files]
+        remaining = len(sorted_keys) - len(truncated)
+
+        for rel_path in truncated:
+            info = self.files[rel_path]
+            if not info.entities:
+                lines.append(f"{rel_path}: (no named entities)")
+            else:
+                lines.append(
+                    f"{rel_path}: {info.class_count} classes,"
+                    f" {info.function_count} functions [{info.summary}]"
+                )
+
+        if remaining > 0:
+            lines.append(f"... and {remaining} more files")
+
+        return "\n".join(lines)
+
+
+def analyze_all_files(root: Path, files: list[Path]) -> FileAnalysis:
+    """Single-pass AST analysis of all files. Returns FileAnalysis."""
+    result: dict[str, FileInfo] = {}
+
     for f in files:
         try:
-            rel = f.relative_to(root)
+            rel_path = str(f.relative_to(root))
         except ValueError:
-            continue
-        parts = rel.parts
-        module_path = parts[0] if len(parts) > 1 else "."
-        modules.setdefault(module_path, []).append(f)
+            rel_path = str(f)
 
-    return [
-        {"path": mod, "files": [str(f) for f in fs]}
-        for mod, fs in sorted(modules.items())
-    ]
+        analysis = analyze_file(f)
+        entities: list[dict] = analysis["entities"] if analysis else []
 
+        class_count = sum(1 for e in entities if e["type"] == "class")
+        function_count = sum(1 for e in entities if e["type"] == "function")
+        summary = ", ".join(e["name"] for e in entities[:20])
 
-def build_enhanced_module_tree(root: Path, files: list[Path]) -> list[dict[str, Any]]:
-    """Build a module tree enriched with entity summaries for wiki planning."""
-    modules: dict[str, list[Path]] = {}
-    for f in files:
-        try:
-            rel = f.relative_to(root)
-        except ValueError:
-            continue
-        parts = rel.parts
-        module_path = parts[0] if len(parts) > 1 else "."
-        modules.setdefault(module_path, []).append(f)
-
-    result = []
-    for mod, mod_files in sorted(modules.items()):
-        all_entities: list[dict[str, Any]] = []
-        rel_files: list[str] = []
-
-        for f in mod_files:
-            try:
-                rel_files.append(str(f.relative_to(root)))
-            except ValueError:
-                rel_files.append(str(f))
-
-            analysis = analyze_file(f)
-            if analysis:
-                all_entities.extend(analysis["entities"])
-
-        classes = [e for e in all_entities if e["type"] == "class"]
-        functions = [e for e in all_entities if e["type"] == "function"]
-
-        # Build a concise summary of key entities
-        top_entities = [e["name"] for e in all_entities[:20]]
-        summary = ", ".join(top_entities) if top_entities else "(no named entities)"
-
-        result.append(
-            {
-                "path": mod,
-                "files": rel_files,
-                "file_count": len(mod_files),
-                "class_count": len(classes),
-                "function_count": len(functions),
-                "classes": [
-                    {
-                        "name": c["name"],
-                        "signature": c.get("signature"),
-                        "docstring": c.get("docstring"),
-                    }
-                    for c in classes[:10]
-                ],
-                "functions": [
-                    {
-                        "name": f["name"],
-                        "signature": f.get("signature"),
-                        "docstring": f.get("docstring"),
-                    }
-                    for f in functions[:15]
-                ],
-                "summary": summary,
-            }
+        result[rel_path] = FileInfo(
+            rel_path=rel_path,
+            entities=entities,
+            class_count=class_count,
+            function_count=function_count,
+            summary=summary,
         )
 
-    return result
+    return FileAnalysis(files=result)

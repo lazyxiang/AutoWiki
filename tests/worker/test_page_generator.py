@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from worker.pipeline.page_generator import PageResult, generate_page
-from worker.pipeline.wiki_planner import PageSpec
+from worker.pipeline.wiki_planner import WikiPageSpec
 
 
 async def test_generate_page_returns_markdown(mock_llm, mock_embedding):
@@ -29,11 +29,10 @@ async def test_generate_page_returns_markdown(mock_llm, mock_embedding):
             ],
         )
 
-        spec = PageSpec(
+        spec = WikiPageSpec(
             title="Models",
-            slug="models",
-            modules=["models.py"],
-            description="Data model classes.",
+            purpose="Data model classes.",
+            files=["models.py"],
         )
         result = await generate_page(
             spec, store, mock_llm, mock_embedding, repo_name="test"
@@ -68,11 +67,10 @@ async def test_generate_page_with_dep_info_and_entities(mock_llm, mock_embedding
             ],
         )
 
-        spec = PageSpec(
+        spec = WikiPageSpec(
             title="Models",
-            slug="models",
-            modules=["models.py"],
-            description="User and Post data models.",
+            purpose="User and Post data models.",
+            files=["models.py"],
         )
         dep_info = {
             "depends_on": ["utils"],
@@ -119,7 +117,9 @@ async def test_generate_page_content_is_non_empty(mock_llm, mock_embedding):
         store.add(
             [np.zeros(1536, dtype=np.float32)], [{"text": "x = 1", "file": "main.py"}]
         )
-        spec = PageSpec(title="Overview", slug="overview", modules=["."])
+        spec = WikiPageSpec(
+            title="Overview", purpose="High-level overview.", files=["main.py"]
+        )
         result = await generate_page(
             spec, store, mock_llm, mock_embedding, repo_name="test"
         )

@@ -131,14 +131,23 @@ async def refresh_repo(repo_id: str):
 @router.get("/{repo_id}/graph")
 async def get_repo_graph(repo_id: str):
     cfg = get_config()
-    module_tree_path = cfg.data_dir / "repos" / repo_id / "ast" / "module_tree.json"
-    if not module_tree_path.exists():
+    wiki_plan_path = cfg.data_dir / "repos" / repo_id / "ast" / "wiki_plan.json"
+    if not wiki_plan_path.exists():
         raise HTTPException(
             status_code=404, detail="Graph not available — run index first"
         )
-    module_tree = _json.loads(module_tree_path.read_text())
+    wiki_plan = _json.loads(wiki_plan_path.read_text())
     nodes = [
-        {"id": m["path"], "label": m["path"], "file_count": len(m.get("files", []))}
-        for m in module_tree
+        {
+            "id": p["title"],
+            "label": p["title"],
+            "file_count": len(p.get("files", [])),
+        }
+        for p in wiki_plan.get("pages", [])
     ]
-    return {"nodes": nodes, "edges": []}
+    edges = [
+        {"source": p["parent"], "target": p["title"]}
+        for p in wiki_plan.get("pages", [])
+        if p.get("parent")
+    ]
+    return {"nodes": nodes, "edges": edges}

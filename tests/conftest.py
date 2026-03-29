@@ -20,21 +20,18 @@ def mock_llm():
         "pages": [
             {
                 "title": "Overview",
-                "slug": "overview",
-                "modules": ["."],
-                "description": "High-level overview of the project architecture.",
+                "purpose": "High-level overview of the project architecture.",
+                "files": ["main.py"],
             },
             {
                 "title": "Models",
-                "slug": "models",
-                "modules": ["models.py"],
-                "description": "Data models including User and Post classes.",
+                "purpose": "Data models including User and Post classes.",
+                "files": ["models.py"],
             },
             {
                 "title": "Utils",
-                "slug": "utils",
-                "modules": ["utils.py"],
-                "description": "Utility functions for greeting and validation.",
+                "purpose": "Utility functions for greeting and validation.",
+                "files": ["utils.py"],
             },
         ]
     }

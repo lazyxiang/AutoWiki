@@ -86,12 +86,19 @@ async def test_get_graph_returns_nodes(client):
     data_dir = os.environ["AUTOWIKI_DATA_DIR"]
     ast_dir = Path(data_dir) / "repos" / repo_id / "ast"
     ast_dir.mkdir(parents=True)
-    (ast_dir / "module_tree.json").write_text(
+    (ast_dir / "wiki_plan.json").write_text(
         json.dumps(
-            [
-                {"path": "api", "files": ["api/main.py"]},
-                {"path": "worker", "files": ["worker/jobs.py"]},
-            ]
+            {
+                "repo_notes": [{"content": ""}],
+                "pages": [
+                    {"title": "API", "purpose": "API layer.", "files": ["api/main.py"]},
+                    {
+                        "title": "Worker",
+                        "purpose": "Worker layer.",
+                        "files": ["worker/jobs.py"],
+                    },
+                ],
+            }
         )
     )
 
@@ -100,4 +107,4 @@ async def test_get_graph_returns_nodes(client):
     body = resp2.json()
     assert "nodes" in body
     assert len(body["nodes"]) == 2
-    assert body["nodes"][0]["id"] in ("api", "worker")
+    assert body["nodes"][0]["id"] in ("API", "Worker")

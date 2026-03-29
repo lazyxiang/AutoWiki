@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pathspec
+
+if TYPE_CHECKING:
+    from worker.pipeline.wiki_planner import WikiPlan
 
 # Extensions considered source code (non-exhaustive, practical set)
 SOURCE_EXTENSIONS = {
@@ -173,14 +177,19 @@ async def get_changed_files(clone_dir: Path, old_sha: str, new_sha: str) -> list
     return await loop.run_in_executor(None, _do_diff)
 
 
-def get_affected_modules(changed_files: list[str], module_tree: list[dict]) -> set[str]:
-    """Return the set of module paths (from module_tree) touched by changed_files."""
-    module_paths = {m["path"] for m in module_tree}
+def get_affected_pages(changed_files: list[str], wiki_plan: WikiPlan) -> set[str]:
+    """Return titles of wiki pages whose assigned files overlap with changed_files.
+
+    Args:
+        changed_files: List of relative file paths that changed.
+        wiki_plan: The WikiPlan to check against.
+
+    Returns:
+        Set of page titles that need to be regenerated.
+    """
+    changed = set(changed_files)
     affected: set[str] = set()
-    for f in changed_files:
-        parts = Path(f).parts
-        # Root-level files (len==1) map to the root module "."
-        module = parts[0] if len(parts) > 1 else "."
-        if module in module_paths:
-            affected.add(module)
+    for page in wiki_plan.pages:
+        if any(f in changed for f in (page.files or [])):
+            affected.add(page.title)
     return affected

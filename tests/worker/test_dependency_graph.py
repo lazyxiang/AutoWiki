@@ -2,7 +2,8 @@ from worker.pipeline.dependency_graph import (
     DependencyGraph,
     _extract_imports,
     build_dependency_graph,
-    summarize_dependencies,
+    format_for_llm_prompt,
+    summarize_page_deps,
 )
 
 
@@ -90,34 +91,36 @@ def test_build_dependency_graph_clusters(tmp_path):
     assert found_ab_cluster
 
 
-def test_summarize_dependencies(tmp_path):
+def test_format_for_llm_prompt(tmp_path):
     (tmp_path / "main.py").write_text("from models import User\n")
     (tmp_path / "models.py").write_text("class User:\n    pass\n")
 
     files = [tmp_path / "main.py", tmp_path / "models.py"]
     graph = build_dependency_graph(files, tmp_path)
 
-    module_files = {
-        ".": ["main.py", "models.py"],
-    }
-    summary = summarize_dependencies(graph, module_files)
-    assert "." in summary
+    result = format_for_llm_prompt(graph)
+    assert isinstance(result, str)
+    assert len(result) > 0
 
 
-def test_summarize_dependencies_cross_module():
-    """Test cross-module dependency detection."""
-    graph = DependencyGraph(
-        edges={"src/main.py": ["lib/utils.py"]},
-        clusters=[],
-        external_deps={},
-    )
-    module_files = {
-        "src": ["src/main.py"],
-        "lib": ["lib/utils.py"],
-    }
-    summary = summarize_dependencies(graph, module_files)
-    assert "lib" in summary["src"]["depends_on"]
-    assert "src" in summary["lib"]["depended_by"]
+def test_summarize_page_deps(tmp_path):
+    (tmp_path / "main.py").write_text("from models import User\n")
+    (tmp_path / "models.py").write_text("class User:\n    pass\n")
+    (tmp_path / "utils.py").write_text("import os\ndef greet():\n    pass\n")
+
+    files = [tmp_path / "main.py", tmp_path / "models.py", tmp_path / "utils.py"]
+    graph = build_dependency_graph(files, tmp_path)
+
+    # "main.py" page depends on "models.py" (which is outside this page)
+    result = summarize_page_deps(["main.py"], graph)
+    assert "depends_on" in result
+    assert "depended_by" in result
+    assert "external_deps" in result
+    assert "models.py" in result["depends_on"]
+
+    # "models.py" page is depended on by "main.py"
+    result2 = summarize_page_deps(["models.py"], graph)
+    assert "main.py" in result2["depended_by"]
 
 
 def test_unsupported_extension_returns_no_imports(tmp_path):

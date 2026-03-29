@@ -5,9 +5,9 @@ import json
 import logging
 import re
 import uuid
-from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import select as sa_select
@@ -17,26 +17,22 @@ from shared.database import get_session, init_db
 from shared.models import Job, Repository, WikiPage
 from worker.embedding import make_embedding_provider
 from worker.llm import make_llm_provider
-from worker.pipeline.ast_analysis import (
-    analyze_file,
-    build_enhanced_module_tree,
-    build_module_tree,
-)
-from worker.pipeline.dependency_graph import (
-    build_dependency_graph,
-    summarize_dependencies,
-)
+from worker.pipeline.ast_analysis import FileAnalysis, analyze_all_files
+from worker.pipeline.dependency_graph import build_dependency_graph
 from worker.pipeline.diagram_synthesis import synthesize_diagrams
 from worker.pipeline.ingestion import (
     clone_or_fetch,
     extract_readme,
     filter_files,
-    get_affected_modules,
+    get_affected_pages,
     get_changed_files,
 )
 from worker.pipeline.page_generator import generate_page
 from worker.pipeline.rag_indexer import FAISSStore, build_rag_index
-from worker.pipeline.wiki_planner import generate_page_plan
+from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan, generate_wiki_plan
+
+if TYPE_CHECKING:
+    from worker.pipeline.dependency_graph import DependencyGraph
 
 logger = logging.getLogger("worker.task")
 
@@ -89,96 +85,24 @@ def _make_on_retry(db_path: str, job_id: str):
     return _on_retry
 
 
-def _build_file_entities(files: list[Path], clone_root: Path) -> dict[str, list[dict]]:
-    """Run AST analysis on each file and return a map of rel_path → entities."""
-    file_entities: dict[str, list[dict]] = {}
-    for f in files:
-        analysis = analyze_file(f)
-        if analysis and analysis["entities"]:
-            try:
-                rel = str(f.relative_to(clone_root))
-            except ValueError:
-                rel = str(f)
-            file_entities[rel] = analysis["entities"]
-    return file_entities
+def _collect_page_entities(
+    page_spec: WikiPageSpec, file_analysis: FileAnalysis
+) -> list[dict]:
+    """Collect all entities for the files assigned to a page."""
+    entities = []
+    for rel_path in page_spec.files or []:
+        file_info = file_analysis.files.get(rel_path)
+        if file_info:
+            for e in file_info.entities:
+                entities.append({**e, "file": rel_path})
+    return entities
 
 
-def _build_module_files(
-    module_tree: list[dict], clone_root: Path
-) -> dict[str, list[str]]:
-    """Return a map of module_path → list of relative file paths."""
-    module_files: dict[str, list[str]] = {}
-    for m in module_tree:
-        try:
-            module_files[m["path"]] = [
-                str(Path(f).relative_to(clone_root)) for f in m["files"]
-            ]
-        except (ValueError, TypeError):
-            module_files[m["path"]] = m["files"]
-    return module_files
+def _collect_page_deps(page_spec: WikiPageSpec, dep_graph: DependencyGraph) -> dict:
+    """Collect dependency info for the files assigned to a page."""
+    from worker.pipeline.dependency_graph import summarize_page_deps
 
-
-def _build_module_entity_map(
-    enhanced_tree: list[dict], file_entities: dict[str, list[dict]]
-) -> dict[str, list[dict]]:
-    """Build a lookup of module_path → enriched entity list for page generation."""
-    module_entity_map: dict[str, list[dict]] = {}
-    for m in enhanced_tree:
-        mod_path = m["path"]
-        entities_for_mod = []
-        for cls in m.get("classes", []):
-            entities_for_mod.append({**cls, "type": "class"})
-        for fn in m.get("functions", []):
-            entities_for_mod.append({**fn, "type": "function"})
-        # Enrich each entity with its source file and line numbers from file_entities
-        for e in entities_for_mod:
-            if "file" not in e:
-                for f_path in m.get("files", []):
-                    for rel_path, ents in file_entities.items():
-                        if rel_path.endswith(f_path) or f_path.endswith(rel_path):
-                            for fe in ents:
-                                if fe.get("name") == e.get("name"):
-                                    e["file"] = rel_path
-                                    e["start_line"] = fe.get("start_line")
-                                    e["end_line"] = fe.get("end_line")
-                                    break
-                            if "file" in e:
-                                break
-                    if "file" in e:
-                        break
-        # Append file-level entities not captured by the enhanced_tree summary
-        # (e.g. entities beyond the 10-class/15-function cap or nested members).
-        # Key on (name, file) so same-named symbols across different files/classes
-        # (e.g. __init__, run) are all included.
-        seen = {(e.get("name"), e.get("file")) for e in entities_for_mod}
-        for f_path in m.get("files", []):
-            for rel_path, ents in file_entities.items():
-                if rel_path.endswith(f_path) or f_path.endswith(rel_path):
-                    for fe in ents:
-                        key = (fe.get("name"), rel_path)
-                        if key not in seen:
-                            entities_for_mod.append({**fe, "file": rel_path})
-                            seen.add(key)
-        module_entity_map[mod_path] = entities_for_mod
-    return module_entity_map
-
-
-def _collect_page_context(
-    page_spec,
-    module_entity_map: dict[str, list[dict]],
-    dep_summary: dict,
-) -> tuple[list[dict], dict]:
-    """Collect entity details and dependency info for a single page spec."""
-    page_entities: list[dict] = []
-    page_dep_info: dict = {"depends_on": [], "depended_by": [], "external_deps": []}
-    for mod in page_spec.modules:
-        page_entities.extend(module_entity_map.get(mod, []))
-        mod_dep = dep_summary.get(mod, {})
-        for key in ("depends_on", "depended_by", "external_deps"):
-            page_dep_info[key] = list(
-                set(page_dep_info[key]) | set(mod_dep.get(key, []))
-            )
-    return page_entities, page_dep_info
+    return summarize_page_deps(page_spec.files or [], dep_graph)
 
 
 def _prepend_architecture_diagram(content: str, diagram: str) -> str:
@@ -248,7 +172,7 @@ async def run_full_index(
                 for f in wiki_dir.iterdir():
                     if f.is_file():
                         f.unlink()
-            for name_ in ("architecture.mmd",):
+            for name_ in ("wiki_plan.json", "architecture.mmd"):
                 p = ast_dir / name_
                 if p.exists():
                     p.unlink()
@@ -285,41 +209,39 @@ async def run_full_index(
         logger.info("Stage 2: AST Analysis starting")
         ast_dir = repo_data_dir / "ast"
         ast_dir.mkdir(parents=True, exist_ok=True)
-        module_tree = build_module_tree(clone_root, files)
-        logger.info("Module tree built: %d modules", len(module_tree))
-        enhanced_tree = build_enhanced_module_tree(clone_root, files)
-        logger.info("Enhanced tree built: %d modules", len(enhanced_tree))
-        await _write_text_async(ast_dir / "module_tree.json", json.dumps(module_tree))
-        file_entities = await loop.run_in_executor(
-            None, _build_file_entities, files, clone_root
+        file_analysis = await loop.run_in_executor(
+            None, analyze_all_files, clone_root, files
         )
         logger.info(
-            "File entities analyzed: found entities in %d files", len(file_entities)
+            "AST analysis complete: %d files analyzed", len(file_analysis.files)
+        )
+        await _write_text_async(
+            ast_dir / "file_analysis_summary.txt", file_analysis.to_llm_summary()
         )
         await _update_job(
             db_path,
             job_id,
-            progress=30,
+            progress=35,
             status_description="Building dependency graph...",
         )
 
-        # Stage 2b: Dependency Graph
-        logger.info("Stage 2b: Dependency Graph starting")
+        # Stage 3: Dependency Graph
+        logger.info("Stage 3: Dependency Graph starting")
         dep_graph = build_dependency_graph(files, clone_root)
         logger.info(
             "Dependency graph built: %d nodes, %d edges",
             sum(len(c) for c in dep_graph.clusters),
             sum(len(e) for e in dep_graph.edges.values()),
         )
-        dep_summary = summarize_dependencies(
-            dep_graph, _build_module_files(module_tree, clone_root)
-        )
-        logger.info(
-            "Dependency summary created: summarized %d modules", len(dep_summary)
+        await _update_job(
+            db_path,
+            job_id,
+            progress=45,
+            status_description="Indexing code for RAG search (embedding)...",
         )
 
-        # Stage 3: RAG Indexer
-        logger.info("Stage 3: RAG Indexer starting")
+        # Stage 4: RAG Indexer
+        logger.info("Stage 4: RAG Indexer starting")
         llm = make_llm_provider(cfg)
         embedding = make_embedding_provider(cfg)
         logger.info(
@@ -328,16 +250,12 @@ async def run_full_index(
             cfg.embedding.model,
             embedding.dimension,
         )
-
         index_path = repo_data_dir / "faiss.index"
         wiki_dir = repo_data_dir / "wiki"
         store = _make_faiss_store(repo_data_dir, embedding)
-        await _update_job(
-            db_path,
-            job_id,
-            progress=40,
-            status_description="Indexing code for RAG search (embedding)...",
-        )
+        file_entities = {
+            rel: [e for e in info.entities] for rel, info in file_analysis.files.items()
+        }
         logger.info("Building new RAG index at %s", index_path)
         await build_rag_index(
             files,
@@ -355,37 +273,38 @@ async def run_full_index(
             status_description="Planning wiki structure...",
         )
 
-        # Stage 4: Wiki Planner
-        logger.info("Stage 4: Wiki Planner starting")
-        plan = await generate_page_plan(
-            enhanced_tree,
+        # Stage 5: Wiki Planner
+        logger.info("Stage 5: Wiki Planner starting")
+        plan = await generate_wiki_plan(
+            file_analysis,
             repo_name=name,
             llm=llm,
+            dep_graph=dep_graph,
             readme=readme,
-            dep_summary=dep_summary,
-            clusters=dep_graph.clusters,
             on_retry=_on_retry,
         )
         logger.info(
             "Wiki plan generated: %d pages planned for %s", len(plan.pages), name
         )
-        await _update_job(db_path, job_id, progress=65)
-
-        # Stage 5: Page Generator
-        logger.info("Stage 5: Page Generator starting")
         wiki_dir.mkdir(exist_ok=True)
-        structure_data = asdict(plan)
         await _write_text_async(
-            wiki_dir / "wiki.json", json.dumps(structure_data, indent=2)
+            ast_dir / "wiki_plan.json",
+            json.dumps(plan.to_internal_json(), indent=2),
         )
+        await _write_text_async(
+            wiki_dir / "wiki.json",
+            json.dumps(plan.to_wiki_json(), indent=2),
+        )
+        await _update_job(db_path, job_id, progress=70)
+
+        # Stage 6: Page Generator
+        logger.info("Stage 6: Page Generator starting")
         total = len(plan.pages)
-        module_entity_map = _build_module_entity_map(enhanced_tree, file_entities)
 
         for i, page_spec in enumerate(plan.pages):
-            progress = 65 + int(30 * (i + 1) / total)
-            page_entities, page_dep_info = _collect_page_context(
-                page_spec, module_entity_map, dep_summary
-            )
+            progress = 70 + int(27 * (i + 1) / total) if total > 0 else 97
+            page_entities = _collect_page_entities(page_spec, file_analysis)
+            page_dep_info = _collect_page_deps(page_spec, dep_graph)
             result = await generate_page(
                 page_spec,
                 store,
@@ -412,7 +331,7 @@ async def run_full_index(
                         content=result.content,
                         page_order=i,
                         parent_slug=page_spec.parent_slug,
-                        description=page_spec.description,
+                        description=page_spec.purpose,
                     )
                 )
                 await s.commit()
@@ -424,9 +343,9 @@ async def run_full_index(
                 status_description=f"Generating page: {result.title}...",
             )
 
-        # Stage 6: Architecture Diagram Synthesis
-        logger.info("Stage 6: Architecture Diagram Synthesis starting")
-        diagram = await synthesize_diagrams(module_tree, repo_name=name, llm=llm)
+        # Stage 7: Architecture Diagram Synthesis
+        logger.info("Stage 7: Architecture Diagram Synthesis starting")
+        diagram = await synthesize_diagrams(plan, repo_name=name, llm=llm)
         if diagram is not None:
             logger.info("Architecture diagram synthesized: %d chars", len(diagram))
             if plan.pages:
@@ -450,6 +369,7 @@ async def run_full_index(
         else:
             logger.info("No architecture diagram synthesized")
 
+        structure_data = plan.to_api_structure()
         now = datetime.now(UTC)
         logger.info("Full index job complete for %s/%s", owner, name)
         await _update_job(
@@ -493,7 +413,7 @@ async def run_refresh_index(
     name: str,
     clone_root: Path | None = None,
 ):
-    """Incremental refresh: re-run pipeline only for modules with changed files."""
+    """Incremental refresh: re-run pipeline only for pages with changed files."""
     cfg = get_config()
     db_path = str(cfg.database_path)
     data_dir = cfg.data_dir
@@ -538,7 +458,7 @@ async def run_refresh_index(
             )
             return
 
-        # Find changed files and affected modules.
+        # Find changed files and affected pages.
         # Falls back to a forced full reindex if the stored SHA is unreachable
         # (e.g. shallow clone that no longer contains the base commit).
         try:
@@ -563,9 +483,9 @@ async def run_refresh_index(
             return
 
         ast_dir = repo_data_dir / "ast"
-        module_tree_path = ast_dir / "module_tree.json"
-        if not module_tree_path.exists():
-            logger.info("No existing module tree found. Falling back to full reindex.")
+        wiki_plan_path = ast_dir / "wiki_plan.json"
+        if not wiki_plan_path.exists():
+            logger.info("No existing wiki plan found. Falling back to full reindex.")
             await run_full_index(
                 ctx,
                 repo_id=repo_id,
@@ -577,12 +497,25 @@ async def run_refresh_index(
             return
 
         content = await asyncio.get_running_loop().run_in_executor(
-            None, module_tree_path.read_text
+            None, wiki_plan_path.read_text
         )
-        old_module_tree = json.loads(content)
-        affected_modules = get_affected_modules(changed_files, old_module_tree)
-        if not affected_modules:
-            logger.info("No affected modules found for changed files.")
+        plan_data = json.loads(content)
+        old_plan = WikiPlan(
+            repo_notes=plan_data.get("repo_notes", [{"content": ""}]),
+            pages=[
+                WikiPageSpec(
+                    title=p["title"],
+                    purpose=p.get("purpose", ""),
+                    parent=p.get("parent"),
+                    files=p.get("files", []),
+                )
+                for p in plan_data.get("pages", [])
+            ],
+        )
+
+        affected_page_titles = get_affected_pages(changed_files, old_plan)
+        if not affected_page_titles:
+            logger.info("No affected pages found for changed files.")
             now = datetime.now(UTC)
             await _update_repo(db_path, repo_id, last_commit=new_sha, status="ready")
             await _update_job(
@@ -591,11 +524,11 @@ async def run_refresh_index(
                 status="done",
                 progress=100,
                 finished_at=now,
-                status_description="No affected modules found.",
+                status_description="No affected pages found.",
             )
             return
 
-        logger.info("Affected modules: %s", ", ".join(affected_modules))
+        logger.info("Affected pages: %s", ", ".join(affected_page_titles))
         await _update_job(
             db_path,
             job_id,
@@ -614,27 +547,27 @@ async def run_refresh_index(
         readme = await loop.run_in_executor(None, extract_readme, clone_root)
         if readme:
             logger.info("README extracted: %d chars", len(readme))
-        module_tree = build_module_tree(clone_root, files)
-        logger.info("Module tree built: %d modules", len(module_tree))
-        enhanced_tree = build_enhanced_module_tree(clone_root, files)
-        logger.info("Enhanced tree built: %d modules", len(enhanced_tree))
+        file_analysis = await loop.run_in_executor(
+            None, analyze_all_files, clone_root, files
+        )
+        logger.info(
+            "AST analysis complete: %d files analyzed", len(file_analysis.files)
+        )
         ast_dir.mkdir(parents=True, exist_ok=True)
-        await _write_text_async(ast_dir / "module_tree.json", json.dumps(module_tree))
+        await _write_text_async(
+            ast_dir / "file_analysis_summary.txt", file_analysis.to_llm_summary()
+        )
 
-        # Detect structural changes: added or removed top-level modules
-        old_module_paths = {m["path"] for m in old_module_tree}
-        new_module_paths = {m["path"] for m in module_tree}
-        added_modules = new_module_paths - old_module_paths
-        removed_modules = old_module_paths - new_module_paths
+        # Detect structural changes: added or removed files
+        old_all_files = {f for p in old_plan.pages for f in (p.files or [])}
+        new_all_files = set(file_analysis.files.keys())
+        added_files = new_all_files - old_all_files
+        removed_files = old_all_files - new_all_files
 
-        if added_modules:
-            logger.info("Added modules detected: %s", ", ".join(added_modules))
-            affected_modules = affected_modules | added_modules
-
-        if removed_modules:
+        if removed_files:
             logger.info(
-                "Removed modules detected (%s). Falling back to full reindex.",
-                ", ".join(removed_modules),
+                "Removed files detected (%s). Falling back to full reindex.",
+                ", ".join(sorted(removed_files)),
             )
             await run_full_index(
                 ctx,
@@ -646,12 +579,17 @@ async def run_refresh_index(
             )
             return
 
-        file_entities = await loop.run_in_executor(
-            None, _build_file_entities, files, clone_root
-        )
-        logger.info(
-            "File entities analyzed: found entities in %d files", len(file_entities)
-        )
+        if added_files:
+            logger.info("Added files detected: %s", ", ".join(sorted(added_files)))
+            # Include affected pages' titles and add new files to the Overview page
+            # (or the first page if no Overview exists)
+            overview_page = next(
+                (p for p in old_plan.pages if "overview" in p.title.lower()),
+                old_plan.pages[0] if old_plan.pages else None,
+            )
+            if overview_page is not None:
+                affected_page_titles = affected_page_titles | {overview_page.title}
+
         await _update_job(
             db_path,
             job_id,
@@ -659,26 +597,20 @@ async def run_refresh_index(
             status_description="Rebuilding dependency graph...",
         )
 
-        # Stage 2b: Dependency Graph
-        logger.info("Stage 2b: Dependency Graph starting")
+        # Stage 3: Dependency Graph
+        logger.info("Stage 3: Dependency Graph starting")
         dep_graph = build_dependency_graph(files, clone_root)
         logger.info(
             "Dependency graph built: %d nodes, %d edges",
             sum(len(c) for c in dep_graph.clusters),
             sum(len(e) for e in dep_graph.edges.values()),
         )
-        dep_summary = summarize_dependencies(
-            dep_graph, _build_module_files(module_tree, clone_root)
-        )
-        logger.info(
-            "Dependency summary created: summarized %d modules", len(dep_summary)
-        )
         await _update_job(
             db_path, job_id, progress=40, status_description="Rebuilding RAG index..."
         )
 
-        # Stage 3: Rebuild FAISS index
-        logger.info("Stage 3: RAG Indexer starting")
+        # Stage 4: Rebuild FAISS index
+        logger.info("Stage 4: RAG Indexer starting")
         llm = make_llm_provider(cfg)
         embedding = make_embedding_provider(cfg)
         logger.info(
@@ -689,6 +621,9 @@ async def run_refresh_index(
         )
         repo_data_dir.mkdir(parents=True, exist_ok=True)
         store = _make_faiss_store(repo_data_dir, embedding)
+        file_entities = {
+            rel: [e for e in info.entities] for rel, info in file_analysis.files.items()
+        }
         logger.info("Rebuilding RAG index...")
         await build_rag_index(
             files,
@@ -706,19 +641,32 @@ async def run_refresh_index(
             status_description="Re-planning updated wiki pages...",
         )
 
-        # Stage 4: Re-plan for affected modules
+        # Stage 5: Re-plan for affected pages
         logger.info(
-            "Stage 4: Wiki Planner starting for %d affected modules",
-            len(affected_modules),
+            "Stage 5: Wiki Planner starting for %d affected pages",
+            len(affected_page_titles),
         )
-        affected_enhanced = [m for m in enhanced_tree if m["path"] in affected_modules]
-        plan = await generate_page_plan(
-            affected_enhanced,
+        # Build a FileAnalysis containing only files from the affected pages
+        affected_files_set = {
+            f
+            for p in old_plan.pages
+            if p.title in affected_page_titles
+            for f in (p.files or [])
+        }
+        affected_files_set |= added_files
+        affected_file_analysis = FileAnalysis(
+            files={
+                rel: info
+                for rel, info in file_analysis.files.items()
+                if rel in affected_files_set
+            }
+        )
+        plan = await generate_wiki_plan(
+            affected_file_analysis,
             repo_name=name,
             llm=llm,
+            dep_graph=dep_graph,
             readme=readme,
-            dep_summary=dep_summary,
-            clusters=dep_graph.clusters,
             on_retry=_on_retry,
         )
         logger.info(
@@ -747,17 +695,15 @@ async def run_refresh_index(
             )
             await s.commit()
 
-        # Stage 5: Regenerate pages
-        logger.info("Stage 5: Page Generator starting")
+        # Stage 6: Regenerate pages
+        logger.info("Stage 6: Page Generator starting")
         wiki_dir = repo_data_dir / "wiki"
         wiki_dir.mkdir(exist_ok=True)
         total = len(plan.pages)
-        module_entity_map = _build_module_entity_map(enhanced_tree, file_entities)
 
         for i, page_spec in enumerate(plan.pages):
-            page_entities, page_dep_info = _collect_page_context(
-                page_spec, module_entity_map, dep_summary
-            )
+            page_entities = _collect_page_entities(page_spec, file_analysis)
+            page_dep_info = _collect_page_deps(page_spec, dep_graph)
             result = await generate_page(
                 page_spec,
                 store,
@@ -786,7 +732,7 @@ async def run_refresh_index(
                         content=result.content,
                         page_order=page_order,
                         parent_slug=page_spec.parent_slug,
-                        description=page_spec.description,
+                        description=page_spec.purpose,
                     )
                 )
                 await s.commit()
@@ -799,9 +745,16 @@ async def run_refresh_index(
                 status_description=f"Regenerating page: {result.title}...",
             )
 
-        # Stage 6: Rebuild architecture diagram and update first wiki page
-        logger.info("Stage 6: Architecture Diagram Synthesis starting")
-        diagram = await synthesize_diagrams(module_tree, repo_name=name, llm=llm)
+        # Build a merged plan reflecting the full updated wiki structure.
+        # Use old_plan pages for unchanged entries to preserve their files assignments.
+        new_slugs = {p.slug for p in plan.pages}
+        preserved_pages = [p for p in old_plan.pages if p.slug not in new_slugs]
+        merged_pages = list(plan.pages) + preserved_pages
+        merged_plan = WikiPlan(repo_notes=old_plan.repo_notes, pages=merged_pages)
+
+        # Stage 7: Rebuild architecture diagram and update first wiki page
+        logger.info("Stage 7: Architecture Diagram Synthesis starting")
+        diagram = await synthesize_diagrams(merged_plan, repo_name=name, llm=llm)
         if diagram:
             logger.info("Architecture diagram synthesized: %d chars", len(diagram))
             await _write_text_async(ast_dir / "architecture.mmd", diagram)
@@ -825,30 +778,16 @@ async def run_refresh_index(
         else:
             logger.info("No architecture diagram synthesized")
 
-        # Rebuild and persist wiki structure so navigation stays consistent
-        async with get_session(db_path) as s:
-            result_all = await s.execute(
-                sa_select(WikiPage)
-                .where(WikiPage.repo_id == repo_id)
-                .order_by(WikiPage.page_order)
-            )
-            all_pages = result_all.scalars().all()
-        structure_data = {
-            "pages": [
-                {
-                    "title": p.title,
-                    "slug": p.slug,
-                    "modules": [],
-                    "parent_slug": p.parent_slug,
-                    "description": p.description,
-                }
-                for p in all_pages
-            ]
-        }
         wiki_dir.mkdir(parents=True, exist_ok=True)
         await _write_text_async(
-            wiki_dir / "wiki.json", json.dumps(structure_data, indent=2)
+            ast_dir / "wiki_plan.json",
+            json.dumps(merged_plan.to_internal_json(), indent=2),
         )
+        await _write_text_async(
+            wiki_dir / "wiki.json",
+            json.dumps(merged_plan.to_wiki_json(), indent=2),
+        )
+        structure_data = merged_plan.to_api_structure()
 
         now = datetime.now(UTC)
         logger.info("Incremental refresh job complete for %s/%s", owner, name)
