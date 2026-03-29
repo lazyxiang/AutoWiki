@@ -81,7 +81,7 @@ interface Props { title: string; content: string }
 
 export function WikiPageContent({ title, content }: Props) {
   return (
-    <article className="max-w-4xl p-8 text-foreground">
+    <article className="w-full max-w-4xl p-8 text-foreground">
       <h1 className="text-3xl font-bold mb-6">{title}</h1>
       <div className="wiki-content">
         <ReactMarkdown

@@ -1,8 +1,7 @@
-# Frontend Redesign Progress
+# PR #11 Review Issues Progress
 
-- [x] Task 1: Global Theme & Base Layout
-- [x] Task 2: Repository Card Component
-- [x] Task 3: Home Page Redesign
-- [x] Task 4: Wiki Three-Column Layout
-- [x] Task 5: Chat Drawer & Dependency Graph
-- [ ] Task 6: Final Verification
+- [x] Task 1: Fix CSS Variables & Theme Consistency
+- [x] Task 2: Robust Chat Panel & Formatting
+- [x] Task 3: Layout Constraints & Accessibility
+- [ ] Task 4: UI Polishing & API Corrections
+- [ ] Task 5: Final Verification

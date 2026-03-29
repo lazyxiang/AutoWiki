@@ -19,9 +19,7 @@ export default async function WikiLayout({
     <div className="flex h-screen overflow-hidden">
       <WikiSidebar pages={pages} owner={owner} repo={repo} />
       <main className="flex-1 overflow-y-auto flex justify-center">
-        <div className="w-full max-w-4xl min-w-0">
-          {children}
-        </div>
+        {children}
       </main>
       <TableOfContents />
       <ChatDrawer repoId={rid} />
