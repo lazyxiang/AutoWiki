@@ -1,15 +1,35 @@
 "use client";
 import { useEffect, useReducer } from "react";
-import { ReactFlow, type Node, type Edge, Background, Controls } from "@xyflow/react";
+import { ReactFlow, type Node, type Edge, Background, Controls, BackgroundVariant } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { getRepoGraph } from "@/lib/api";
+import { Loader2, AlertCircle } from "lucide-react";
 
-type State = { nodes: Node[]; edges: Edge[]; error: string | null; loaded: boolean };
+/**
+ * State for the dependency graph.
+ */
+type State = { 
+  /** List of nodes representing modules. */
+  nodes: Node[]; 
+  /** List of edges representing dependencies. */
+  edges: Edge[]; 
+  /** Error message if fetching fails. */
+  error: string | null; 
+  /** Whether the initial load has completed. */
+  loaded: boolean 
+};
+
+/**
+ * Actions for the dependency graph reducer.
+ */
 type Action =
   | { type: "reset" }
   | { type: "success"; nodes: Node[]; edges: Edge[] }
   | { type: "error"; message: string };
 
+/**
+ * Reducer for managing the dependency graph state.
+ */
 function reducer(_: State, action: Action): State {
   switch (action.type) {
     case "reset": return { nodes: [], edges: [], error: null, loaded: false };
@@ -18,6 +38,11 @@ function reducer(_: State, action: Action): State {
   }
 }
 
+/**
+ * Visualizes the module dependency graph using ReactFlow.
+ * 
+ * @param repoId - The ID of the repository to visualize.
+ */
 export default function DependencyGraph({ repoId }: { repoId: string }) {
   const [{ nodes, edges, error, loaded }, dispatch] = useReducer(reducer, { nodes: [], edges: [], error: null, loaded: false });
 
@@ -38,27 +63,58 @@ export default function DependencyGraph({ repoId }: { repoId: string }) {
             x: 400 + radius * Math.cos((2 * Math.PI * i) / count),
             y: 300 + radius * Math.sin((2 * Math.PI * i) / count),
           },
-          style: { background: "#1f2937", color: "#f9fafb", border: "1px solid #4b5563", borderRadius: "0.5rem", padding: "0.5rem" },
+          style: { 
+            background: "var(--background, #ffffff)", 
+            color: "var(--foreground, #1e293b)", 
+            border: "2px solid var(--border, #e2e8f0)", 
+            borderRadius: "12px", 
+            padding: "10px",
+            fontSize: "12px",
+            fontWeight: "600",
+            boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)",
+            width: 150,
+            textAlign: "center"
+          },
         }));
         const flowEdges: Edge[] = data.edges.map((e, i) => ({
           id: `e${i}`,
           source: e.source,
           target: e.target,
-          animated: false,
+          animated: true,
+          style: { stroke: "var(--primary, #6366f1)", strokeWidth: 2 },
         }));
         dispatch({ type: "success", nodes: flowNodes, edges: flowEdges });
       })
       .catch((e: Error) => dispatch({ type: "error", message: e.message }));
   }, [repoId]);
 
-  if (error) return <p style={{ color: "#ef4444" }}>Failed to load graph: {error}</p>;
-  if (!loaded) return <p style={{ color: "#9ca3af" }}>Loading module graph…</p>;
-  if (!nodes.length) return <p style={{ color: "#9ca3af" }}>No modules found.</p>;
+  if (error) return (
+    <div className="flex flex-col items-center justify-center h-[600px] text-red-500 gap-2">
+      <AlertCircle className="h-8 w-8" />
+      <p>Failed to load graph: {error}</p>
+    </div>
+  );
+  if (!loaded) return (
+    <div className="flex flex-col items-center justify-center h-[600px] text-slate-400 gap-2">
+      <Loader2 className="h-8 w-8 animate-spin" />
+      <p>Loading module graph…</p>
+    </div>
+  );
+  if (!nodes.length) return (
+    <div className="flex flex-col items-center justify-center h-[600px] text-slate-400 gap-2">
+      <p>No modules found.</p>
+    </div>
+  );
 
   return (
-    <div style={{ width: "100%", height: "600px" }}>
-      <ReactFlow nodes={nodes} edges={edges} fitView>
-        <Background color="#374151" gap={16} />
+    <div className="w-full h-[600px] border border-slate-200 rounded-xl overflow-hidden bg-white">
+      <ReactFlow 
+        nodes={nodes} 
+        edges={edges} 
+        fitView
+        colorMode="light"
+      >
+        <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#e2e8f0" />
         <Controls />
       </ReactFlow>
     </div>
