@@ -40,9 +40,9 @@ export default function DependencyGraph({ repoId }: { repoId: string }) {
             y: 300 + radius * Math.sin((2 * Math.PI * i) / count),
           },
           style: { 
-            background: "#ffffff", 
-            color: "#1e293b", 
-            border: "2px solid #e2e8f0", 
+            background: "var(--background, #ffffff)", 
+            color: "var(--foreground, #1e293b)", 
+            border: "2px solid var(--border, #e2e8f0)", 
             borderRadius: "12px", 
             padding: "10px",
             fontSize: "12px",
@@ -57,7 +57,7 @@ export default function DependencyGraph({ repoId }: { repoId: string }) {
           source: e.source,
           target: e.target,
           animated: true,
-          style: { stroke: "#6366f1", strokeWidth: 2 },
+          style: { stroke: "var(--primary, #6366f1)", strokeWidth: 2 },
         }));
         dispatch({ type: "success", nodes: flowNodes, edges: flowEdges });
       })
@@ -90,7 +90,7 @@ export default function DependencyGraph({ repoId }: { repoId: string }) {
         fitView
         colorMode="light"
       >
-        <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#e2e8f0" />
+        <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="var(--border, #e2e8f0)" />
         <Controls />
       </ReactFlow>
     </div>

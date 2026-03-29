@@ -67,6 +67,24 @@
   --input: oklch(0.92 0.01 260);
   --ring: oklch(0.55 0.20 260);
   --radius: 0.75rem;
+
+  --destructive: oklch(0.60 0.25 27);
+  --destructive-foreground: oklch(0.98 0 0);
+
+  --sidebar: oklch(0.98 0.01 260);
+  --sidebar-foreground: oklch(0.15 0.02 260);
+  --sidebar-primary: oklch(0.55 0.20 260);
+  --sidebar-primary-foreground: oklch(0.98 0 0);
+  --sidebar-accent: oklch(0.96 0.01 260);
+  --sidebar-accent-foreground: oklch(0.20 0.02 260);
+  --sidebar-border: oklch(0.92 0.01 260);
+  --sidebar-ring: oklch(0.55 0.20 260);
+
+  --chart-1: oklch(0.60 0.20 260);
+  --chart-2: oklch(0.55 0.15 200);
+  --chart-3: oklch(0.50 0.15 150);
+  --chart-4: oklch(0.45 0.15 100);
+  --chart-5: oklch(0.40 0.15 50);
 }
 
 .dark {
