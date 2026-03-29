@@ -18,24 +18,30 @@ interface Message {
   content: string;
 }
 
+/**
+ * A conversational interface for interacting with the codebase AI.
+ * Supports streaming responses and auto-scrolling.
+ * 
+ * @param repoId - The ID of the repository to chat about.
+ */
 export default function ChatPanel({ repoId }: { repoId: string }) {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const streamingRef = useRef("");
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const viewportRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     createChatSession(repoId).then((d) => setSessionId(d.session_id));
   }, [repoId]);
 
+  /**
+   * Scrolls the chat viewport to the bottom.
+   */
   const scrollToBottom = useCallback(() => {
-    if (scrollRef.current) {
-      const viewport = scrollRef.current.querySelector('[data-slot="scroll-area-viewport"]');
-      if (viewport) {
-        viewport.scrollTop = viewport.scrollHeight;
-      }
+    if (viewportRef.current) {
+      viewportRef.current.scrollTop = viewportRef.current.scrollHeight;
     }
   }, []);
 
@@ -43,6 +49,9 @@ export default function ChatPanel({ repoId }: { repoId: string }) {
     scrollToBottom();
   }, [messages, scrollToBottom]);
 
+  /**
+   * Handles incoming chunks of the AI's response stream.
+   */
   const handleChunk = useCallback((chunk: string) => {
     streamingRef.current += chunk;
     setMessages((prev) => {
@@ -54,11 +63,17 @@ export default function ChatPanel({ repoId }: { repoId: string }) {
     });
   }, []);
 
+  /**
+   * Called when the response stream completes successfully.
+   */
   const handleDone = useCallback(() => {
     setStreaming(false);
     streamingRef.current = "";
   }, []);
 
+  /**
+   * Handles errors during streaming by clearing the buffer and showing an error message.
+   */
   const handleError = useCallback((err: string) => {
     setStreaming(false);
     streamingRef.current = "";
@@ -67,6 +82,9 @@ export default function ChatPanel({ repoId }: { repoId: string }) {
 
   const { sendMessage } = useChatStream(repoId, sessionId, handleChunk, handleDone, handleError);
 
+  /**
+   * Submits the user's message to the chat stream.
+   */
   const submit = () => {
     if (!input.trim() || streaming) return;
     setMessages((prev) => [...prev, { role: "user", content: input }]);
@@ -77,7 +95,7 @@ export default function ChatPanel({ repoId }: { repoId: string }) {
 
   return (
     <div className="flex flex-col h-full bg-white">
-      <ScrollArea className="flex-1 p-4" ref={scrollRef}>
+      <ScrollArea className="flex-1 p-4" viewportRef={viewportRef}>
         <div className="flex flex-col gap-4">
           {messages.length === 0 && (
             <div className="text-center py-20 px-6">

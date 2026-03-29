@@ -6,10 +6,18 @@ import ChatPanel from "./ChatPanel";
 import { Button } from "./ui/button";
 import { cn } from "@/lib/utils";
 
+/**
+ * Props for the ChatDrawer component.
+ */
 interface ChatDrawerProps {
+  /** The ID of the repository the chat session belongs to. */
   repoId: string;
 }
 
+/**
+ * A collapsible side drawer that houses the chat interface.
+ * Triggered by a floating action button (FAB) in the bottom-right.
+ */
 export function ChatDrawer({ repoId }: ChatDrawerProps) {
   const [isOpen, setIsOpen] = useState(false);
 
@@ -40,7 +48,7 @@ export function ChatDrawer({ repoId }: ChatDrawerProps) {
       <aside
         role="dialog"
         aria-modal="true"
-        aria-label="Codebase Chat"
+        aria-label="Codebase Assistant Chat"
         className={cn(
           "fixed top-0 right-0 h-full w-[400px] max-w-[90vw] bg-white shadow-2xl transform transition-transform duration-300 ease-in-out z-40 flex flex-col border-l border-slate-200",
           isOpen ? "translate-x-0" : "translate-x-full"

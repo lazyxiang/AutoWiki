@@ -5,11 +5,20 @@ import { ScrollArea as ScrollAreaPrimitive } from "@base-ui/react/scroll-area"
 
 import { cn } from "@/lib/utils"
 
+/**
+ * A custom ScrollArea component based on Base UI.
+ * 
+ * @param viewportRef - Optional ref to the underlying scrollable viewport element.
+ * @param className - Additional Tailwind CSS classes.
+ * @param children - The scrollable content.
+ * @param props - Root component props.
+ */
 function ScrollArea({
   className,
   children,
+  viewportRef,
   ...props
-}: ScrollAreaPrimitive.Root.Props) {
+}: ScrollAreaPrimitive.Root.Props & { viewportRef?: React.RefObject<HTMLDivElement | null> }) {
   return (
     <ScrollAreaPrimitive.Root
       data-slot="scroll-area"
@@ -18,6 +27,7 @@ function ScrollArea({
     >
       <ScrollAreaPrimitive.Viewport
         data-slot="scroll-area-viewport"
+        ref={viewportRef}
         className="size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1"
       >
         {children}
@@ -28,6 +38,9 @@ function ScrollArea({
   )
 }
 
+/**
+ * Internal ScrollBar component for the ScrollArea.
+ */
 function ScrollBar({
   className,
   orientation = "vertical",

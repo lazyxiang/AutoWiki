@@ -5,12 +5,31 @@ import "@xyflow/react/dist/style.css";
 import { getRepoGraph } from "@/lib/api";
 import { Loader2, AlertCircle } from "lucide-react";
 
-type State = { nodes: Node[]; edges: Edge[]; error: string | null; loaded: boolean };
+/**
+ * State for the dependency graph.
+ */
+type State = { 
+  /** List of nodes representing modules. */
+  nodes: Node[]; 
+  /** List of edges representing dependencies. */
+  edges: Edge[]; 
+  /** Error message if fetching fails. */
+  error: string | null; 
+  /** Whether the initial load has completed. */
+  loaded: boolean 
+};
+
+/**
+ * Actions for the dependency graph reducer.
+ */
 type Action =
   | { type: "reset" }
   | { type: "success"; nodes: Node[]; edges: Edge[] }
   | { type: "error"; message: string };
 
+/**
+ * Reducer for managing the dependency graph state.
+ */
 function reducer(_: State, action: Action): State {
   switch (action.type) {
     case "reset": return { nodes: [], edges: [], error: null, loaded: false };
@@ -19,6 +38,11 @@ function reducer(_: State, action: Action): State {
   }
 }
 
+/**
+ * Visualizes the module dependency graph using ReactFlow.
+ * 
+ * @param repoId - The ID of the repository to visualize.
+ */
 export default function DependencyGraph({ repoId }: { repoId: string }) {
   const [{ nodes, edges, error, loaded }, dispatch] = useReducer(reducer, { nodes: [], edges: [], error: null, loaded: false });
 
@@ -90,7 +114,7 @@ export default function DependencyGraph({ repoId }: { repoId: string }) {
         fitView
         colorMode="light"
       >
-        <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="var(--border, #e2e8f0)" />
+        <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#e2e8f0" />
         <Controls />
       </ReactFlow>
     </div>

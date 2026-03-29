@@ -4,21 +4,34 @@ import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 
+/**
+ * Represents a single heading item in the Table of Contents.
+ */
 interface Heading {
+  /** The DOM ID of the heading. */
   id: string;
+  /** The text content of the heading. */
   text: string;
+  /** The heading level (e.g., 2 for H2, 3 for H3). */
   level: number;
 }
 
+/**
+ * A sticky sidebar component that displays a Table of Contents for the current page.
+ * It dynamically extracts headings from the `<article>` element.
+ */
 export function TableOfContents() {
   const [headings, setHeadings] = useState<Heading[]>([]);
   const pathname = usePathname();
 
   useEffect(() => {
-    // Small delay to ensure ReactMarkdown has finished rendering
+    // Small delay to ensure ReactMarkdown has finished rendering the DOM
     const timer = setTimeout(() => {
       const article = document.querySelector("article");
-      if (!article) return;
+      if (!article) {
+        setHeadings([]);
+        return;
+      }
 
       const items = Array.from(article.querySelectorAll("h2, h3")).map((el) => ({
         id: el.id,
