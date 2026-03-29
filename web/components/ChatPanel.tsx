@@ -8,6 +8,10 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { ScrollArea } from "./ui/scroll-area";
 import { cn } from "@/lib/utils";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import rehypeHighlight from "rehype-highlight";
+import "highlight.js/styles/github-dark.css";
 
 interface Message {
   role: "user" | "assistant";
@@ -57,6 +61,7 @@ export default function ChatPanel({ repoId }: { repoId: string }) {
 
   const handleError = useCallback((err: string) => {
     setStreaming(false);
+    streamingRef.current = "";
     setMessages((prev) => [...prev, { role: "assistant", content: `Error: ${err}` }]);
   }, []);
 
@@ -105,11 +110,20 @@ export default function ChatPanel({ repoId }: { repoId: string }) {
                 className={cn(
                   "px-4 py-2 rounded-2xl text-sm leading-relaxed",
                   m.role === "user"
-                    ? "bg-indigo-600 text-white rounded-tr-none shadow-sm"
-                    : "bg-slate-100 text-slate-900 rounded-tl-none border border-slate-200"
+                    ? "bg-indigo-600 text-white rounded-tr-none shadow-sm whitespace-pre-wrap"
+                    : "bg-slate-100 text-slate-900 rounded-tl-none border border-slate-200 wiki-content"
                 )}
               >
-                {m.content}
+                {m.role === "assistant" ? (
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    rehypePlugins={[rehypeHighlight]}
+                  >
+                    {m.content}
+                  </ReactMarkdown>
+                ) : (
+                  m.content
+                )}
               </div>
             </div>
           ))}
