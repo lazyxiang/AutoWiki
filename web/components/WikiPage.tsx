@@ -109,20 +109,21 @@ interface Props {
  * Automatically generates unique IDs for headings to support Table of Contents.
  */
 export function WikiPageContent({ title, content }: Props) {
-  const idCounts = useRef<Record<string, number>>({});
+  // Use a local object for ID tracking within a single render pass.
+  // This is safe because we want deterministic IDs for the current content.
+  const idCounts: Record<string, number> = {};
 
   /**
-   * Resets the ID counter and generates a unique ID for a heading.
+   * Generates a unique ID for a heading.
    */
   const getUniqueId = (text: string) => {
     const baseId = slugify(text);
-    const count = idCounts.current[baseId] || 0;
-    idCounts.current[baseId] = count + 1;
+    const count = idCounts[baseId] || 0;
+    idCounts[baseId] = count + 1;
     return count === 0 ? baseId : `${baseId}-${count}`;
   };
 
-  // Reset counters on each render to keep IDs stable within a single content run
-  idCounts.current = {};
+  const components = getComponents(getUniqueId);
 
   return (
     <article className="w-full max-w-4xl p-8 text-foreground mx-auto">
@@ -131,7 +132,7 @@ export function WikiPageContent({ title, content }: Props) {
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           rehypePlugins={[rehypeHighlight]}
-          components={getComponents(getUniqueId)}
+          components={components}
         >
           {content}
         </ReactMarkdown>

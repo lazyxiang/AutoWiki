@@ -29,7 +29,7 @@ export function TableOfContents() {
     const timer = setTimeout(() => {
       const article = document.querySelector("article");
       if (!article) {
-        setHeadings([]);
+        setHeadings([]); // Clear stale anchors if no article is found
         return;
       }
 
