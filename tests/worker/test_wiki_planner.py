@@ -121,11 +121,57 @@ def test_wiki_plan_to_wiki_json():
     )
     wiki_json = plan.to_wiki_json()
     assert "pages" in wiki_json
+    assert "repo_notes" in wiki_json
     for page in wiki_json["pages"]:
         assert "files" not in page
         assert "slug" not in page
         assert "title" in page
         assert "purpose" in page
+    # child page preserves parent title
+    api_page = next(p for p in wiki_json["pages"] if p["title"] == "API")
+    assert api_page.get("parent") == "Overview"
+    # root page has no parent key
+    overview = next(p for p in wiki_json["pages"] if p["title"] == "Overview")
+    assert "parent" not in overview
+
+
+def test_wiki_plan_to_internal_json():
+    plan = WikiPlan(
+        pages=[
+            WikiPageSpec(
+                title="Overview",
+                purpose="Top-level page.",
+                files=["main.py", "README.md"],
+            ),
+            WikiPageSpec(
+                title="Engine",
+                purpose="Core engine.",
+                parent="Overview",
+                files=["engine/core.py"],
+            ),
+        ]
+    )
+    internal = plan.to_internal_json()
+    assert "repo_notes" in internal
+    assert "pages" in internal
+    overview = next(p for p in internal["pages"] if p["title"] == "Overview")
+    assert overview["files"] == ["main.py", "README.md"]
+    engine = next(p for p in internal["pages"] if p["title"] == "Engine")
+    assert "engine/core.py" in engine["files"]
+    assert engine.get("parent") == "Overview"
+    # files must not be absent
+    for page in internal["pages"]:
+        assert "files" in page
+
+
+def test_wiki_page_spec_parent_slug():
+    spec = WikiPageSpec(
+        title="Sub Page", purpose="Child.", parent="Engine Architecture"
+    )
+    assert spec.parent_slug == "engine-architecture"
+
+    spec_no_parent = WikiPageSpec(title="Root", purpose="Root page.")
+    assert spec_no_parent.parent_slug is None
 
 
 def test_wiki_plan_to_api_structure():

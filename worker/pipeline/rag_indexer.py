@@ -11,21 +11,6 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
 
 
-def chunk_file(path: Path, chunk_size: int = 1000, overlap: int = 100) -> list[str]:
-    """Split a source file into overlapping text chunks."""
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return []
-    if not text.strip():
-        return []
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size, chunk_overlap=overlap
-    )
-    chunks = splitter.split_text(text)
-    return chunks if chunks else [text]
-
-
 def chunk_file_with_lines(
     path: Path,
     chunk_size: int = 1000,

@@ -6,29 +6,9 @@ import numpy as np
 from worker.pipeline.rag_indexer import (
     FAISSStore,
     build_rag_index,
-    chunk_file,
     chunk_file_with_entities,
     chunk_file_with_lines,
 )
-
-
-def test_chunk_file_returns_non_empty():
-    import tempfile
-
-    content = "def foo():\n    return 1\n" * 50
-    with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
-        f.write(content)
-        fname = Path(f.name)
-    chunks = chunk_file(fname, chunk_size=200, overlap=20)
-    assert len(chunks) >= 1
-    assert all(isinstance(c, str) for c in chunks)
-
-
-def test_chunk_file_small_file_is_one_chunk(tmp_path):
-    small = tmp_path / "small.py"
-    small.write_text("x = 1\ny = 2\n")
-    chunks = chunk_file(small, chunk_size=1000, overlap=100)
-    assert len(chunks) == 1
 
 
 def test_chunk_file_with_lines_tracks_line_numbers(tmp_path):

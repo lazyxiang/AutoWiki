@@ -100,7 +100,31 @@ def test_format_for_llm_prompt(tmp_path):
 
     result = format_for_llm_prompt(graph)
     assert isinstance(result, str)
-    assert len(result) > 0
+    assert "→" in result
+    assert "main.py" in result
+    assert "models.py" in result
+
+
+def test_format_for_llm_prompt_no_deps(tmp_path):
+    (tmp_path / "standalone.py").write_text("x = 1\n")
+    graph = build_dependency_graph([tmp_path / "standalone.py"], tmp_path)
+    result = format_for_llm_prompt(graph)
+    assert "(no internal dependencies detected)" in result
+
+
+def test_format_for_llm_prompt_truncation(tmp_path):
+    """When edges exceed max_edges, a '...more edges' line is appended."""
+    # Create a hub file with many deps
+    deps = "\n".join(f"from mod{i} import x" for i in range(10))
+    (tmp_path / "hub.py").write_text(deps + "\n")
+    for i in range(10):
+        (tmp_path / f"mod{i}.py").write_text("x = 1\n")
+
+    all_files = list(tmp_path.glob("*.py"))
+    graph = build_dependency_graph(all_files, tmp_path)
+
+    result = format_for_llm_prompt(graph, max_edges=3)
+    assert "more edges not shown" in result
 
 
 def test_summarize_page_deps(tmp_path):

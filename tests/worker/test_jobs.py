@@ -119,7 +119,23 @@ async def test_run_full_index_persists_wiki_plan(tmp_path, mock_llm, mock_embedd
         assert wiki_plan_path.exists()
         plan_data = json.loads(wiki_plan_path.read_text())
         assert "pages" in plan_data
+        assert "repo_notes" in plan_data
         assert isinstance(plan_data["pages"], list)
+        # Internal format must include files for each page
+        for page in plan_data["pages"]:
+            assert "files" in page, f"page {page.get('title')} missing 'files'"
+
+        # User-facing wiki.json must exist and must NOT contain files
+        wiki_json_path = tmp_path / "repos" / repo_id / "wiki" / "wiki.json"
+        assert wiki_json_path.exists()
+        wiki_json_data = json.loads(wiki_json_path.read_text())
+        assert "pages" in wiki_json_data
+        assert "repo_notes" in wiki_json_data
+        for page in wiki_json_data["pages"]:
+            assert "files" not in page, (
+                f"wiki.json page {page.get('title')} should not contain 'files'"
+            )
+            assert "purpose" in page
 
         # Verify Stage 6: diagram prepended to first wiki page in DB
         from sqlalchemy import select as sa_select

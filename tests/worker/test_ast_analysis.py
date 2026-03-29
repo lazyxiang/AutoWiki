@@ -84,10 +84,6 @@ def test_analyze_python_file():
     names = [e["name"] for e in result["entities"]]
     assert "User" in names
     assert "Post" in names
-
-
-def test_analyze_python_file_entities_have_type():
-    result = analyze_file(FIXTURE / "models.py")
     for entity in result["entities"]:
         assert "type" in entity  # "class" or "function"
         assert "name" in entity
@@ -157,9 +153,27 @@ def test_analyze_all_files_to_llm_summary(tmp_path):
     summary = result.to_llm_summary()
 
     assert isinstance(summary, str)
-    assert len(summary) > 0
     assert "main.py" in summary
     assert "utils.py" in summary
+    # main.py line should report counts and entity names
+    main_line = next(line for line in summary.splitlines() if "main.py" in line)
+    assert "1 classes" in main_line
+    assert "1 functions" in main_line
+    assert "App" in main_line  # entity names in summary
+    # utils.py line should report 0 classes
+    utils_line = next(line for line in summary.splitlines() if "utils.py" in line)
+    assert "0 classes" in utils_line
+
+
+def test_analyze_all_files_to_llm_summary_truncation(tmp_path):
+    for i in range(3):
+        (tmp_path / f"mod{i}.py").write_text(f"def f{i}(): pass\n")
+
+    files = list(tmp_path.glob("*.py"))
+    result = analyze_all_files(tmp_path, files)
+    summary = result.to_llm_summary(max_files=2)
+
+    assert "... and 1 more files" in summary
 
 
 def test_analyze_all_files_no_entities(tmp_path):

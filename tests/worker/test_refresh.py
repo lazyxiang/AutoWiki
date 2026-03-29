@@ -138,4 +138,18 @@ async def test_run_refresh_index_with_changes(tmp_path, mock_llm, mock_embedding
         assert job.status == "done"
         repo = await s.get(Repository, repo_id)
         assert repo.last_commit == new_sha
+
+        # Affected page should have been regenerated (content replaced)
+        from sqlalchemy import select as sa_select
+
+        result = await s.execute(
+            sa_select(WikiPage).where(
+                WikiPage.repo_id == repo_id, WikiPage.slug == "overview"
+            )
+        )
+        overview = result.scalar_one_or_none()
+        assert overview is not None
+        assert overview.content != "old content", (
+            "page content should have been regenerated"
+        )
     await dispose_db(db_path)
