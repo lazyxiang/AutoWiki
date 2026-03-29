@@ -1,3 +1,24 @@
+"""Stage 6 of the generation pipeline.
+
+Covers multi-query RAG retrieval and LLM page generation.
+
+For each :class:`~worker.pipeline.wiki_planner.WikiPageSpec` in the wiki
+plan, this module:
+
+1. Constructs two or more semantic search queries (multi-query RAG) based on
+   the page title, purpose, and key entity names.
+2. Embeds all queries and performs a deduplicated multi-search against the
+   :class:`~worker.pipeline.rag_indexer.FAISSStore`.
+3. Formats the retrieved source-code chunks, entity details, and dependency
+   info into a structured LLM prompt.
+4. Calls the LLM (with ``async_retry`` for transient errors) and wraps the
+   resulting Markdown in a :class:`PageResult`.
+
+The module uses two distinct prompt templates: a richer *overview* template
+for the top-level ``"Overview"`` page (adds Architecture and Getting Started
+sections) and a standard *component* template for all other pages.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -6,7 +27,7 @@ from typing import Any
 from worker.embedding.base import EmbeddingProvider
 from worker.llm.base import LLMProvider
 from worker.pipeline.rag_indexer import FAISSStore
-from worker.pipeline.wiki_planner import PageSpec
+from worker.pipeline.wiki_planner import WikiPageSpec
 from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
 
 _SYSTEM = (
@@ -39,13 +60,54 @@ _SYSTEM = (
 
 @dataclass
 class PageResult:
+    """The output of a single wiki page generation call.
+
+    Wraps the LLM-generated Markdown content together with the routing
+    identifiers needed to store the page in the database and serve it via the
+    REST API.
+
+    Attributes:
+        slug: URL-safe identifier derived from the page title (e.g.
+            ``"api-gateway"``).  Matches :attr:`WikiPageSpec.slug`.
+        title: Human-readable page title (e.g. ``"API Gateway"``).
+        content: Full page content as a Markdown string, including optional
+            Mermaid diagram code blocks and source-citation annotations.
+    """
+
     slug: str
     title: str
     content: str  # Markdown
 
 
 def _format_entity_details(entities: list[dict[str, Any]]) -> str:
-    """Format entity details (classes, functions) for the prompt."""
+    """Format a list of AST entity dicts into a Markdown bullet list for the prompt.
+
+    Renders up to 25 entities (to avoid excessive prompt length), showing
+    each entity's type, name, signature, docstring excerpt, and source
+    location.
+
+    Args:
+        entities: List of entity dicts as produced by the AST analysis stage.
+            Recognised keys: ``"type"``, ``"name"``, ``"signature"``,
+            ``"docstring"``, ``"file"``, ``"start_line"``, ``"end_line"``.
+
+    Returns:
+        str: A multi-line Markdown bullet list where each entity occupies one
+        or more lines.  Returns ``"No entity details available."`` when
+        *entities* is empty.
+
+    Example:
+        >>> entities = [{"type": "function", "name": "parse_github_url",
+        ...              "signature": "(url: str) -> tuple[str, str]",
+        ...              "docstring": "Parse a GitHub URL.",
+        ...              "file": "ingestion.py", "start_line": 70,
+        ...              "end_line": 79}]
+        >>> print(_format_entity_details(entities))
+        - **function** `parse_github_url`
+          Signature: `(url: str) -> tuple[str, str]`
+          Doc: Parse a GitHub URL.
+          Location: ingestion.py:70-79
+    """
     if not entities:
         return "No entity details available."
     lines = []
@@ -65,7 +127,38 @@ def _format_entity_details(entities: list[dict[str, Any]]) -> str:
 
 
 def _format_context_chunks(context_chunks: list[dict]) -> str:
-    """Format RAG chunks with file paths and line numbers."""
+    """Format a list of RAG-retrieved chunk dicts into fenced code blocks.
+
+    Each chunk is rendered as a header line (file path, line range, and
+    optional entity name) followed by a fenced code block containing the
+    chunk text.  Chunks are separated by ``---`` dividers so the LLM can
+    easily distinguish them.
+
+    Args:
+        context_chunks: List of chunk metadata dicts as returned by
+            :meth:`~worker.pipeline.rag_indexer.FAISSStore.search` or
+            :meth:`~worker.pipeline.rag_indexer.FAISSStore.multi_search`.
+            Expected keys: ``"file"`` (str), ``"start_line"`` (int),
+            ``"end_line"`` (int), ``"entity"`` (str | None),
+            ``"text"`` (str).
+
+    Returns:
+        str: A string containing one fenced code block per chunk, each
+        preceded by a header, with ``\\n\\n---\\n\\n`` between chunks.
+        Returns ``"No source code context available."`` when
+        *context_chunks* is empty.
+
+    Example:
+        >>> chunks = [{"file": "api/routes.py", "start_line": 10,
+        ...            "end_line": 25, "entity": "list_repos",
+        ...            "text": "@app.get('/repos')\\nasync def list_repos():"}]
+        >>> print(_format_context_chunks(chunks))
+        File: api/routes.py (lines 10-25) [list_repos]
+        ```
+        @app.get('/repos')
+        async def list_repos():
+        ```
+    """
     if not context_chunks:
         return "No source code context available."
     sections = []
@@ -86,12 +179,40 @@ def _format_context_chunks(context_chunks: list[dict]) -> str:
 
 
 def _build_page_prompt(
-    spec: PageSpec,
+    spec: WikiPageSpec,
     context_chunks: list[dict],
     repo_name: str,
     dep_info: dict[str, Any] | None = None,
     entity_details: list[dict[str, Any]] | None = None,
 ) -> str:
+    """Build the full LLM prompt for generating a single wiki page.
+
+    Assembles a structured prompt from all available context.  The final
+    instruction section branches on whether the page is an *overview* page
+    (slug equals ``"overview"`` or title contains the word ``"overview"``):
+
+    * **Overview branch** — Requests sections: Overview, Architecture (with
+      Mermaid flowchart), Key Components, Getting Started, Technology Stack.
+    * **Non-overview branch** — Requests sections: Overview, Architecture
+      (optional diagram), Key Components, Dependencies & Interactions, Source
+      Files.
+
+    Args:
+        spec: The :class:`WikiPageSpec` being generated.
+        context_chunks: RAG-retrieved source-code chunk dicts (formatted by
+            :func:`_format_context_chunks`).
+        repo_name: Human-readable repository name included in the prompt
+            heading and instruction text.
+        dep_info: Optional dependency info dict with keys ``"depends_on"``
+            (list[str]), ``"depended_by"`` (list[str]), and
+            ``"external_deps"`` (list[str]).
+        entity_details: Optional list of entity dicts formatted by
+            :func:`_format_entity_details`.
+
+    Returns:
+        str: The complete LLM prompt as a single string, with sections
+        separated by blank lines.
+    """
     context = _format_context_chunks(context_chunks)
 
     sections = [
@@ -99,10 +220,10 @@ def _build_page_prompt(
         f"Page: {spec.title}",
     ]
 
-    if spec.description:
-        sections.append(f"Purpose: {spec.description}")
+    if spec.purpose:
+        sections.append(f"Purpose: {spec.purpose}")
 
-    sections.append(f"Modules: {', '.join(spec.modules)}")
+    sections.append(f"Source files: {', '.join(spec.files or [])}")
 
     # Dependency context
     if dep_info:
@@ -192,7 +313,7 @@ def _build_page_prompt(
 
 
 async def generate_page(
-    spec: PageSpec,
+    spec: WikiPageSpec,
     store: FAISSStore,
     llm: LLMProvider,
     embedding: EmbeddingProvider,
@@ -202,11 +323,66 @@ async def generate_page(
     entity_details: list[dict[str, Any]] | None = None,
     on_retry: OnRetryCallback | None = None,
 ) -> PageResult:
-    # Multi-query RAG: generate multiple semantic queries for better coverage
-    queries = [f"{spec.title} {' '.join(spec.modules)}"]
+    """Generate a single wiki page using multi-query RAG and an LLM.
 
-    if spec.description:
-        queries.append(spec.description)
+    **Multi-query RAG strategy**: Instead of a single embedding query, up to
+    three queries are constructed and embedded independently:
+
+    1. ``"{title} {first 5 file paths}"`` — anchors the search to the page's
+       assigned files.
+    2. ``"{purpose}"`` — (added when *spec.purpose* is non-empty) retrieves
+       chunks semantically related to the page's stated goal.
+    3. ``"{entity_name1} {entity_name2} ..."`` — (added when *entity_details*
+       is non-empty) targets chunks that mention specific classes or functions.
+
+    All query vectors are passed to
+    :meth:`~worker.pipeline.rag_indexer.FAISSStore.multi_search` (or
+    :meth:`~worker.pipeline.rag_indexer.FAISSStore.search` for a single
+    query), which deduplicates results so the same chunk is not sent to the
+    LLM twice.
+
+    Args:
+        spec: The :class:`WikiPageSpec` describing the page to generate.
+        store: A loaded :class:`~worker.pipeline.rag_indexer.FAISSStore`
+            containing the repository's indexed chunks.
+        llm: An :class:`~worker.llm.base.LLMProvider` instance used to
+            generate the Markdown content.
+        embedding: An :class:`~worker.embedding.base.EmbeddingProvider`
+            instance used to embed the search queries.
+        repo_name: Human-readable repository name included in the prompt.
+        top_k: Number of nearest neighbours to retrieve *per query* before
+            deduplication.  Defaults to ``12``.
+        dep_info: Optional dependency info dict with keys ``"depends_on"``,
+            ``"depended_by"``, and ``"external_deps"`` (all ``list[str]``).
+        entity_details: Optional list of entity dicts (classes, functions)
+            from the AST analysis stage; used both as additional query text
+            and formatted inline in the prompt.
+        on_retry: Optional callback invoked on each retry by ``async_retry``
+            (useful for progress reporting).
+
+    Returns:
+        PageResult: A :class:`PageResult` with ``slug``, ``title``, and
+        ``content`` (the LLM-generated Markdown string).
+
+    Example:
+        >>> result = await generate_page(
+        ...     spec=WikiPageSpec(title="API Gateway", purpose="Handles HTTP.",
+        ...                       files=["api/main.py"]),
+        ...     store=store,
+        ...     llm=llm_provider,
+        ...     embedding=embedding_provider,
+        ...     repo_name="owner/repo",
+        ... )
+        >>> result.slug
+        'api-gateway'
+        >>> result.content[:20]
+        '## Overview\\n\\nThe AP'
+    """
+    # Multi-query RAG: generate multiple semantic queries for better coverage
+    queries = [f"{spec.title} {' '.join((spec.files or [])[:5])}"]
+
+    if spec.purpose:
+        queries.append(spec.purpose)
 
     # Add entity names as queries for targeted retrieval
     if entity_details:

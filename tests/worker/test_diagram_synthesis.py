@@ -1,4 +1,5 @@
 from worker.pipeline.diagram_synthesis import synthesize_diagrams, validate_mermaid
+from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan
 
 
 def test_validate_mermaid_accepts_valid():
@@ -14,11 +15,15 @@ def test_validate_mermaid_rejects_invalid():
 
 async def test_synthesize_diagrams_returns_mermaid(mock_llm):
     mock_llm.generate.return_value = "graph TD\n  A[API] --> B[Worker]"
-    module_tree = [
-        {"path": "api", "files": ["api/main.py"]},
-        {"path": "worker", "files": ["worker/jobs.py"]},
-    ]
-    result = await synthesize_diagrams(module_tree, repo_name="myrepo", llm=mock_llm)
+    plan = WikiPlan(
+        pages=[
+            WikiPageSpec(title="API", purpose="API endpoints.", files=["api/main.py"]),
+            WikiPageSpec(
+                title="Worker", purpose="Background jobs.", files=["worker/jobs.py"]
+            ),
+        ]
+    )
+    result = await synthesize_diagrams(plan, repo_name="myrepo", llm=mock_llm)
     assert result is not None
     assert "graph" in result.lower() or "flowchart" in result.lower()
 
@@ -29,8 +34,12 @@ async def test_synthesize_diagrams_retries_on_invalid(mock_llm):
         "not valid mermaid",
         "graph TD\n  A --> B",
     ]
-    module_tree = [{"path": "src", "files": ["src/main.py"]}]
-    result = await synthesize_diagrams(module_tree, repo_name="repo", llm=mock_llm)
+    plan = WikiPlan(
+        pages=[
+            WikiPageSpec(title="Core", purpose="Core module.", files=["src/main.py"]),
+        ]
+    )
+    result = await synthesize_diagrams(plan, repo_name="repo", llm=mock_llm)
     assert result is not None
     assert mock_llm.generate.call_count == 2
     # Second call prompt must reference the prior bad output (not snowball)
@@ -41,8 +50,12 @@ async def test_synthesize_diagrams_retries_on_invalid(mock_llm):
 
 async def test_synthesize_diagrams_returns_none_after_max_retries(mock_llm):
     mock_llm.generate.return_value = "not valid"
-    module_tree = [{"path": "src", "files": []}]
+    plan = WikiPlan(
+        pages=[
+            WikiPageSpec(title="Core", purpose="Core module.", files=[]),
+        ]
+    )
     result = await synthesize_diagrams(
-        module_tree, repo_name="repo", llm=mock_llm, max_retries=2
+        plan, repo_name="repo", llm=mock_llm, max_retries=2
     )
     assert result is None

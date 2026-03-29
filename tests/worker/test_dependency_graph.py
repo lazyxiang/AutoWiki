@@ -2,7 +2,8 @@ from worker.pipeline.dependency_graph import (
     DependencyGraph,
     _extract_imports,
     build_dependency_graph,
-    summarize_dependencies,
+    format_for_llm_prompt,
+    summarize_page_deps,
 )
 
 
@@ -90,34 +91,60 @@ def test_build_dependency_graph_clusters(tmp_path):
     assert found_ab_cluster
 
 
-def test_summarize_dependencies(tmp_path):
+def test_format_for_llm_prompt(tmp_path):
     (tmp_path / "main.py").write_text("from models import User\n")
     (tmp_path / "models.py").write_text("class User:\n    pass\n")
 
     files = [tmp_path / "main.py", tmp_path / "models.py"]
     graph = build_dependency_graph(files, tmp_path)
 
-    module_files = {
-        ".": ["main.py", "models.py"],
-    }
-    summary = summarize_dependencies(graph, module_files)
-    assert "." in summary
+    result = format_for_llm_prompt(graph)
+    assert isinstance(result, str)
+    assert "→" in result
+    assert "main.py" in result
+    assert "models.py" in result
 
 
-def test_summarize_dependencies_cross_module():
-    """Test cross-module dependency detection."""
-    graph = DependencyGraph(
-        edges={"src/main.py": ["lib/utils.py"]},
-        clusters=[],
-        external_deps={},
-    )
-    module_files = {
-        "src": ["src/main.py"],
-        "lib": ["lib/utils.py"],
-    }
-    summary = summarize_dependencies(graph, module_files)
-    assert "lib" in summary["src"]["depends_on"]
-    assert "src" in summary["lib"]["depended_by"]
+def test_format_for_llm_prompt_no_deps(tmp_path):
+    (tmp_path / "standalone.py").write_text("x = 1\n")
+    graph = build_dependency_graph([tmp_path / "standalone.py"], tmp_path)
+    result = format_for_llm_prompt(graph)
+    assert "(no internal dependencies detected)" in result
+
+
+def test_format_for_llm_prompt_truncation(tmp_path):
+    """When edges exceed max_edges, a '...more edges' line is appended."""
+    # Create a hub file with many deps
+    deps = "\n".join(f"from mod{i} import x" for i in range(10))
+    (tmp_path / "hub.py").write_text(deps + "\n")
+    for i in range(10):
+        (tmp_path / f"mod{i}.py").write_text("x = 1\n")
+
+    all_files = list(tmp_path.glob("*.py"))
+    graph = build_dependency_graph(all_files, tmp_path)
+
+    result = format_for_llm_prompt(graph, max_edges=3)
+    assert "more edges not shown" in result
+
+
+def test_summarize_page_deps(tmp_path):
+    (tmp_path / "main.py").write_text("from models import User\n")
+    (tmp_path / "models.py").write_text("class User:\n    pass\n")
+    (tmp_path / "utils.py").write_text("import os\ndef greet():\n    pass\n")
+
+    files = [tmp_path / "main.py", tmp_path / "models.py", tmp_path / "utils.py"]
+    graph = build_dependency_graph(files, tmp_path)
+
+    # "main.py" page depends on "models.py" (which is outside this page)
+    result = summarize_page_deps(["main.py"], graph)
+    assert "depends_on" in result
+    assert "depended_by" in result
+    assert "external_deps" in result
+    assert "models.py" in result["depends_on"]
+
+    # "models.py" page is depended on by "main.py"
+    result2 = summarize_page_deps(["models.py"], graph)
+    assert "main.py" in result2["depended_by"]
 
 
 def test_unsupported_extension_returns_no_imports(tmp_path):

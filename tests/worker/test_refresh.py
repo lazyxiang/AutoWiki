@@ -87,11 +87,22 @@ async def test_run_refresh_index_with_changes(tmp_path, mock_llm, mock_embedding
         )
         await s.commit()
 
-    # Write a module_tree.json so the refresh can read it
+    # Write a wiki_plan.json so the refresh can read it
     ast_dir = tmp_path / "repos" / repo_id / "ast"
     ast_dir.mkdir(parents=True)
-    (ast_dir / "module_tree.json").write_text(
-        json.dumps([{"path": ".", "files": ["main.py"]}])
+    (ast_dir / "wiki_plan.json").write_text(
+        json.dumps(
+            {
+                "repo_notes": [{"content": ""}],
+                "pages": [
+                    {
+                        "title": "Overview",
+                        "purpose": "High-level overview.",
+                        "files": ["main.py"],
+                    }
+                ],
+            }
+        )
     )
 
     with (
@@ -127,4 +138,18 @@ async def test_run_refresh_index_with_changes(tmp_path, mock_llm, mock_embedding
         assert job.status == "done"
         repo = await s.get(Repository, repo_id)
         assert repo.last_commit == new_sha
+
+        # Affected page should have been regenerated (content replaced)
+        from sqlalchemy import select as sa_select
+
+        result = await s.execute(
+            sa_select(WikiPage).where(
+                WikiPage.repo_id == repo_id, WikiPage.slug == "overview"
+            )
+        )
+        overview = result.scalar_one_or_none()
+        assert overview is not None
+        assert overview.content != "old content", (
+            "page content should have been regenerated"
+        )
     await dispose_db(db_path)

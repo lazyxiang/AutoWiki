@@ -2,9 +2,10 @@ from pathlib import Path
 
 from worker.pipeline.ast_analysis import (
     SUPPORTED_LANGUAGES,
+    FileAnalysis,
+    FileInfo,
+    analyze_all_files,
     analyze_file,
-    build_enhanced_module_tree,
-    build_module_tree,
 )
 
 FIXTURE = Path("tests/fixtures/simple-repo")
@@ -83,24 +84,9 @@ def test_analyze_python_file():
     names = [e["name"] for e in result["entities"]]
     assert "User" in names
     assert "Post" in names
-
-
-def test_analyze_python_file_entities_have_type():
-    result = analyze_file(FIXTURE / "models.py")
     for entity in result["entities"]:
         assert "type" in entity  # "class" or "function"
         assert "name" in entity
-
-
-def test_build_module_tree_groups_by_dir(tmp_path):
-    (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "auth").mkdir()
-    files = [tmp_path / "src" / "main.py", tmp_path / "src" / "auth" / "handler.py"]
-    for f in files:
-        f.write_text("x = 1")
-    tree = build_module_tree(tmp_path, files)
-    modules = [m["path"] for m in tree]
-    assert "src" in modules or any("src" in m for m in modules)
 
 
 def test_unsupported_language_returns_none():
@@ -137,33 +123,66 @@ def test_extract_python_function_signature(tmp_path):
     assert "name" in greet["signature"]
 
 
-def test_build_enhanced_module_tree(tmp_path):
-    (tmp_path / "src").mkdir()
-    src_file = tmp_path / "src" / "main.py"
-    src_file.write_text("class App:\n    pass\n\ndef run():\n    pass\n")
-    root_file = tmp_path / "setup.py"
-    root_file.write_text("x = 1\n")
+def test_analyze_all_files_basic(tmp_path):
+    f1 = tmp_path / "main.py"
+    f1.write_text("class App:\n    pass\n\ndef run():\n    pass\n")
+    f2 = tmp_path / "utils.py"
+    f2.write_text("def helper():\n    pass\n\ndef greet():\n    pass\n")
 
-    files = [src_file, root_file]
-    tree = build_enhanced_module_tree(tmp_path, files)
+    result = analyze_all_files(tmp_path, [f1, f2])
 
-    assert len(tree) >= 1
-    # Find the src module
-    src_mod = [m for m in tree if m["path"] == "src"]
-    assert len(src_mod) == 1
-    assert src_mod[0]["class_count"] == 1
-    assert src_mod[0]["function_count"] == 1
-    assert "App" in src_mod[0]["summary"]
-    assert len(src_mod[0]["classes"]) == 1
-    assert src_mod[0]["classes"][0]["name"] == "App"
+    assert isinstance(result, FileAnalysis)
+    assert "main.py" in result.files
+    assert "utils.py" in result.files
+    assert isinstance(result.files["main.py"], FileInfo)
+    assert isinstance(result.files["utils.py"], FileInfo)
+    # main.py has 1 class and 1 function
+    assert result.files["main.py"].class_count == 1
+    assert result.files["main.py"].function_count == 1
+    # utils.py has 2 functions
+    assert result.files["utils.py"].function_count == 2
 
 
-def test_build_enhanced_module_tree_empty_entities(tmp_path):
-    f = tmp_path / "data.json"
+def test_analyze_all_files_to_llm_summary(tmp_path):
+    f1 = tmp_path / "main.py"
+    f1.write_text("class App:\n    pass\n\ndef run():\n    pass\n")
+    f2 = tmp_path / "utils.py"
+    f2.write_text("def helper():\n    pass\n")
+
+    result = analyze_all_files(tmp_path, [f1, f2])
+    summary = result.to_llm_summary()
+
+    assert isinstance(summary, str)
+    assert "main.py" in summary
+    assert "utils.py" in summary
+    # main.py line should report counts and entity names
+    main_line = next(line for line in summary.splitlines() if "main.py" in line)
+    assert "1 classes" in main_line
+    assert "1 functions" in main_line
+    assert "App" in main_line  # entity names in summary
+    # utils.py line should report 0 classes
+    utils_line = next(line for line in summary.splitlines() if "utils.py" in line)
+    assert "0 classes" in utils_line
+
+
+def test_analyze_all_files_to_llm_summary_truncation(tmp_path):
+    for i in range(3):
+        (tmp_path / f"mod{i}.py").write_text(f"def f{i}(): pass\n")
+
+    files = list(tmp_path.glob("*.py"))
+    result = analyze_all_files(tmp_path, files)
+    summary = result.to_llm_summary(max_files=2)
+
+    assert "... and 1 more files" in summary
+
+
+def test_analyze_all_files_no_entities(tmp_path):
+    f = tmp_path / "config.json"
     f.write_text('{"key": "value"}')
-    tree = build_enhanced_module_tree(tmp_path, [f])
-    assert len(tree) >= 1
-    mod = tree[0]
-    assert mod["class_count"] == 0
-    assert mod["function_count"] == 0
-    assert mod["summary"] == "(no named entities)"
+
+    result = analyze_all_files(tmp_path, [f])
+
+    assert "config.json" in result.files
+    info = result.files["config.json"]
+    assert info.class_count == 0
+    assert info.function_count == 0
