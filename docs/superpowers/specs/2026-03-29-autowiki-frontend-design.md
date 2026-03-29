@@ -59,9 +59,9 @@ The layout is divided into three distinct columns:
     *   Provides quick intra-page navigation.
     *   Width: ~200px - 250px. Hidden on smaller screens.
 
-## 3. Interactive Features UI (Phase 2 Integration)
+## 3. Interactive Features UI
 
-To seamlessly integrate the Phase 2 capabilities (Chat, Graph, Refresh) into the new aesthetic, these components will be treated as core parts of the reading experience rather than disconnected pages.
+To seamlessly integrate the interactive capabilities (Chat, Graph, Refresh) into the new aesthetic, these components will be treated as core parts of the reading experience rather than disconnected pages.
 
 ### ChatPanel UI
 *   **Placement:** Rather than a separate full-page route, the Chat should be available globally via a floating action button (FAB) in the bottom right corner, or as a collapsible/resizable right-side drawer that temporarily replaces the "On This Page" TOC. This matches the continuous "ask questions while reading" workflow seen on `zread.ai` and `deepwiki.com`.
