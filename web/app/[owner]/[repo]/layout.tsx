@@ -17,7 +17,7 @@ export default async function WikiLayout({
 
   return (
     <div className="flex h-screen overflow-hidden">
-      <WikiSidebar pages={pages} owner={owner} repo={repo} />
+      <WikiSidebar pages={pages} owner={owner} repo={repo} repoId={rid} />
       <main className="flex-1 overflow-y-auto flex justify-center">
         {children}
       </main>

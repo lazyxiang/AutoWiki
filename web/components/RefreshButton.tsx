@@ -4,15 +4,15 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { RefreshCw } from "lucide-react";
 import { refreshRepo } from "@/lib/api";
-import { repoId } from "@/lib/utils";
 import { Button } from "./ui/button";
 
 interface Props {
+  repoId: string;
   owner: string;
   repo: string;
 }
 
-export function RefreshButton({ owner, repo }: Props) {
+export function RefreshButton({ repoId, owner, repo }: Props) {
   const router = useRouter();
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -21,9 +21,9 @@ export function RefreshButton({ owner, repo }: Props) {
     setRefreshing(true);
     setError("");
     try {
-      const { job_id } = await refreshRepo(repoId(owner, repo));
+      const { job_id } = await refreshRepo(repoId);
       router.push(
-        `/jobs/${job_id}?repo_id=${repoId(owner, repo)}&owner=${encodeURIComponent(
+        `/jobs/${job_id}?repo_id=${repoId}&owner=${encodeURIComponent(
           owner
         )}&repo=${encodeURIComponent(repo)}`
       );
@@ -34,7 +34,7 @@ export function RefreshButton({ owner, repo }: Props) {
   }
 
   return (
-    <div className="flex flex-col gap-1 items-end">
+    <div className="relative flex flex-col gap-1 items-end">
       <Button
         variant="ghost"
         size="icon"

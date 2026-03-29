@@ -4,10 +4,10 @@ import Link from "next/link";
 interface RepoCardProps {
   owner: string;
   name: string;
-  description: string;
+  description?: string;
   stars?: number;
   language?: string;
-  updatedAt: string;
+  updatedAt?: string;
 }
 
 export function RepoCard({ owner, name, description, stars, language, updatedAt }: RepoCardProps) {
@@ -17,7 +17,7 @@ export function RepoCard({ owner, name, description, stars, language, updatedAt 
         <span className="text-muted-foreground font-normal">{owner}/</span>{name}
       </h3>
       <p className="mt-2 text-sm text-muted-foreground line-clamp-2 h-10">
-        {description || "No description provided."}
+        {description || "No description available."}
       </p>
       <div className="mt-4 flex items-center gap-4 text-xs text-muted-foreground">
         {language && (
@@ -30,9 +30,11 @@ export function RepoCard({ owner, name, description, stars, language, updatedAt 
             <Star size={14} className="text-yellow-500 fill-yellow-500" /> {stars.toLocaleString()}
           </span>
         )}
-        <span className="flex items-center gap-1.5 ml-auto">
-          <Clock size={14} /> {updatedAt}
-        </span>
+        {updatedAt && (
+          <span className="flex items-center gap-1.5 ml-auto">
+            <Clock size={14} /> {updatedAt}
+          </span>
+        )}
       </div>
     </Link>
   );

@@ -87,5 +87,17 @@ export interface Repository {
 export async function getRepositories(): Promise<Repository[]> {
   const res = await fetch(`${API_URL}/api/repos`);
   if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  const data = await res.json() as { repos: any[] };
+  
+  return (data.repos || []).map((repo: any) => ({
+    id: repo.id || "",
+    owner: repo.owner || "unknown",
+    name: repo.name || "unnamed",
+    description: repo.description || "",
+    stars: repo.stars ?? 0,
+    language: repo.language || "Unknown",
+    status: repo.status || "unknown",
+    indexed_at: repo.indexed_at || "",
+    indexed_at_formatted: repo.indexed_at_formatted || "Never",
+  }));
 }

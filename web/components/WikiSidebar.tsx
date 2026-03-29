@@ -5,9 +5,9 @@ import { cn } from "@/lib/utils";
 import { RefreshButton } from "./RefreshButton";
 
 interface Page { slug: string; title: string; parent_slug: string | null }
-interface Props { pages: Page[]; owner: string; repo: string }
+interface Props { pages: Page[]; owner: string; repo: string; repoId: string }
 
-export function WikiSidebar({ pages, owner, repo }: Props) {
+export function WikiSidebar({ pages, owner, repo, repoId }: Props) {
   const pathname = usePathname();
 
   return (
@@ -16,7 +16,7 @@ export function WikiSidebar({ pages, owner, repo }: Props) {
         <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
           {owner}/{repo}
         </p>
-        <RefreshButton owner={owner} repo={repo} />
+        <RefreshButton owner={owner} repo={repo} repoId={repoId} />
       </div>
       <ul className="space-y-1 mb-4">
         <li>
