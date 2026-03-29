@@ -29,19 +29,27 @@ export function IndexForm() {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="flex flex-col gap-4 w-full max-w-xl">
-      <Input
-        type="text"
-        placeholder="github.com/owner/repo"
-        value={url}
-        onChange={(e) => setUrl(e.target.value)}
-        disabled={loading}
-        className="font-mono"
-      />
-      <Button type="submit" disabled={loading || !url.trim()}>
-        {loading ? "Submitting…" : "Generate Wiki"}
-      </Button>
-      {error && <p className="text-destructive text-sm">{error}</p>}
-    </form>
+    <div className="w-full max-w-2xl mx-auto">
+      <form onSubmit={handleSubmit} className="relative group">
+        <div className="flex items-center gap-2 p-2 bg-white dark:bg-zinc-900 rounded-2xl border border-border shadow-sm focus-within:ring-2 focus-within:ring-primary/20 focus-within:border-primary transition-all duration-200">
+          <Input
+            type="text"
+            placeholder="Search or paste GitHub URL (e.g. github.com/owner/repo)"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            disabled={loading}
+            className="flex-1 h-12 border-none shadow-none focus-visible:ring-0 text-lg bg-transparent px-4 font-normal"
+          />
+          <Button 
+            type="submit" 
+            disabled={loading || !url.trim()}
+            className="h-12 px-8 rounded-xl text-lg font-semibold shadow-sm hover:shadow transition-all"
+          >
+            {loading ? "Submitting…" : "Get Started"}
+          </Button>
+        </div>
+        {error && <p className="mt-3 text-destructive text-sm text-center font-medium">{error}</p>}
+      </form>
+    </div>
   );
 }
