@@ -54,18 +54,18 @@ class WorkerSettings:
         on_shutdown (coroutine): Called once at worker shutdown.
         redis_settings: Overridden at runtime from ``REDIS_URL``; ``None``
             defaults to ``redis://localhost:6379``.
-        job_timeout (None): Disables ARQ's hard per-job kill timer.  Each
-            pipeline stage uses ``async_retry`` for its own timeout/retry
-            logic, so a global ARQ kill would interfere.  Setting this to
-            ``None`` means ARQ will never forcibly terminate a running job.
+        job_timeout (int): Set to 7200s (2 hours) as a generous upper bound.
+            Each pipeline stage uses ``async_retry`` for its own timeout/retry
+            logic, so this acts as a safety net rather than the primary timeout.
     """
 
     functions = [run_full_index, run_refresh_index]
     on_startup = startup
     on_shutdown = shutdown
     redis_settings = None  # set from REDIS_URL env at runtime
-    # Disable ARQ's hard job kill — per-call retries in async_retry handle timeouts.
-    job_timeout = None
+    # Set a generous timeout (2 hours) — per-call retries in async_retry handle
+    # finer-grained timeouts.  ARQ requires a non-None value for max() calculation.
+    job_timeout = 7200
 
 
 if __name__ == "__main__":
