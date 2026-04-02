@@ -40,6 +40,28 @@ export async function getJob(jobId: string) {
 }
 
 /**
+ * Fetches the metadata for a single repository.
+ * 
+ * @param repoId - The repository ID.
+ * @returns Repository metadata.
+ */
+export async function getRepo(repoId: string): Promise<Repository> {
+  const res = await fetch(`${API_URL}/api/repos/${repoId}`);
+  if (!res.ok) throw new Error(await res.text());
+  const repo = await res.json();
+  return {
+    id: repo.id || "",
+    owner: repo.owner || "unknown",
+    name: repo.name || "unnamed",
+    description: repo.description || "",
+    stars: repo.stars ?? 0,
+    language: repo.language || "Unknown",
+    status: repo.status || "unknown",
+    indexed_at: repo.indexed_at || "",
+    indexed_at_formatted: repo.indexed_at_formatted || "Never",
+  };
+}
+/**
  * Retrieves the hierarchical wiki structure for a repository.
  * 
  * @param repoId - The SHA256 hash of the repository URL.

@@ -224,4 +224,5 @@ node_modules/
 .next/
 out/
 build/
-\n# Allow web/lib\n!web/lib/
+# Allow web/lib
+!web/lib/
