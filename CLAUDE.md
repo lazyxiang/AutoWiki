@@ -130,7 +130,7 @@ All lint errors and format violations **must be fixed** before committing. Do no
 
 - **Framework**: pytest with `asyncio_mode = "auto"` (no `@pytest.mark.asyncio` needed)
 - **Coverage target**: ≥80% on `worker/` and `api/` — currently at 80%
-- **Run**: `pytest tests/ --ignore=tests/e2e`
+- **Run**: `pytest tests/ --ignore=tests/e2e` AND `npm test --prefix web`
 - **Fixtures**: `mock_llm`, `mock_embedding` in `tests/conftest.py`; fixture repo at `tests/fixtures/simple-repo/`
 
 ## Deployment
