@@ -210,6 +210,7 @@ __marimo__/
 # AI Tools
 .claude/
 .gemini/
+.superpowers/
 
 # AutoWiki runtime & data
 autowiki.yml
