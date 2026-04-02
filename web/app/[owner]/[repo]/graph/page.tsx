@@ -9,11 +9,17 @@ export default async function GraphPage({
   const { owner, repo } = await params;
 
   return (
-    <div style={{ padding: "1rem" }}>
-      <h1 style={{ marginBottom: "1rem", fontSize: "1.25rem", fontWeight: "bold" }}>
-        Module Graph — {owner}/{repo}
-      </h1>
-      <DependencyGraph repoId={repoId(owner, repo)} />
+    <div className="flex flex-col h-full w-full p-6 overflow-hidden">
+      <div className="flex items-center justify-between mb-6 shrink-0">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900 leading-none">Module Graph</h1>
+          <p className="text-sm text-slate-500 mt-2 font-mono">{owner}/{repo}</p>
+        </div>
+      </div>
+      
+      <div className="flex-1 min-h-0 relative bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+        <DependencyGraph repoId={repoId(owner, repo)} />
+      </div>
     </div>
   );
 }

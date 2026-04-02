@@ -309,8 +309,8 @@ const getComponents = (getUniqueId: (text: string) => string, owner: string, rep
  * Props for the WikiPageContent component.
  */
 interface Props {
-  /** The title of the wiki page. */
-  title: string;
+  /** The title of the wiki page. (Optional since it is usually in the content) */
+  title?: string;
   /** The Markdown content of the wiki page. */
   content: string;
   /** The repository owner. */
@@ -323,7 +323,7 @@ interface Props {
  * Renders the content of a wiki page, including Markdown and Mermaid diagrams.
  * Automatically generates unique IDs for headings to support Table of Contents.
  */
-export function WikiPageContent({ title, content, owner, repo }: Props) {
+export function WikiPageContent({ content, owner, repo }: Props) {
   // Use a local object for ID tracking within a single render pass.
   // This is safe because we want deterministic IDs for the current content.
   const idCounts: Record<string, number> = {};

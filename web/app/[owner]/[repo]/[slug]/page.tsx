@@ -20,5 +20,5 @@ export default async function WikiPageRoute({
     throw err;
   }
 
-  return <WikiPageContent title={page.title} content={page.content} owner={owner} repo={repo} />;
+  return <WikiPageContent content={page.content} owner={owner} repo={repo} />;
 }

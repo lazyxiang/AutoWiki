@@ -1,9 +1,10 @@
 "use client";
 import { useEffect, useReducer } from "react";
-import { ReactFlow, type Node, type Edge, Background, Controls, BackgroundVariant } from "@xyflow/react";
+import { ReactFlow, type Node, type Edge, Background, Controls, BackgroundVariant, Panel, useReactFlow, ReactFlowProvider } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { getRepoGraph } from "@/lib/api";
-import { Loader2, AlertCircle } from "lucide-react";
+import { Loader2, AlertCircle, Maximize, LayoutGrid } from "lucide-react";
+import { Button } from "./ui/button";
 
 /**
  * State for the dependency graph.
@@ -39,12 +40,81 @@ function reducer(_: State, action: Action): State {
 }
 
 /**
+ * Inner component that needs access to ReactFlow hooks.
+ */
+function GraphInner({ nodes, edges, loaded, error }: State) {
+  const { fitView } = useReactFlow();
+
+  if (error) return (
+    <div className="flex flex-col items-center justify-center h-full w-full text-red-500 gap-3 bg-slate-50/50">
+      <AlertCircle className="h-10 w-10 opacity-80" />
+      <div className="text-center">
+        <p className="font-semibold text-slate-900">Failed to load graph</p>
+        <p className="text-sm opacity-70">{error}</p>
+      </div>
+    </div>
+  );
+
+  if (!loaded) return (
+    <div className="flex flex-col items-center justify-center h-full w-full text-slate-400 gap-3 bg-slate-50/50">
+      <Loader2 className="h-10 w-10 animate-spin opacity-50" />
+      <p className="text-sm font-medium animate-pulse">Building module map…</p>
+    </div>
+  );
+
+  if (!nodes.length) return (
+    <div className="flex flex-col items-center justify-center h-full w-full text-slate-400 gap-3 bg-slate-50/50">
+      <p className="text-sm font-medium">No architectural modules identified yet.</p>
+    </div>
+  );
+
+  return (
+    <div className="w-full h-full bg-white">
+      <ReactFlow 
+        nodes={nodes} 
+        edges={edges} 
+        fitView
+        fitViewOptions={{ padding: 0.2 }}
+        colorMode="light"
+        minZoom={0.1}
+        maxZoom={2}
+        defaultEdgeOptions={{
+          type: 'smoothstep',
+        }}
+      >
+        <Background 
+          variant={BackgroundVariant.Dots} 
+          gap={24} 
+          size={1} 
+          color="var(--border)" 
+        />
+        
+        <Panel position="top-right" className="flex gap-2">
+          <Button 
+            variant="outline" 
+            size="sm" 
+            onClick={() => fitView({ duration: 800, padding: 0.2 })}
+            className="bg-white/80 backdrop-blur shadow-sm h-9 px-3 gap-2 border-slate-200"
+          >
+            <Maximize className="h-4 w-4" />
+            <span className="text-xs font-semibold">Fit Canvas</span>
+          </Button>
+        </Panel>
+
+        <Controls 
+          showInteractive={false}
+          className="bg-white border border-slate-200 shadow-sm rounded-xl overflow-hidden !left-6 !bottom-6 !flex-col !p-1 !gap-1"
+        />
+      </ReactFlow>
+    </div>
+  );
+}
+
+/**
  * Visualizes the module dependency graph using ReactFlow.
- * 
- * @param repoId - The ID of the repository to visualize.
  */
 export default function DependencyGraph({ repoId }: { repoId: string }) {
-  const [{ nodes, edges, error, loaded }, dispatch] = useReducer(reducer, { nodes: [], edges: [], error: null, loaded: false });
+  const [state, dispatch] = useReducer(reducer, { nodes: [], edges: [], error: null, loaded: false });
 
   useEffect(() => {
     dispatch({ type: "reset" });
@@ -55,68 +125,60 @@ export default function DependencyGraph({ repoId }: { repoId: string }) {
           dispatch({ type: "success", nodes: [], edges: [] });
           return;
         }
-        const radius = Math.max(200, count * 40);
+        
+        const radius = Math.max(280, count * 50);
         const flowNodes: Node[] = data.nodes.map((n, i) => ({
           id: n.id,
-          data: { label: `${n.label}\n(${n.file_count} files)` },
+          data: { 
+            label: (
+              <div className="flex flex-col gap-1.5 py-1">
+                <div className="flex items-center justify-center gap-2">
+                  <LayoutGrid className="h-3.5 w-3.5 text-indigo-500 opacity-70" />
+                  <span className="text-slate-900 font-bold tracking-tight">{n.label}</span>
+                </div>
+                <div className="h-px w-full bg-slate-100" />
+                <span className="text-[9px] text-slate-400 font-bold uppercase tracking-widest">
+                  {n.file_count} {n.file_count === 1 ? 'file' : 'files'}
+                </span>
+              </div>
+            )
+          },
           position: {
-            x: 400 + radius * Math.cos((2 * Math.PI * i) / count),
-            y: 300 + radius * Math.sin((2 * Math.PI * i) / count),
+            x: radius * Math.cos((2 * Math.PI * i) / count),
+            y: radius * Math.sin((2 * Math.PI * i) / count),
           },
           style: { 
-            background: "var(--background, #ffffff)", 
-            color: "var(--foreground, #1e293b)", 
-            border: "2px solid var(--border, #e2e8f0)", 
-            borderRadius: "12px", 
-            padding: "10px",
-            fontSize: "12px",
-            fontWeight: "600",
-            boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)",
-            width: 150,
+            background: "#ffffff", 
+            color: "#0f172a", 
+            border: "1px solid #e2e8f0", 
+            borderRadius: "14px", 
+            padding: "8px 12px",
+            fontSize: "13px",
+            boxShadow: "0 4px 12px -2px rgb(0 0 0 / 0.08), 0 2px 6px -1px rgb(0 0 0 / 0.04)",
+            width: 180,
             textAlign: "center"
           },
         }));
+
         const flowEdges: Edge[] = data.edges.map((e, i) => ({
           id: `e${i}`,
           source: e.source,
           target: e.target,
           animated: true,
-          style: { stroke: "var(--primary, #6366f1)", strokeWidth: 2 },
+          style: { 
+            stroke: "var(--primary, #6366f1)", 
+            strokeWidth: 2,
+            opacity: 0.4
+          },
         }));
         dispatch({ type: "success", nodes: flowNodes, edges: flowEdges });
       })
       .catch((e: Error) => dispatch({ type: "error", message: e.message }));
   }, [repoId]);
 
-  if (error) return (
-    <div className="flex flex-col items-center justify-center h-[600px] text-red-500 gap-2">
-      <AlertCircle className="h-8 w-8" />
-      <p>Failed to load graph: {error}</p>
-    </div>
-  );
-  if (!loaded) return (
-    <div className="flex flex-col items-center justify-center h-[600px] text-slate-400 gap-2">
-      <Loader2 className="h-8 w-8 animate-spin" />
-      <p>Loading module graph…</p>
-    </div>
-  );
-  if (!nodes.length) return (
-    <div className="flex flex-col items-center justify-center h-[600px] text-slate-400 gap-2">
-      <p>No modules found.</p>
-    </div>
-  );
-
   return (
-    <div className="w-full h-[600px] border border-slate-200 rounded-xl overflow-hidden bg-white">
-      <ReactFlow 
-        nodes={nodes} 
-        edges={edges} 
-        fitView
-        colorMode="light"
-      >
-        <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#e2e8f0" />
-        <Controls />
-      </ReactFlow>
-    </div>
+    <ReactFlowProvider>
+      <GraphInner {...state} />
+    </ReactFlowProvider>
   );
 }
