@@ -6,10 +6,11 @@ import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import "highlight.js/styles/github-dark.css";
 import type { Components } from "react-markdown";
+import { sanitizeMermaid } from "@/lib/mermaid-sanitize";
 
 /**
  * Renders a Mermaid diagram using the mermaid.js library.
- * 
+ *
  * @param children - The Mermaid diagram definition as a string.
  */
 function MermaidBlock({ children }: { children: string }) {
@@ -18,16 +19,21 @@ function MermaidBlock({ children }: { children: string }) {
 
   useEffect(() => {
     let cancelled = false;
+    let renderCount = 0;
     (async () => {
       const mermaid = (await import("mermaid")).default;
       mermaid.initialize({
         startOnLoad: false,
         theme: "dark",
-        securityLevel: "strict",
+        securityLevel: "loose",
       });
       if (cancelled || !ref.current) return;
       try {
-        const { svg } = await mermaid.render(`mermaid${id}`, children.trim());
+        // Use a unique ID per render to avoid conflicts with mermaid's internal cache
+        renderCount++;
+        const renderId = `mermaid${id}_${renderCount}_${Date.now()}`;
+        const sanitized = sanitizeMermaid(children.trim());
+        const { svg } = await mermaid.render(renderId, sanitized);
         if (!cancelled && ref.current) {
           ref.current.innerHTML = svg;
         }

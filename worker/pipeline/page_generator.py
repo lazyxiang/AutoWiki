@@ -28,6 +28,7 @@ from worker.embedding.base import EmbeddingProvider
 from worker.llm.base import LLMProvider
 from worker.pipeline.rag_indexer import FAISSStore
 from worker.pipeline.wiki_planner import WikiPageSpec
+from worker.utils.mermaid import sanitize_mermaid_blocks
 from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
 
 _SYSTEM = (
@@ -49,6 +50,13 @@ _SYSTEM = (
     "  - classDiagram for class relationships\n"
     "  - sequenceDiagram for request/response flows\n"
     "  - graph LR for dependency relationships\n"
+    "- IMPORTANT Mermaid quoting rules — violating these causes "
+    "parse errors:\n"
+    '  - Node labels with special chars: A["Server (HTTP)"] '
+    "not A[Server (HTTP)]\n"
+    '  - Edge labels with special chars: -->|"GET /api/{id}"| '
+    "not -->|GET /api/{id}|\n"
+    "  - Special characters requiring quotes: ( ) { } | < > /\n"
     "- Write for developers who are new to this codebase but "
     "experienced programmers\n"
     "- Use precise technical language and include concrete "
@@ -417,4 +425,5 @@ async def generate_page(
         on_retry=on_retry,
     )
 
+    content = sanitize_mermaid_blocks(content)
     return PageResult(slug=spec.slug, title=spec.title, content=content)

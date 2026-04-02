@@ -61,6 +61,21 @@ def _apply_migrations(connection) -> None:
             except OperationalError as exc:
                 if "duplicate column name" not in str(exc).lower():
                     raise
+        for col_name, col_type in [
+            ("description", "TEXT"),
+            ("stars", "INTEGER"),
+            ("language", "VARCHAR"),
+        ]:
+            if col_name not in columns:
+                try:
+                    connection.execute(
+                        text(
+                            f"ALTER TABLE repositories ADD COLUMN {col_name} {col_type}"
+                        )
+                    )
+                except OperationalError as exc:
+                    if "duplicate column name" not in str(exc).lower():
+                        raise
 
     # jobs migrations
     if insp.has_table("jobs"):

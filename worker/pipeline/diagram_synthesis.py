@@ -23,6 +23,7 @@ import logging
 
 from worker.llm.base import LLMProvider
 from worker.pipeline.wiki_planner import WikiPlan
+from worker.utils.mermaid import sanitize_mermaid
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,14 @@ _VALID_DIAGRAM_TYPES = (
 
 _SYSTEM = """You are a software architecture diagram generator.
 Output ONLY valid Mermaid diagram syntax. Do not include backticks,
-code fences, or any explanation — just the raw Mermaid code."""
+code fences, or any explanation — just the raw Mermaid code.
+
+IMPORTANT Mermaid quoting rules — violating these causes parse errors:
+- Node labels with special chars MUST be quoted:
+  A["MCP Server (stdio)"] NOT A[MCP Server (stdio)]
+- Edge labels with special chars MUST be quoted:
+  -->|"GET /status/{id}"| NOT -->|GET /status/{id}|
+Special characters that require quoting: ( ) { } | < > /"""
 
 _DIAGRAM_PROMPT_TEMPLATE = """Repository: {repo_name}
 
@@ -164,6 +172,7 @@ async def synthesize_diagrams(
             current_prompt = base_prompt
         logger.debug("synthesize_diagrams attempt %d/%d", attempt + 1, max_retries)
         last_output = (await llm.generate(current_prompt, system=_SYSTEM)) or ""
+        last_output = sanitize_mermaid(last_output)
         if validate_mermaid(last_output.strip()):
             return last_output.strip()
     logger.warning(

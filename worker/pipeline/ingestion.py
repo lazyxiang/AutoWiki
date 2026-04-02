@@ -244,6 +244,41 @@ def extract_readme(root: Path, max_chars: int = 3000) -> str | None:
     return None
 
 
+async def fetch_github_metadata(owner: str, name: str) -> dict:
+    """Fetch repository metadata from the GitHub API.
+
+    Uses the public ``GET /repos/{owner}/{name}`` endpoint.  No
+    authentication is required for public repositories, though
+    unauthenticated requests are subject to stricter rate limits.
+
+    Args:
+        owner: GitHub repository owner.
+        name: GitHub repository name.
+
+    Returns:
+        dict: A dictionary with ``description``, ``stars``, and
+        ``language`` keys.  Values fall back to sensible defaults if
+        the API call fails or the keys are missing from the response.
+    """
+    import httpx
+
+    url = f"https://api.github.com/repos/{owner}/{name}"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                url, headers={"Accept": "application/vnd.github.v3+json"}
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return {
+                "description": data.get("description") or "",
+                "stars": data.get("stargazers_count", 0),
+                "language": data.get("language") or "",
+            }
+    except Exception:
+        return {"description": "", "stars": 0, "language": ""}
+
+
 async def clone_or_fetch(clone_dir: Path, owner: str, name: str) -> str:
     """Clone a GitHub repository, or fetch and reset an existing clone.
 

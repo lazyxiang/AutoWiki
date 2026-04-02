@@ -195,7 +195,16 @@ async def list_repos():
         repos = result.scalars().all()
     return {
         "repos": [
-            {"id": r.id, "owner": r.owner, "name": r.name, "status": r.status}
+            {
+                "id": r.id,
+                "owner": r.owner,
+                "name": r.name,
+                "description": r.description or "",
+                "stars": r.stars or 0,
+                "language": r.language or "",
+                "status": r.status,
+                "indexed_at": r.indexed_at.isoformat() if r.indexed_at else None,
+            }
             for r in repos
         ]
     }
@@ -250,8 +259,11 @@ async def get_repo(repo_id: str):
             "id": repo.id,
             "owner": repo.owner,
             "name": repo.name,
+            "description": repo.description or "",
+            "stars": repo.stars or 0,
+            "language": repo.language or "",
             "status": repo.status,
-            "indexed_at": repo.indexed_at,
+            "indexed_at": repo.indexed_at.isoformat() if repo.indexed_at else None,
         }
 
 

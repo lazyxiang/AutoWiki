@@ -38,6 +38,7 @@ from worker.pipeline.diagram_synthesis import synthesize_diagrams
 from worker.pipeline.ingestion import (
     clone_or_fetch,
     extract_readme,
+    fetch_github_metadata,
     filter_files,
     get_affected_pages,
     get_changed_files,
@@ -401,6 +402,13 @@ async def run_full_index(
             clone_root = repo_data_dir / "clone"
         head_sha = await clone_or_fetch(clone_root, owner, name)
         logger.info("Clone complete. HEAD SHA: %s", head_sha)
+
+        # Fetch GitHub metadata (description, stars, language)
+        meta = await fetch_github_metadata(owner, name)
+        if any(meta.values()):
+            await _update_repo(db_path, repo_id, **meta)
+            logger.info("GitHub metadata fetched: %s", meta)
+
         loop = asyncio.get_running_loop()
         ignore_file = clone_root / ".autowikiignore"
         files = await loop.run_in_executor(
