@@ -8,7 +8,6 @@ import pytest
 
 from worker.utils.mermaid import sanitize_mermaid, sanitize_mermaid_blocks
 
-
 # ── Node labels ──────────────────────────────────────────────────────
 
 
@@ -60,8 +59,7 @@ class TestEdgeLabelQuoting:
 
     def test_already_quoted_edge_unchanged(self):
         assert (
-            sanitize_mermaid('X -->|"already quoted"| Y')
-            == 'X -->|"already quoted"| Y'
+            sanitize_mermaid('X -->|"already quoted"| Y') == 'X -->|"already quoted"| Y'
         )
 
     def test_parens_in_edge_label(self):
@@ -87,9 +85,7 @@ class TestCompoundShapes:
 
     def test_cylinder_with_slash(self):
         """[(FileSystem /docs)] — inner text with / gets quoted."""
-        assert (
-            sanitize_mermaid("H[(FileSystem /docs)]") == 'H[("FileSystem /docs")]'
-        )
+        assert sanitize_mermaid("H[(FileSystem /docs)]") == 'H[("FileSystem /docs")]'
 
     def test_stadium_shape(self):
         """([text]) — stadium shape preserved."""
@@ -101,9 +97,7 @@ class TestCompoundShapes:
 
     def test_double_circle_with_parens(self):
         """((Server (HTTP))) — inner parens quoted."""
-        assert (
-            sanitize_mermaid("A((Server (HTTP)))") == 'A(("Server (HTTP)"))'
-        )
+        assert sanitize_mermaid("A((Server (HTTP)))") == 'A(("Server (HTTP)"))'
 
     def test_hexagon_no_special_chars(self):
         """{{text}} — hexagon preserved."""
@@ -236,7 +230,7 @@ class TestSanitizeMermaidBlocks:
             "More text."
         )
         result = sanitize_mermaid_blocks(md)
-        assert '# Title' in result
+        assert "# Title" in result
         assert "More text." in result
         assert 'A["Server (HTTP)"]' in result
         assert '|"GET /api/{id}"|' in result
@@ -250,11 +244,7 @@ class TestSanitizeMermaidBlocks:
         assert sanitize_mermaid_blocks(None) is None  # type: ignore[arg-type]
 
     def test_multiple_mermaid_blocks(self):
-        md = (
-            "```mermaid\nA[Foo (x)]\n```\n"
-            "text\n"
-            "```mermaid\nB -->|GET /y| C\n```"
-        )
+        md = "```mermaid\nA[Foo (x)]\n```\ntext\n```mermaid\nB -->|GET /y| C\n```"
         result = sanitize_mermaid_blocks(md)
         assert 'A["Foo (x)"]' in result
         assert '|"GET /y"|' in result

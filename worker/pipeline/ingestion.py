@@ -274,12 +274,18 @@ async def fetch_github_metadata(owner: str, name: str) -> dict:
                 "description": data.get("description") or "",
                 "stars": data.get("stargazers_count", 0),
                 "language": data.get("language") or "",
+                "default_branch": data.get("default_branch") or "main",
             }
     except Exception:
-        return {"description": "", "stars": 0, "language": ""}
+        return {
+            "description": "",
+            "stars": 0,
+            "language": "",
+            "default_branch": "main",
+        }
 
 
-async def clone_or_fetch(clone_dir: Path, owner: str, name: str) -> str:
+async def clone_or_fetch(clone_dir: Path, owner: str, name: str) -> tuple[str, str]:
     """Clone a GitHub repository, or fetch and reset an existing clone.
 
     Performs a *shallow* clone (``depth=1``) on first run to minimise disk
@@ -297,23 +303,28 @@ async def clone_or_fetch(clone_dir: Path, owner: str, name: str) -> str:
         name: GitHub repository name.
 
     Returns:
-        str: The 40-character hexadecimal SHA of the HEAD commit after the
-        clone or fetch completes.
+        tuple[str, str]: A tuple containing (head_sha, active_branch_name).
+        *head_sha* is the 40-character hexadecimal SHA of the HEAD commit.
+        *active_branch_name* is the name of the branch that was cloned/fetched.
 
     Raises:
         git.exc.GitCommandError: If the remote is unreachable, authentication
             fails, or any git operation returns a non-zero exit code.
 
     Example:
-        >>> sha = await clone_or_fetch(Path("/tmp/clones/my-repo"), "owner", "repo")
+        >>> sha, branch = await clone_or_fetch(
+        ...     Path("/tmp/clones/my-repo"), "owner", "repo"
+        ... )
         >>> len(sha)
         40
+        >>> branch
+        'main'
     """
     import asyncio
 
     import git
 
-    def _do_clone_or_fetch() -> str:
+    def _do_clone_or_fetch() -> tuple[str, str]:
         url = f"https://github.com/{owner}/{name}.git"
         if (clone_dir / ".git").exists():
             repo = git.Repo(clone_dir)
@@ -322,7 +333,7 @@ async def clone_or_fetch(clone_dir: Path, owner: str, name: str) -> str:
         else:
             clone_dir.mkdir(parents=True, exist_ok=True)
             repo = git.Repo.clone_from(url, clone_dir, depth=1)
-        return repo.head.commit.hexsha
+        return repo.head.commit.hexsha, repo.active_branch.name
 
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, _do_clone_or_fetch)

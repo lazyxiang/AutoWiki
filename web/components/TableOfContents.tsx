@@ -18,10 +18,11 @@ interface Heading {
 
 /**
  * A sticky sidebar component that displays a Table of Contents for the current page.
- * It dynamically extracts headings from the `<article>` element.
+ * It dynamically extracts headings from the `<article>` element and highlights the active one.
  */
 export function TableOfContents() {
-  const [headings, setHeadings] = useState<Heading[]>([]);
+  const [headings, setHeadings] = useState<(Heading & { isActive?: boolean })[]>([]);
+  const [activeId, setActiveId] = useState<string>("");
   const pathname = usePathname();
 
   useEffect(() => {
@@ -29,7 +30,7 @@ export function TableOfContents() {
     const timer = setTimeout(() => {
       const article = document.querySelector("article");
       if (!article) {
-        setHeadings([]); // Clear stale anchors if no article is found
+        setHeadings([]);
         return;
       }
 
@@ -39,6 +40,24 @@ export function TableOfContents() {
         level: parseInt(el.tagName.replace("H", ""), 10),
       }));
       setHeadings(items);
+
+      // IntersectionObserver for active heading
+      const observer = new IntersectionObserver(
+        (entries) => {
+          const visibleEntry = entries.find((entry) => entry.isIntersecting);
+          if (visibleEntry) {
+            setActiveId(visibleEntry.target.id);
+          }
+        },
+        { rootMargin: "-80px 0% -80% 0%" } // Adjust based on header height
+      );
+
+      items.forEach((item) => {
+        const el = document.getElementById(item.id);
+        if (el) observer.observe(el);
+      });
+
+      return () => observer.disconnect();
     }, 100);
 
     return () => clearTimeout(timer);
@@ -52,22 +71,30 @@ export function TableOfContents() {
         On this page
       </p>
       <ul className="space-y-2">
-        {headings.map((heading) => (
-          <li
-            key={heading.id}
-            style={{ paddingLeft: `${(heading.level - 2) * 1}rem` }}
-          >
-            <a
-              href={`#${heading.id}`}
+        {headings.map((heading) => {
+          const isActive = heading.id === activeId;
+          return (
+            <li
+              key={heading.id}
+              style={{ paddingLeft: `${(heading.level - 2) * 1}rem` }}
               className={cn(
-                "block text-sm text-muted-foreground hover:text-foreground transition-colors",
-                heading.level === 2 ? "font-medium" : "text-xs"
+                "border-l-2 transition-colors",
+                isActive ? "border-primary" : "border-transparent"
               )}
             >
-              {heading.text}
-            </a>
-          </li>
-        ))}
+              <a
+                href={`#${heading.id}`}
+                className={cn(
+                  "block text-sm py-1 pl-3 transition-colors",
+                  isActive ? "text-primary font-medium" : "text-muted-foreground hover:text-foreground",
+                  heading.level === 3 && "text-xs"
+                )}
+              >
+                {heading.text}
+              </a>
+            </li>
+          );
+        })}
       </ul>
     </aside>
   );

@@ -77,10 +77,15 @@ def test_refresh_cmd_success(runner):
 
 def test_chat_cmd_prints_response(runner):
     cli, app = runner
+
+    def mock_run(coro):
+        coro.close()
+        return "It does foo things."
+
     with (
         patch("cli.commands.chat_cmd.httpx.get") as mock_get,
         patch("cli.commands.chat_cmd.httpx.post") as mock_post,
-        patch("cli.commands.chat_cmd.asyncio.run", return_value="It does foo things."),
+        patch("cli.commands.chat_cmd.asyncio.run", side_effect=mock_run),
     ):
         mock_get.return_value = MagicMock(
             status_code=200, json=lambda: {"id": "r1", "status": "ready"}

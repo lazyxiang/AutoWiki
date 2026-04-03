@@ -21,6 +21,7 @@ class Repository(Base):
     platform: Mapped[str] = mapped_column(String, default="github")
     last_commit: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String, nullable=False)
+    default_branch: Mapped[str | None] = mapped_column(String, nullable=True)
     indexed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     wiki_path: Mapped[str | None] = mapped_column(String, nullable=True)
     wiki_structure: Mapped[str | None] = mapped_column(Text, nullable=True)
