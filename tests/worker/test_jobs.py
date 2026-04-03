@@ -74,7 +74,9 @@ async def test_run_full_index_persists_wiki_plan(tmp_path, mock_llm, mock_embedd
     with (
         patch("worker.jobs.get_config") as mock_cfg,
         patch(
-            "worker.jobs.clone_or_fetch", new_callable=AsyncMock, return_value="abc123"
+            "worker.jobs.clone_or_fetch",
+            new_callable=AsyncMock,
+            return_value=("abc123", "main"),
         ),
         patch("worker.jobs.make_llm_provider", return_value=mock_llm),
         patch("worker.jobs.make_embedding_provider", return_value=mock_embedding),
@@ -214,7 +216,7 @@ async def test_always_clears_existing_artifacts(tmp_path, mock_llm, mock_embeddi
     (wiki_dir / "stale-page.md").write_text("old content")
 
     with (
-        patch("worker.jobs.clone_or_fetch", return_value="newsha"),
+        patch("worker.jobs.clone_or_fetch", return_value=("newsha", "main")),
         patch("worker.jobs.make_llm_provider", return_value=mock_llm),
         patch("worker.jobs.make_embedding_provider", return_value=mock_embedding),
     ):

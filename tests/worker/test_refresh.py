@@ -27,7 +27,9 @@ async def test_run_refresh_index_no_changes(tmp_path, mock_llm, mock_embedding):
     with (
         patch("worker.jobs.get_config") as mock_cfg,
         patch(
-            "worker.jobs.clone_or_fetch", new_callable=AsyncMock, return_value="abc123"
+            "worker.jobs.clone_or_fetch",
+            new_callable=AsyncMock,
+            return_value=("abc123", "main"),
         ),
     ):
         cfg = mock_cfg.return_value
@@ -108,7 +110,9 @@ async def test_run_refresh_index_with_changes(tmp_path, mock_llm, mock_embedding
     with (
         patch("worker.jobs.get_config") as mock_cfg,
         patch(
-            "worker.jobs.clone_or_fetch", new_callable=AsyncMock, return_value=new_sha
+            "worker.jobs.clone_or_fetch",
+            new_callable=AsyncMock,
+            return_value=(new_sha, "main"),
         ),
         patch(
             "worker.jobs.get_changed_files",
