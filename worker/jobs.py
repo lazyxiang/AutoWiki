@@ -302,6 +302,7 @@ async def run_full_index(
     owner: str,
     name: str,
     clone_root: Path | None = None,
+    wiki_language: str = "en",
 ) -> None:
     """Run the complete 7-stage wiki generation pipeline for a repository.
 
@@ -507,6 +508,7 @@ async def run_full_index(
             dep_graph=dep_graph,
             readme=readme,
             on_retry=_on_retry,
+            wiki_language=wiki_language,
         )
         logger.info(
             "Wiki plan generated: %d pages planned for %s", len(plan.pages), name
@@ -542,6 +544,7 @@ async def run_full_index(
                 dep_info=page_dep_info if any(page_dep_info.values()) else None,
                 entity_details=page_entities if page_entities else None,
                 on_retry=_on_retry,
+                wiki_language=wiki_language,
             )
             logger.info(
                 "Page generated: %s (%s), %d chars",
@@ -573,7 +576,9 @@ async def run_full_index(
 
         # Stage 7: Architecture Diagram — Mermaid diagram prepended to first page
         logger.info("Stage 7: Architecture Diagram Synthesis starting")
-        diagram = await synthesize_diagrams(plan, repo_name=name, llm=llm)
+        diagram = await synthesize_diagrams(
+            plan, repo_name=name, llm=llm, wiki_language=wiki_language
+        )
         if diagram is not None:
             logger.info("Architecture diagram synthesized: %d chars", len(diagram))
             if plan.pages:
@@ -640,6 +645,7 @@ async def run_refresh_index(
     owner: str,
     name: str,
     clone_root: Path | None = None,
+    wiki_language: str = "en",
 ) -> None:
     """Incremental refresh: re-run the pipeline only for pages with changed files.
 
@@ -770,6 +776,7 @@ async def run_refresh_index(
                 owner=owner,
                 name=name,
                 clone_root=clone_root,
+                wiki_language=wiki_language,
             )
             return
 
@@ -785,6 +792,7 @@ async def run_refresh_index(
                 owner=owner,
                 name=name,
                 clone_root=clone_root,
+                wiki_language=wiki_language,
             )
             return
 
@@ -893,6 +901,7 @@ async def run_refresh_index(
                 owner=owner,
                 name=name,
                 clone_root=clone_root,
+                wiki_language=wiki_language,
             )
             return
 
@@ -992,6 +1001,7 @@ async def run_refresh_index(
             readme=readme,
             on_retry=_on_retry,
             existing_titles=unaffected_titles,
+            wiki_language=wiki_language,
         )
         logger.info(
             "Wiki plan generated: %d pages updated for %s", len(plan.pages), name
@@ -1042,6 +1052,7 @@ async def run_refresh_index(
                 dep_info=page_dep_info if any(page_dep_info.values()) else None,
                 entity_details=page_entities if page_entities else None,
                 on_retry=_on_retry,
+                wiki_language=wiki_language,
             )
             logger.info(
                 "Page updated: %s (%s), %d chars",
@@ -1085,7 +1096,9 @@ async def run_refresh_index(
 
         # Stage 7: Rebuild architecture diagram and update first wiki page
         logger.info("Stage 7: Architecture Diagram Synthesis starting")
-        diagram = await synthesize_diagrams(merged_plan, repo_name=name, llm=llm)
+        diagram = await synthesize_diagrams(
+            merged_plan, repo_name=name, llm=llm, wiki_language=wiki_language
+        )
         if diagram:
             logger.info("Architecture diagram synthesized: %d chars", len(diagram))
             await _write_text_async(ast_dir / "architecture.mmd", diagram)

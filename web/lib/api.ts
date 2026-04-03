@@ -17,11 +17,11 @@ const API_URL =
  * @param url - The GitHub repository URL.
  * @returns A promise resolving to the repository ID, job ID, and status.
  */
-export async function submitRepo(url: string) {
+export async function submitRepo(url: string, wikiLanguage: string = "en") {
   const res = await fetch(`${API_URL}/api/repos`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url }),
+    body: JSON.stringify({ url, wiki_language: wikiLanguage }),
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json() as Promise<{ repo_id: string; job_id: string; status: string }>;
@@ -62,6 +62,7 @@ export async function getRepo(repoId: string): Promise<Repository> {
     default_branch: repo.default_branch || "main",
     indexed_at: indexedAt,
     indexed_at_formatted: repo.indexed_at_formatted || (indexedAt ? new Date(indexedAt).toLocaleString() : "Never"),
+    wiki_language: repo.wiki_language || "en",
   };
 }
 /**
@@ -170,6 +171,7 @@ export interface Repository {
   default_branch?: string;
   indexed_at: string;
   indexed_at_formatted: string;
+  wiki_language: string;
 }
 
 /**
@@ -186,6 +188,7 @@ interface RepoRaw {
   default_branch?: string;
   indexed_at?: string;
   indexed_at_formatted?: string;
+  wiki_language?: string;
 }
 
 /**
@@ -218,6 +221,7 @@ export async function getRepositories(): Promise<Repository[]> {
       default_branch: repo.default_branch || "main",
       indexed_at: indexedAt,
       indexed_at_formatted: repo.indexed_at_formatted || (indexedAt ? new Date(indexedAt).toLocaleString() : "Never"),
+      wiki_language: repo.wiki_language || "en",
     };
   });
 }

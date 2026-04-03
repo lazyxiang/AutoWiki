@@ -65,6 +65,7 @@ def _apply_migrations(connection) -> None:
             ("description", "TEXT"),
             ("stars", "INTEGER"),
             ("language", "VARCHAR"),
+            ("wiki_language", "VARCHAR"),
         ]:
             if col_name not in columns:
                 try:

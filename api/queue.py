@@ -50,7 +50,13 @@ async def _enqueue(job_name: str, **kwargs) -> None:
         await redis.close()
 
 
-async def enqueue_full_index(repo_id: str, job_id: str, owner: str, name: str) -> str:
+async def enqueue_full_index(
+    repo_id: str,
+    job_id: str,
+    owner: str,
+    name: str,
+    wiki_language: str = "en",
+) -> str:
     """Enqueue a full seven-stage wiki generation job for a repository.
 
     Pushes a ``run_full_index`` task to the ARQ queue.  The worker will run
@@ -64,6 +70,8 @@ async def enqueue_full_index(repo_id: str, job_id: str, owner: str, name: str) -
             SQLite; the worker updates progress against this ID.
         owner (str): GitHub organisation or user name (e.g. ``"octocat"``).
         name (str): GitHub repository name (e.g. ``"hello-world"``).
+        wiki_language (str): ISO-639-1 language code for wiki content
+            generation (e.g. ``"en"``, ``"zh"``).  Defaults to ``"en"``.
 
     Returns:
         str: The ``job_id`` passed in, returned as-is so callers can use this
@@ -85,12 +93,17 @@ async def enqueue_full_index(repo_id: str, job_id: str, owner: str, name: str) -
         job_id=job_id,
         owner=owner,
         name=name,
+        wiki_language=wiki_language,
     )
     return job_id
 
 
 async def enqueue_refresh_index(
-    repo_id: str, job_id: str, owner: str, name: str
+    repo_id: str,
+    job_id: str,
+    owner: str,
+    name: str,
+    wiki_language: str = "en",
 ) -> str:
     """Enqueue an incremental refresh job for an already-indexed repository.
 
@@ -105,6 +118,8 @@ async def enqueue_refresh_index(
             SQLite.
         owner (str): GitHub organisation or user name.
         name (str): GitHub repository name.
+        wiki_language (str): ISO-639-1 language code for wiki content
+            generation (e.g. ``"en"``, ``"zh"``).  Defaults to ``"en"``.
 
     Returns:
         str: The ``job_id`` passed in, returned as-is.
@@ -120,6 +135,11 @@ async def enqueue_refresh_index(
         660e9500-f30c-52e5-b827-557766551111
     """
     await _enqueue(
-        "run_refresh_index", repo_id=repo_id, job_id=job_id, owner=owner, name=name
+        "run_refresh_index",
+        repo_id=repo_id,
+        job_id=job_id,
+        owner=owner,
+        name=name,
+        wiki_language=wiki_language,
     )
     return job_id
