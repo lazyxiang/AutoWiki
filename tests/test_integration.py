@@ -50,7 +50,7 @@ async def test_full_pipeline_produces_pages(tmp_path, mock_llm, mock_embedding):
         await s.commit()
 
     with (
-        patch("worker.jobs.clone_or_fetch", return_value="deadbeef"),
+        patch("worker.jobs.clone_or_fetch", return_value=("deadbeef", "main")),
         patch("worker.jobs.make_llm_provider", return_value=mock_llm),
         patch("worker.jobs.make_embedding_provider", return_value=mock_embedding),
     ):

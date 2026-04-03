@@ -9,12 +9,14 @@ import type { Components } from "react-markdown";
 import { sanitizeMermaid } from "@/lib/mermaid-sanitize";
 import { Maximize2, X, ZoomIn, ZoomOut, RotateCcw, Move, Github } from "lucide-react";
 import { Button } from "./ui/button";
+import DOMPurify from "dompurify";
 
 /**
  * Renders a Mermaid diagram using the mermaid.js library with light theme and interactivity.
  */
 function MermaidBlock({ children }: { children: string }) {
   const ref = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const id = useId().replace(/:/g, "_");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [svgContent, setSvgContent] = useState<string>("");
@@ -42,8 +44,14 @@ function MermaidBlock({ children }: { children: string }) {
         const sanitized = sanitizeMermaid(children.trim());
         const { svg } = await mermaid.render(renderId, sanitized);
         if (!cancelled) {
+          // Sanitize SVG output for security
+          const cleanSvg = DOMPurify.sanitize(svg, {
+            USE_PROFILES: { svg: true },
+            FORBID_TAGS: ["script", "style"],
+            FORBID_ATTR: ["onmouseover", "onerror", "onclick"],
+          });
           // Wrap SVG to ensure it doesn't truncate and supports proper scaling
-          const wrappedSvg = svg.replace(/<svg/, '<svg style="max-width: 100%; height: auto;"');
+          const wrappedSvg = cleanSvg.replace(/<svg/, '<svg style="max-width: 100%; height: auto;"');
           setSvgContent(wrappedSvg);
           if (ref.current) {
             ref.current.innerHTML = wrappedSvg;
@@ -58,6 +66,25 @@ function MermaidBlock({ children }: { children: string }) {
     })();
     return () => { cancelled = true; };
   }, [children, id]);
+
+  // Use native listener for non-passive wheel events
+  useEffect(() => {
+    const handleWheel = (e: WheelEvent) => {
+      if (isModalOpen) {
+        e.preventDefault();
+        const delta = e.deltaY > 0 ? 0.9 : 1.1;
+        setZoom(prev => Math.min(Math.max(prev * delta, 0.1), 5));
+      }
+    };
+
+    const el = containerRef.current;
+    if (el && isModalOpen) {
+      el.addEventListener("wheel", handleWheel, { passive: false });
+    }
+    return () => {
+      if (el) el.removeEventListener("wheel", handleWheel);
+    };
+  }, [isModalOpen]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
     setIsDragging(true);
@@ -75,12 +102,6 @@ function MermaidBlock({ children }: { children: string }) {
 
   const handleMouseUp = () => {
     setIsDragging(false);
-  };
-
-  const handleWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? 0.9 : 1.1;
-    setZoom(prev => Math.min(Math.max(prev * delta, 0.5), 5));
   };
 
   return (
@@ -131,12 +152,12 @@ function MermaidBlock({ children }: { children: string }) {
 
             {/* Modal Body (Interactive Area) */}
             <div 
+              ref={containerRef}
               className="flex-1 relative bg-white cursor-grab active:cursor-grabbing overflow-hidden"
               onMouseDown={handleMouseDown}
               onMouseMove={handleMouseMove}
               onMouseUp={handleMouseUp}
               onMouseLeave={handleMouseUp}
-              onWheel={handleWheel}
             >
               <div 
                 className="absolute inset-0 flex items-center justify-center p-12 transition-transform duration-75"
@@ -161,12 +182,12 @@ function MermaidBlock({ children }: { children: string }) {
 /**
  * Renders a styled badge for source code citations with a link to GitHub.
  */
-function SourceBadge({ path, lines, owner, repo }: { path: string; lines: string; owner: string; repo: string }) {
+function SourceBadge({ path, lines, owner, repo, defaultBranch }: { path: string; lines: string; owner: string; repo: string; defaultBranch: string }) {
   // Clean lines to ensure we only have digits and dashes for the anchor
   // GitHub anchors for ranges look like #L10-L20
   const cleanLines = lines.replace(/[^0-9-]/g, "");
   const lineAnchor = cleanLines ? `#L${cleanLines.replace("-", "-L")}` : "";
-  const githubUrl = `https://github.com/${owner}/${repo}/blob/main/${path}${lineAnchor}`;
+  const githubUrl = `https://github.com/${owner}/${repo}/blob/${defaultBranch}/${path}${lineAnchor}`;
 
   return (
     <a
@@ -215,7 +236,7 @@ const slugify = (text: string) => {
 /**
  * Markdown components configuration for ReactMarkdown.
  */
-const getComponents = (getUniqueId: (text: string) => string, owner: string, repo: string): Components => ({
+const getComponents = (getUniqueId: (text: string) => string, owner: string, repo: string, defaultBranch: string): Components => ({
   em({ children }) {
     const text = String(children);
     if (!text.startsWith("Source:")) return <em className="italic">{children}</em>;
@@ -270,6 +291,7 @@ const getComponents = (getUniqueId: (text: string) => string, owner: string, rep
               lines={lines} 
               owner={owner} 
               repo={repo} 
+              defaultBranch={defaultBranch}
             />
           );
         })}
@@ -317,13 +339,15 @@ interface Props {
   owner: string;
   /** The repository name. */
   repo: string;
+  /** The repository default branch. */
+  defaultBranch: string;
 }
 
 /**
  * Renders the content of a wiki page, including Markdown and Mermaid diagrams.
  * Automatically generates unique IDs for headings to support Table of Contents.
  */
-export function WikiPageContent({ content, owner, repo }: Props) {
+export function WikiPageContent({ content, owner, repo, defaultBranch }: Props) {
   // Use a local object for ID tracking within a single render pass.
   // This is safe because we want deterministic IDs for the current content.
   const idCounts: Record<string, number> = {};
@@ -338,7 +362,7 @@ export function WikiPageContent({ content, owner, repo }: Props) {
     return count === 0 ? baseId : `${baseId}-${count}`;
   };
 
-  const components = getComponents(getUniqueId, owner, repo);
+  const components = getComponents(getUniqueId, owner, repo, defaultBranch);
 
   return (
     <article className="w-full max-w-4xl p-8 text-foreground mx-auto">

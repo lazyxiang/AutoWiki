@@ -103,8 +103,9 @@ function GraphInner({ nodes, edges, loaded, error }: State) {
 
         <Controls 
           showInteractive={false}
-          className="bg-white border border-slate-200 shadow-sm rounded-xl overflow-hidden !left-6 !bottom-6 !flex-col !p-1 !gap-1"
+          className="bg-white border border-slate-200 shadow-sm rounded-xl overflow-hidden left-6! bottom-6! flex-col! p-1! gap-1!"
         />
+
       </ReactFlow>
     </div>
   );

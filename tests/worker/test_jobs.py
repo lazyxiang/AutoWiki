@@ -37,7 +37,7 @@ async def test_full_index_job_updates_status(tmp_path, mock_llm, mock_embedding)
         await s.commit()
 
     with (
-        patch("worker.jobs.clone_or_fetch", return_value="abc123def456"),
+        patch("worker.jobs.clone_or_fetch", return_value=("abc123def456", "main")),
         patch("worker.jobs.make_llm_provider", return_value=mock_llm),
         patch("worker.jobs.make_embedding_provider", return_value=mock_embedding),
     ):

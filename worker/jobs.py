@@ -400,11 +400,15 @@ async def run_full_index(
         logger.info("Stage 1: Ingestion starting for %s/%s", owner, name)
         if clone_root is None:
             clone_root = repo_data_dir / "clone"
-        head_sha = await clone_or_fetch(clone_root, owner, name)
-        logger.info("Clone complete. HEAD SHA: %s", head_sha)
+        head_sha, active_branch = await clone_or_fetch(clone_root, owner, name)
+        logger.info("Clone complete. HEAD SHA: %s, Branch: %s", head_sha, active_branch)
 
-        # Fetch GitHub metadata (description, stars, language)
+        # Fetch GitHub metadata (description, stars, language, default_branch)
         meta = await fetch_github_metadata(owner, name)
+        # Use active branch from clone as fallback if metadata fetch fails
+        if not meta.get("default_branch"):
+            meta["default_branch"] = active_branch
+
         if any(meta.values()):
             await _update_repo(db_path, repo_id, **meta)
             logger.info("GitHub metadata fetched: %s", meta)
@@ -720,7 +724,7 @@ async def run_refresh_index(
         repo_data_dir = data_dir / "repos" / repo_id
         if clone_root is None:
             clone_root = repo_data_dir / "clone"
-        new_sha = await clone_or_fetch(clone_root, owner, name)
+        new_sha, _ = await clone_or_fetch(clone_root, owner, name)
         logger.info("Fetch complete. New HEAD SHA: %s", new_sha)
 
         async with get_session(db_path) as s:

@@ -48,7 +48,9 @@ export async function getJob(jobId: string) {
 export async function getRepo(repoId: string): Promise<Repository> {
   const res = await fetch(`${API_URL}/api/repos/${repoId}`);
   if (!res.ok) throw new Error(await res.text());
-  const repo = await res.json();
+  const repo = await res.json() as RepoRaw;
+  const indexedAt = repo.indexed_at || "";
+  
   return {
     id: repo.id || "",
     owner: repo.owner || "unknown",
@@ -57,8 +59,9 @@ export async function getRepo(repoId: string): Promise<Repository> {
     stars: repo.stars ?? 0,
     language: repo.language || "Unknown",
     status: repo.status || "unknown",
-    indexed_at: repo.indexed_at || "",
-    indexed_at_formatted: repo.indexed_at_formatted || "Never",
+    default_branch: repo.default_branch || "main",
+    indexed_at: indexedAt,
+    indexed_at_formatted: repo.indexed_at_formatted || (indexedAt ? new Date(indexedAt).toLocaleString() : "Never"),
   };
 }
 /**
@@ -164,6 +167,7 @@ export interface Repository {
   stars?: number;
   language?: string;
   status: string;
+  default_branch?: string;
   indexed_at: string;
   indexed_at_formatted: string;
 }
@@ -179,6 +183,7 @@ interface RepoRaw {
   stars?: number;
   language?: string;
   status?: string;
+  default_branch?: string;
   indexed_at?: string;
   indexed_at_formatted?: string;
 }
@@ -200,15 +205,19 @@ export async function getRepositories(): Promise<Repository[]> {
   if (!res.ok) throw new Error(await res.text());
   const data = await res.json() as RawReposResponse;
   
-  return (data.repos || []).map((repo: RepoRaw) => ({
-    id: repo.id || "",
-    owner: repo.owner || "unknown",
-    name: repo.name || "unnamed",
-    description: repo.description || "",
-    stars: repo.stars ?? 0,
-    language: repo.language || "Unknown",
-    status: repo.status || "unknown",
-    indexed_at: repo.indexed_at || "",
-    indexed_at_formatted: repo.indexed_at_formatted || "Never",
-  }));
+  return (data.repos || []).map((repo: RepoRaw) => {
+    const indexedAt = repo.indexed_at || "";
+    return {
+      id: repo.id || "",
+      owner: repo.owner || "unknown",
+      name: repo.name || "unnamed",
+      description: repo.description || "",
+      stars: repo.stars ?? 0,
+      language: repo.language || "Unknown",
+      status: repo.status || "unknown",
+      default_branch: repo.default_branch || "main",
+      indexed_at: indexedAt,
+      indexed_at_formatted: repo.indexed_at_formatted || (indexedAt ? new Date(indexedAt).toLocaleString() : "Never"),
+    };
+  });
 }
