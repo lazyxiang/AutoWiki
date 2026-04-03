@@ -18,6 +18,7 @@ class Repository(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     stars: Mapped[int | None] = mapped_column(Integer, nullable=True)
     language: Mapped[str | None] = mapped_column(String, nullable=True)
+    wiki_language: Mapped[str | None] = mapped_column(String, nullable=True)
     platform: Mapped[str] = mapped_column(String, default="github")
     last_commit: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String, nullable=False)

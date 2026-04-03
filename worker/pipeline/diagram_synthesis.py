@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 
 from worker.llm.base import LLMProvider
+from worker.pipeline.language import get_language_instruction
 from worker.pipeline.wiki_planner import WikiPlan
 from worker.utils.mermaid import sanitize_mermaid
 
@@ -104,6 +105,7 @@ async def synthesize_diagrams(
     repo_name: str,
     llm: LLMProvider,
     max_retries: int = 3,
+    wiki_language: str = "en",
 ) -> str | None:
     """Ask the LLM to generate a Mermaid architecture diagram for the repo.
 
@@ -171,7 +173,8 @@ async def synthesize_diagrams(
         else:
             current_prompt = base_prompt
         logger.debug("synthesize_diagrams attempt %d/%d", attempt + 1, max_retries)
-        last_output = (await llm.generate(current_prompt, system=_SYSTEM)) or ""
+        system = _SYSTEM + get_language_instruction(wiki_language)
+        last_output = (await llm.generate(current_prompt, system=system)) or ""
         last_output = sanitize_mermaid(last_output)
         if validate_mermaid(last_output.strip()):
             return last_output.strip()

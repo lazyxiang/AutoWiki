@@ -26,6 +26,7 @@ from typing import Any
 
 from worker.embedding.base import EmbeddingProvider
 from worker.llm.base import LLMProvider
+from worker.pipeline.language import get_language_instruction
 from worker.pipeline.rag_indexer import FAISSStore
 from worker.pipeline.wiki_planner import WikiPageSpec
 from worker.utils.mermaid import sanitize_mermaid_blocks
@@ -330,6 +331,7 @@ async def generate_page(
     dep_info: dict[str, Any] | None = None,
     entity_details: list[dict[str, Any]] | None = None,
     on_retry: OnRetryCallback | None = None,
+    wiki_language: str = "en",
 ) -> PageResult:
     """Generate a single wiki page using multi-query RAG and an LLM.
 
@@ -417,10 +419,11 @@ async def generate_page(
     prompt = _build_page_prompt(
         spec, context_chunks, repo_name, dep_info, entity_details
     )
+    system = _SYSTEM + get_language_instruction(wiki_language)
     content = await async_retry(
         llm.generate,
         prompt,
-        system=_SYSTEM,
+        system=system,
         transient_exceptions=TRANSIENT_EXCEPTIONS,
         on_retry=on_retry,
     )

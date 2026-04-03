@@ -27,6 +27,7 @@ import re
 from dataclasses import dataclass, field
 
 from worker.llm.base import LLMProvider
+from worker.pipeline.language import get_planner_language_instruction
 from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
 
 
@@ -464,6 +465,7 @@ async def generate_wiki_plan(
     readme: str | None = None,
     on_retry: OnRetryCallback | None = None,
     existing_titles: set[str] | None = None,
+    wiki_language: str = "en",
 ) -> WikiPlan:
     """Generate a hierarchical wiki plan for a repository using an LLM.
 
@@ -540,13 +542,14 @@ async def generate_wiki_plan(
         all_files=all_files,
     )
 
+    system = _SYSTEM + get_planner_language_instruction(wiki_language)
     for attempt in range(max_retries):
         try:
             raw = await async_retry(
                 llm.generate_structured,
                 prompt,
                 schema=_WIKI_PLAN_SCHEMA,
-                system=_SYSTEM,
+                system=system,
                 transient_exceptions=TRANSIENT_EXCEPTIONS,
                 on_retry=on_retry,
             )
