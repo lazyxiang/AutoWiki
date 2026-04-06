@@ -375,6 +375,13 @@ async def run_full_index(
         repo_data_dir.mkdir(parents=True, exist_ok=True)
 
         def _clear_repo_artifacts() -> None:
+            """Remove all generated files and search indices for the repository.
+
+            Clears the FAISS index, metadata pickle, and all Markdown pages in
+            the wiki/ directory.  Also deletes the internal wiki plan and
+            Mermaid architecture diagram if they exist.  The git clone is
+            preserved.
+            """
             index_path = repo_data_dir / "faiss.index"
             meta_path = repo_data_dir / "faiss.meta.pkl"
             wiki_dir = repo_data_dir / "wiki"

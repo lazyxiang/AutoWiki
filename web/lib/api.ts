@@ -15,6 +15,7 @@ const API_URL =
  * Submits a repository URL for indexing.
  * 
  * @param url - The GitHub repository URL.
+ * @param wikiLanguage - The language for wiki generation (default: "en").
  * @returns A promise resolving to the repository ID, job ID, and status.
  */
 export async function submitRepo(url: string, wikiLanguage: string = "en") {

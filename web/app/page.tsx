@@ -28,7 +28,7 @@ export default async function HomePage() {
                 stars={repo.stars}
                 language={repo.language}
                 updatedAt={repo.indexed_at_formatted}
-                wikiLanguage={repo.wiki_language}
+                wikiLanguage={repo.wiki_language ?? "en"}
               />
             ))}
           </div>

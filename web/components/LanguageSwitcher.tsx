@@ -21,6 +21,8 @@ export function LanguageSwitcher({ value, onChange }: LanguageSwitcherProps) {
             key={lang.code}
             type="button"
             onClick={() => onChange(lang.code)}
+            aria-pressed={value === lang.code}
+            aria-label={`Generate wiki in ${lang.code === "zh" ? "Chinese" : "English"}`}
             className={
               value === lang.code
                 ? "px-2.5 py-1 bg-primary text-primary-foreground transition-colors"
