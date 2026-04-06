@@ -34,9 +34,13 @@ class IndexRequest(BaseModel):
             ``"github.com/owner/repo"``.  The URL is parsed by
             :func:`worker.pipeline.ingestion.parse_github_url` which accepts
             both ``https://`` and bare ``github.com/`` prefixes.
+        wiki_language (str): ISO-639-1 language code for the generated wiki
+            content.  Defaults to ``"en"`` (English).  Use ``"zh"`` to
+            generate the wiki in Chinese (简体中文).
     """
 
     url: str
+    wiki_language: str = "en"
 
 
 @router.post("", status_code=202)
@@ -122,9 +126,17 @@ async def submit_repo(req: IndexRequest):
         if existing is None:
             # First-time submission: create the repository metadata row.
             repo = Repository(
-                id=repo_id, owner=owner, name=name, status="pending", platform="github"
+                id=repo_id,
+                owner=owner,
+                name=name,
+                status="pending",
+                platform="github",
+                wiki_language=req.wiki_language,
             )
             s.add(repo)
+        else:
+            # Re-submission: update the desired wiki language.
+            existing.wiki_language = req.wiki_language
         job = Job(
             id=job_id,
             repo_id=repo_id,
@@ -137,7 +149,9 @@ async def submit_repo(req: IndexRequest):
         await s.commit()
 
     try:
-        await enqueue_full_index(repo_id, job_id, owner, name)
+        await enqueue_full_index(
+            repo_id, job_id, owner, name, wiki_language=req.wiki_language
+        )
     except Exception:
         # If Redis is unavailable, mark the job failed immediately so the
         # client is not left waiting indefinitely.
@@ -205,6 +219,7 @@ async def list_repos():
                 "status": r.status,
                 "default_branch": r.default_branch or "main",
                 "indexed_at": r.indexed_at.isoformat() if r.indexed_at else None,
+                "wiki_language": r.wiki_language or "en",
             }
             for r in repos
         ]
@@ -266,6 +281,7 @@ async def get_repo(repo_id: str):
             "status": repo.status,
             "default_branch": repo.default_branch or "main",
             "indexed_at": repo.indexed_at.isoformat() if repo.indexed_at else None,
+            "wiki_language": repo.wiki_language or "en",
         }
 
 
@@ -327,6 +343,7 @@ async def refresh_repo(repo_id: str):
                 status_code=409, detail="Repository is not in a refreshable state"
             )
         owner, name = repo.owner, repo.name
+        wiki_language = repo.wiki_language or "en"
         job_id = str(uuid.uuid4())
         job = Job(
             id=job_id, repo_id=repo_id, type="refresh", status="queued", progress=0
@@ -336,7 +353,9 @@ async def refresh_repo(repo_id: str):
         # that work is in progress.
         repo.status = "indexing"
         await s.commit()
-    await enqueue_refresh_index(repo_id, job_id, owner, name)
+    await enqueue_refresh_index(
+        repo_id, job_id, owner, name, wiki_language=wiki_language
+    )
     return {"repo_id": repo_id, "job_id": job_id, "status": "queued"}
 
 

@@ -5,7 +5,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { submitRepo } from "@/lib/api";
 
-export function IndexForm() {
+interface IndexFormProps {
+  wikiLanguage?: string;
+}
+
+export function IndexForm({ wikiLanguage = "en" }: IndexFormProps) {
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -16,7 +20,7 @@ export function IndexForm() {
     setLoading(true);
     setError("");
     try {
-      const { repo_id, job_id } = await submitRepo(url);
+      const { repo_id, job_id } = await submitRepo(url, wikiLanguage);
       const match = url.replace(/^https?:\/\//, "").match(/github\.com\/([^/]+)\/([^/]+)/);
       const owner = match?.[1] ?? "";
       const repo = match?.[2]?.replace(/\.git$/, "") ?? "";

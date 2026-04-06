@@ -94,15 +94,17 @@ def test_validate_wiki_plan_orphan_files():
     assert "also_orphan.py" in overview.files
 
 
-def test_wiki_page_spec_slug():
-    spec = WikiPageSpec(title="My Cool Component", purpose="Handles cool stuff.")
-    assert spec.slug == "my-cool-component"
+def test_wiki_page_spec_slug_unicode():
+    spec = WikiPageSpec(title="中文文档", purpose="Chinese documentation.")
+    assert spec.slug == "中文文档"
 
-    spec2 = WikiPageSpec(title="API Endpoints", purpose="REST handlers.")
-    assert spec2.slug == "api-endpoints"
+    spec2 = WikiPageSpec(title="API 接口", purpose="API interface.")
+    assert spec2.slug == "api-接口"
 
-    spec3 = WikiPageSpec(title="Overview", purpose="High-level overview.")
-    assert spec3.slug == "overview"
+    # Test symbols-only fallback to hash
+    spec3 = WikiPageSpec(title="!!!", purpose="Symbols only.")
+    assert spec3.slug.startswith("page-")
+    assert len(spec3.slug) == 13  # "page-" (5) + hash (8)
 
 
 def test_wiki_plan_to_wiki_json():

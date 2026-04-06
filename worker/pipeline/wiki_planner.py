@@ -22,12 +22,26 @@ and :meth:`WikiPlan.to_api_structure`.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
 
 from worker.llm.base import LLMProvider
+from worker.pipeline.language import get_planner_language_instruction
 from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
+
+
+def _slugify_title(text: str) -> str:
+    """Create a URL-safe slug from a title, supporting Unicode characters.
+
+    Uses Unicode-aware word characters and falls back to a hash if the
+    result would be empty (e.g. for titles with only symbols).
+    """
+    slug = re.sub(r"[^\w-]+", "-", text.lower(), flags=re.UNICODE).strip("-")
+    if not slug:
+        return "page-" + hashlib.sha1(text.encode("utf-8")).hexdigest()[:8]
+    return slug
 
 
 @dataclass
@@ -66,6 +80,7 @@ class WikiPageSpec:
 
         Converts the title to lowercase, replaces any run of non-alphanumeric
         characters with a hyphen, and strips leading/trailing hyphens.
+        Supports Unicode characters (e.g. Chinese titles).
 
         Returns:
             str: A URL-safe slug suitable for use as a filesystem name and
@@ -74,10 +89,10 @@ class WikiPageSpec:
         Example:
             >>> WikiPageSpec(title="API Gateway", purpose="...").slug
             'api-gateway'
-            >>> WikiPageSpec(title="  Worker / Job Queue  ", purpose="...").slug
-            'worker-job-queue'
+            >>> WikiPageSpec(title="中文文档", purpose="...").slug
+            '中文文档'
         """
-        return re.sub(r"[^a-z0-9-]+", "-", self.title.lower()).strip("-")
+        return _slugify_title(self.title)
 
     @property
     def parent_slug(self) -> str | None:
@@ -95,12 +110,10 @@ class WikiPageSpec:
             ...                     parent="API Gateway")
             >>> spec.parent_slug
             'api-gateway'
-            >>> WikiPageSpec(title="Overview", purpose="...").parent_slug is None
-            True
         """
         if self.parent is None:
             return None
-        return re.sub(r"[^a-z0-9-]+", "-", self.parent.lower()).strip("-")
+        return _slugify_title(self.parent)
 
 
 @dataclass
@@ -415,7 +428,7 @@ def validate_wiki_plan(
     slug_counts: dict[str, int] = {}
     for p in raw["pages"]:
         if "title" in p:
-            slug = re.sub(r"[^a-z0-9-]+", "-", p["title"].lower()).strip("-")
+            slug = _slugify_title(p["title"])
             slug_counts[slug] = slug_counts.get(slug, 0) + 1
     dupes = [slug for slug, count in slug_counts.items() if count > 1]
     if dupes:
@@ -464,6 +477,7 @@ async def generate_wiki_plan(
     readme: str | None = None,
     on_retry: OnRetryCallback | None = None,
     existing_titles: set[str] | None = None,
+    wiki_language: str = "en",
 ) -> WikiPlan:
     """Generate a hierarchical wiki plan for a repository using an LLM.
 
@@ -540,13 +554,14 @@ async def generate_wiki_plan(
         all_files=all_files,
     )
 
+    system = _SYSTEM + get_planner_language_instruction(wiki_language)
     for attempt in range(max_retries):
         try:
             raw = await async_retry(
                 llm.generate_structured,
                 prompt,
                 schema=_WIKI_PLAN_SCHEMA,
-                system=_SYSTEM,
+                system=system,
                 transient_exceptions=TRANSIENT_EXCEPTIONS,
                 on_retry=on_retry,
             )

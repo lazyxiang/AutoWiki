@@ -1,4 +1,4 @@
-import { Star, Clock, Code2 } from "lucide-react";
+import { Star, Clock, Code2, Globe } from "lucide-react";
 import Link from "next/link";
 
 /**
@@ -17,13 +17,15 @@ interface RepoCardProps {
   language?: string;
   /** Human-readable string representing when the repository was last indexed. */
   updatedAt?: string;
+  /** Language code the wiki was generated in (e.g. "en", "zh"). */
+  wikiLanguage?: string;
 }
 
 /**
  * A card component that displays summary information about a repository.
  * Used on the home page for discovery.
  */
-export function RepoCard({ owner, name, description, stars, language, updatedAt }: RepoCardProps) {
+export function RepoCard({ owner, name, description, stars, language, updatedAt, wikiLanguage }: RepoCardProps) {
   return (
     <Link href={`/${owner}/${name}`} className="group block p-5 bg-card border border-border rounded-xl hover:border-primary/50 hover:shadow-sm transition-all">
       <h3 className="text-lg font-bold group-hover:text-primary transition-colors">
@@ -41,6 +43,12 @@ export function RepoCard({ owner, name, description, stars, language, updatedAt 
         {stars !== undefined && (
           <span className="flex items-center gap-1.5">
             <Star size={14} className="text-yellow-500 fill-yellow-500" /> {stars.toLocaleString()}
+          </span>
+        )}
+        {wikiLanguage && wikiLanguage !== "en" && (
+          <span className="flex items-center gap-1.5">
+            <Globe size={14} className="text-primary" />
+            {wikiLanguage === "zh" ? "中文" : wikiLanguage.toUpperCase()}
           </span>
         )}
         <span className="flex items-center gap-1.5 ml-auto">

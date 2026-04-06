@@ -65,6 +65,7 @@ def _apply_migrations(connection) -> None:
             ("description", "TEXT"),
             ("stars", "INTEGER"),
             ("language", "VARCHAR"),
+            ("wiki_language", "VARCHAR"),
         ]:
             if col_name not in columns:
                 try:
@@ -76,6 +77,13 @@ def _apply_migrations(connection) -> None:
                 except OperationalError as exc:
                     if "duplicate column name" not in str(exc).lower():
                         raise
+        # Normalize legacy rows to default language (handle NULL or empty)
+        connection.execute(
+            text(
+                "UPDATE repositories SET wiki_language = 'en' "
+                "WHERE wiki_language IS NULL OR wiki_language = ''"
+            )
+        )
 
     # jobs migrations
     if insp.has_table("jobs"):
