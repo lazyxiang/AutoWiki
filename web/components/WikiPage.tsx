@@ -44,14 +44,25 @@ function MermaidBlock({ children }: { children: string }) {
         const sanitized = sanitizeMermaid(children.trim());
         const { svg } = await mermaid.render(renderId, sanitized);
         if (!cancelled) {
-          // Sanitize SVG output for security
+          // Sanitize SVG output for security.
+          // - Keep <style> so Mermaid's embedded CSS (fill, stroke, fonts) is preserved.
+          // - Keep <foreignObject> + common HTML elements for htmlLabels flowcharts.
+          // - FORBID <script> only; everything else via allowlist.
           const cleanSvg = DOMPurify.sanitize(svg, {
-            USE_PROFILES: { svg: true },
-            FORBID_TAGS: ["script", "style"],
-            FORBID_ATTR: ["onmouseover", "onerror", "onclick"],
+            USE_PROFILES: { svg: true, svgFilters: true },
+            ADD_TAGS: ["foreignObject", "style", "div", "span", "br", "p", "section"],
+            ADD_ATTR: ["xmlns", "dominant-baseline", "text-anchor", "font-size", "font-weight"],
+            FORBID_TAGS: ["script"],
+            FORBID_ATTR: ["onmouseover", "onerror", "onclick", "onload"],
           });
-          // Wrap SVG to ensure it doesn't truncate and supports proper scaling
-          const wrappedSvg = cleanSvg.replace(/<svg/, '<svg style="max-width: 100%; height: auto;"');
+          // Set responsive sizing. Replace existing style attr if present, otherwise inject one.
+          const wrappedSvg = cleanSvg.replace(
+            /(<svg\b[^>]*?)\s+style="[^"]*"/,
+            '$1 style="max-width: 100%; height: auto; display: block;"'
+          ).replace(
+            /(<svg\b(?![^>]*\bstyle=)[^>]*)>/,
+            '$1 style="max-width: 100%; height: auto; display: block;">'
+          );
           setSvgContent(wrappedSvg);
           if (ref.current) {
             ref.current.innerHTML = wrappedSvg;
