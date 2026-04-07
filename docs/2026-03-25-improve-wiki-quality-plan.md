@@ -259,13 +259,13 @@ Merge and deduplicate results, increase `top_k` from 8 to 15.
 
 ### 5e. Source annotations in chunk context
 Format RAG chunks with line numbers:
-```
+~~~markdown
 File: src/auth/handler.py (lines 15-42)
 ```python
 class AuthHandler:
     ...
 ```
-```
+~~~
 
 ---
 
