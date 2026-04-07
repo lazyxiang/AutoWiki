@@ -44,10 +44,13 @@ function MermaidBlock({ children }: { children: string }) {
         const sanitized = sanitizeMermaid(children.trim());
         const { svg } = await mermaid.render(renderId, sanitized);
         if (!cancelled) {
-          // Sanitize SVG output for security
+          // Sanitize SVG output for security.
+          // Allow <style> so Mermaid's embedded CSS (colors, fonts, layout) is preserved.
+          // Allow foreignObject so htmlLabels inside flowcharts render correctly.
           const cleanSvg = DOMPurify.sanitize(svg, {
-            USE_PROFILES: { svg: true },
-            FORBID_TAGS: ["script", "style"],
+            USE_PROFILES: { svg: true, svgFilters: true, html: true },
+            ADD_TAGS: ["foreignObject", "style"],
+            FORBID_TAGS: ["script"],
             FORBID_ATTR: ["onmouseover", "onerror", "onclick"],
           });
           // Wrap SVG to ensure it doesn't truncate and supports proper scaling
