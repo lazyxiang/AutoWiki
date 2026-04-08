@@ -33,9 +33,21 @@ function MermaidBlock({ children }: { children: string }) {
         startOnLoad: false,
         theme: "default",
         securityLevel: "loose",
-        fontFamily: "var(--font-sans)",
-        // Attempt to fix truncation by ensuring reasonable default width
-        flowchart: { useMaxWidth: false, htmlLabels: true },
+        // Do NOT set fontFamily here. Setting fontFamily: "var(--font-sans)" causes
+        // a font-timing race: Mermaid measures label text via getBoundingClientRect()
+        // while the custom font may still be loading, so it measures in the fallback
+        // system font and sizes the <foreignObject> box for that narrower width.
+        // When the custom font then loads and the SVG is rendered inline, the text
+        // is wider than the box → foreignObject's overflow:hidden clips the label.
+        // Leaving fontFamily unset lets Mermaid use its own default font consistently
+        // for both measurement and rendering — boxes always fit their text.
+        //
+        // useMaxWidth: false emits absolute pixel dimensions instead of width="100%"
+        // so the SVG renders at its natural size (scrollable) rather than being
+        // CSS-scaled. CSS scaling was the original root cause: it shrank the
+        // foreignObject boxes in screen pixels while HTML text stayed at full CSS-px
+        // size, clipping the labels.
+        flowchart: { useMaxWidth: false },
         sequence: { useMaxWidth: false },
         gantt: { useMaxWidth: false },
       });
@@ -48,21 +60,31 @@ function MermaidBlock({ children }: { children: string }) {
           // - Keep <style> so Mermaid's embedded CSS (fill, stroke, fonts) is preserved.
           // - Keep <foreignObject> + common HTML elements for htmlLabels flowcharts.
           // - FORBID <script> only; everything else via allowlist.
+          // - Override FORBID_CONTENTS to exclude 'style' and 'foreignobject': by default
+          //   DOMPurify strips the *content* of both, which removes all Mermaid CSS and
+          //   all htmlLabel text. We keep the rest of the default list for safety.
+          // - Add 'foreignobject' to HTML_INTEGRATION_POINTS so DOMPurify treats HTML
+          //   elements inside <foreignObject> as HTML-namespace (not stripped by namespace check).
           const cleanSvg = DOMPurify.sanitize(svg, {
             USE_PROFILES: { svg: true, svgFilters: true },
             ADD_TAGS: ["foreignObject", "style", "div", "span", "br", "p", "section"],
             ADD_ATTR: ["xmlns", "dominant-baseline", "text-anchor", "font-size", "font-weight"],
             FORBID_TAGS: ["script"],
             FORBID_ATTR: ["onmouseover", "onerror", "onclick", "onload"],
+            FORBID_CONTENTS: [
+              "annotation-xml", "audio", "colgroup", "desc", "head", "iframe",
+              "math", "mi", "mn", "mo", "ms", "mtext", "noembed", "noframes",
+              "noscript", "plaintext", "script", "svg", "template", "thead",
+              "title", "video", "xmp",
+            ],
+            HTML_INTEGRATION_POINTS: { "annotation-xml": true, "foreignobject": true },
           });
-          // Set responsive sizing. Replace existing style attr if present, otherwise inject one.
-          const wrappedSvg = cleanSvg.replace(
-            /(<svg\b[^>]*?)\s+style="[^"]*"/,
-            '$1 style="max-width: 100%; height: auto; display: block;"'
-          ).replace(
-            /(<svg\b(?![^>]*\bstyle=)[^>]*)>/,
-            '$1 style="max-width: 100%; height: auto; display: block;">'
-          );
+          // Only ensure display:block to remove phantom inline-block spacing.
+          // Do NOT set max-width/height overrides — CSS scaling is what causes
+          // text truncation (see comment on useMaxWidth above).
+          const wrappedSvg = cleanSvg
+            .replace(/(<svg\b[^>]*?)\s+style="([^"]*)"/, '$1 style="$2; display: block;"')
+            .replace(/(<svg\b(?![^>]*\bstyle=)[^>]*)>/, '$1 style="display: block;">');
           setSvgContent(wrappedSvg);
           if (ref.current) {
             ref.current.innerHTML = wrappedSvg;
@@ -118,11 +140,18 @@ function MermaidBlock({ children }: { children: string }) {
   return (
     <>
       <div className="group relative my-6">
-        <div 
-          ref={ref} 
-          className="p-4 bg-slate-50 border border-slate-200 rounded-xl flex justify-center overflow-hidden cursor-pointer hover:bg-slate-100/50 transition-colors"
+        {/* overflow-hidden on the outer wrapper is only for rounded-corner clipping.
+            The inner ref div uses overflow-x-auto so wide diagrams scroll rather
+            than being CSS-scaled (which truncates htmlLabel text). */}
+        <div
+          className="bg-slate-50 border border-slate-200 rounded-xl overflow-hidden cursor-pointer hover:bg-slate-100/50 transition-colors"
           onClick={() => setIsModalOpen(true)}
-        />
+        >
+          <div
+            ref={ref}
+            className="p-4 overflow-x-auto flex justify-center"
+          />
+        </div>
         <Button
           variant="outline"
           size="icon-sm"
