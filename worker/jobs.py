@@ -43,7 +43,11 @@ from worker.pipeline.ingestion import (
     get_affected_pages,
     get_changed_files,
 )
-from worker.pipeline.page_generator import generate_page
+from worker.pipeline.page_generator import (
+    PageResult,
+    compute_generation_order,
+    generate_page_batch,
+)
 from worker.pipeline.rag_indexer import FAISSStore, build_rag_index
 from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan, generate_wiki_plan
 
@@ -532,53 +536,69 @@ async def run_full_index(
         )
         await _update_job(db_path, job_id, progress=70)
 
-        # Stage 6: Page Generator — RAG retrieval + LLM Markdown per page
-        logger.info("Stage 6: Page Generator starting")
+        # Stage 6: Bottom-up page generation
+        logger.info("Stage 6: Page Generator starting (bottom-up)")
         total = len(plan.pages)
 
-        for i, page_spec in enumerate(plan.pages):
-            # Scale progress from 70 → 97 as pages complete
-            progress = 70 + int(27 * (i + 1) / total) if total > 0 else 97
-            page_entities = _collect_page_entities(page_spec, file_analysis)
-            page_dep_info = _collect_page_deps(page_spec, dep_graph)
-            result = await generate_page(
-                page_spec,
+        levels = compute_generation_order(plan)
+        generated: dict[str, PageResult] = {}
+        page_order_counter = 0
+
+        for depth_idx, level in enumerate(levels):
+            specs_with_children: list[tuple[WikiPageSpec, list[PageResult] | None]] = []
+            for page_spec in level:
+                children = [
+                    generated[p.slug]
+                    for p in plan.pages
+                    if p.parent == page_spec.title and p.slug in generated
+                ]
+                specs_with_children.append((page_spec, children or None))
+
+            results = await generate_page_batch(
+                specs_with_children,
                 store,
                 llm,
                 embedding,
                 repo_name=name,
-                # Only pass dep_info / entity_details when they contain data
-                dep_info=page_dep_info if any(page_dep_info.values()) else None,
-                entity_details=page_entities if page_entities else None,
+                file_analysis=file_analysis,
+                dep_graph=dep_graph,
                 on_retry=_on_retry,
                 wiki_language=wiki_language,
             )
-            logger.info(
-                "Page generated: %s (%s), %d chars",
-                result.title,
-                result.slug,
-                len(result.content),
-            )
-            async with get_session(db_path) as s:
-                s.add(
-                    WikiPage(
-                        id=str(uuid.uuid4()),
-                        repo_id=repo_id,
-                        slug=result.slug,
-                        title=result.title,
-                        content=result.content,
-                        page_order=i,
-                        parent_slug=page_spec.parent_slug,
-                        description=page_spec.purpose,
-                    )
+
+            for result, (page_spec, _) in zip(results, specs_with_children):
+                generated[result.slug] = result
+                logger.info(
+                    "Page generated: %s (%s), %d chars",
+                    result.title,
+                    result.slug,
+                    len(result.content),
                 )
-                await s.commit()
-            await _write_text_async(wiki_dir / f"{result.slug}.md", result.content)
+                async with get_session(db_path) as s:
+                    s.add(
+                        WikiPage(
+                            id=str(uuid.uuid4()),
+                            repo_id=repo_id,
+                            slug=result.slug,
+                            title=result.title,
+                            content=result.content,
+                            page_order=page_order_counter,
+                            parent_slug=page_spec.parent_slug,
+                            description=page_spec.purpose,
+                        )
+                    )
+                    await s.commit()
+                await _write_text_async(wiki_dir / f"{result.slug}.md", result.content)
+                page_order_counter += 1
+
+            pages_done = sum(len(lvl) for lvl in levels[: depth_idx + 1])
+            progress = 70 + int(27 * pages_done / total) if total > 0 else 97
+            level_info = f"{depth_idx + 1}/{len(levels)}"
             await _update_job(
                 db_path,
                 job_id,
                 progress=progress,
-                status_description=f"Generating page: {result.title}...",
+                status_description=f"Generating pages (level {level_info})...",
             )
 
         # Stage 7: Architecture Diagram — Mermaid diagram prepended to first page
@@ -1041,55 +1061,90 @@ async def run_refresh_index(
             )
             await s.commit()
 
-        # Stage 6: Regenerate pages
-        logger.info("Stage 6: Page Generator starting")
+        # Stage 6: Bottom-up regeneration
+        logger.info("Stage 6: Page Generator starting (bottom-up)")
+
         wiki_dir = repo_data_dir / "wiki"
         wiki_dir.mkdir(exist_ok=True)
-        total = len(plan.pages)
 
-        for i, page_spec in enumerate(plan.pages):
-            page_entities = _collect_page_entities(page_spec, file_analysis)
-            page_dep_info = _collect_page_deps(page_spec, dep_graph)
-            result = await generate_page(
-                page_spec,
+        # Load preserved pages from disk so they can serve as child content
+        preserved_content: dict[str, PageResult] = {}
+        for p in old_plan.pages:
+            if p.title not in affected_page_titles:
+                md_path = wiki_dir / f"{p.slug}.md"
+                if md_path.exists():
+                    content = await asyncio.get_running_loop().run_in_executor(
+                        None, md_path.read_text
+                    )
+                    preserved_content[p.slug] = PageResult(
+                        slug=p.slug, title=p.title, content=content
+                    )
+
+        levels = compute_generation_order(plan)
+        generated: dict[str, PageResult] = {}
+
+        for depth_idx, level in enumerate(levels):
+            specs_with_children: list[tuple[WikiPageSpec, list[PageResult] | None]] = []
+            for page_spec in level:
+                children = []
+                for p in plan.pages:
+                    if p.parent == page_spec.title:
+                        if p.slug in generated:
+                            children.append(generated[p.slug])
+                        elif p.slug in preserved_content:
+                            children.append(preserved_content[p.slug])
+                # Also check old_plan for preserved children
+                for p in old_plan.pages:
+                    if p.parent == page_spec.title and p.slug in preserved_content:
+                        if not any(c.slug == p.slug for c in children):
+                            children.append(preserved_content[p.slug])
+                specs_with_children.append((page_spec, children or None))
+
+            results = await generate_page_batch(
+                specs_with_children,
                 store,
                 llm,
                 embedding,
                 repo_name=name,
-                dep_info=page_dep_info if any(page_dep_info.values()) else None,
-                entity_details=page_entities if page_entities else None,
+                file_analysis=file_analysis,
+                dep_graph=dep_graph,
                 on_retry=_on_retry,
                 wiki_language=wiki_language,
             )
-            logger.info(
-                "Page updated: %s (%s), %d chars",
-                result.title,
-                result.slug,
-                len(result.content),
-            )
-            # Preserve original page_order for replaced pages; append truly new ones
-            page_order = old_page_orders.get(result.slug, max_existing_order + 1 + i)
-            async with get_session(db_path) as s:
-                s.add(
-                    WikiPage(
-                        id=str(uuid.uuid4()),
-                        repo_id=repo_id,
-                        slug=result.slug,
-                        title=result.title,
-                        content=result.content,
-                        page_order=page_order,
-                        parent_slug=page_spec.parent_slug,
-                        description=page_spec.purpose,
-                    )
+
+            for result, (page_spec, _) in zip(results, specs_with_children):
+                generated[result.slug] = result
+                logger.info(
+                    "Page updated: %s (%s), %d chars",
+                    result.title,
+                    result.slug,
+                    len(result.content),
                 )
-                await s.commit()
-            await _write_text_async(wiki_dir / f"{result.slug}.md", result.content)
-            progress = 65 + int(30 * (i + 1) / total) if total > 0 else 95
+                fallback_order = max_existing_order + 1 + len(generated)
+                page_order = old_page_orders.get(result.slug, fallback_order)
+                async with get_session(db_path) as s:
+                    s.add(
+                        WikiPage(
+                            id=str(uuid.uuid4()),
+                            repo_id=repo_id,
+                            slug=result.slug,
+                            title=result.title,
+                            content=result.content,
+                            page_order=page_order,
+                            parent_slug=page_spec.parent_slug,
+                            description=page_spec.purpose,
+                        )
+                    )
+                    await s.commit()
+                await _write_text_async(wiki_dir / f"{result.slug}.md", result.content)
+
+            progress = 65 + int(30 * (depth_idx + 1) / len(levels)) if levels else 95
+            level_info = f"{depth_idx + 1}/{len(levels)}"
             await _update_job(
                 db_path,
                 job_id,
                 progress=progress,
-                status_description=f"Regenerating page: {result.title}...",
+                status_description=f"Regenerating pages (level {level_info})...",
             )
 
         # Build a merged plan reflecting the full updated wiki structure.
