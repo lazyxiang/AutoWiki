@@ -251,6 +251,12 @@ def test_suggest_page_range_small_repo():
     assert _suggest_page_range(5, 10) == (3, 6)
 
 
+def test_suggest_page_range_boundary_file_count_10():
+    # file_count=10 is the first value NOT in the small-repo branch (< 10)
+    assert _suggest_page_range(10, 30) == (5, 12)
+    assert _suggest_page_range(10, 50) == (8, 15)
+
+
 def test_suggest_page_range_medium_repo_few_entities():
     assert _suggest_page_range(20, 30) == (5, 12)
 
