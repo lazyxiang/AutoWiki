@@ -1,6 +1,7 @@
 from worker.pipeline.dependency_graph import (
     DependencyGraph,
     _extract_imports,
+    _split_large_cluster,
     build_dependency_graph,
     format_for_llm_prompt,
     summarize_page_deps,
@@ -152,3 +153,73 @@ def test_unsupported_extension_returns_no_imports(tmp_path):
     f.write_text("a,b,c\n1,2,3\n")
     imports = _extract_imports(f, f.read_text())
     assert imports == []
+
+
+def test_split_large_cluster_small_cluster_unchanged():
+    """Clusters within max_size are returned as-is."""
+    cluster = ["a.py", "b.py", "c.py"]
+    edges = {"a.py": ["b.py"], "b.py": ["c.py"]}
+    result = _split_large_cluster(cluster, edges, max_size=15)
+    assert len(result) == 1
+    assert sorted(result[0]) == ["a.py", "b.py", "c.py"]
+
+
+def test_split_large_cluster_splits_large():
+    """Clusters exceeding max_size are split into sub-clusters."""
+    # Create a chain: f0 -> f1 -> f2 -> ... -> f19
+    files = [f"f{i}.py" for i in range(20)]
+    edges = {f"f{i}.py": [f"f{i + 1}.py"] for i in range(19)}
+    result = _split_large_cluster(files, edges, max_size=8)
+    assert len(result) >= 2
+    # All files accounted for
+    all_files = sorted(f for sub in result for f in sub)
+    assert all_files == sorted(files)
+    # Each sub-cluster respects max_size
+    for sub in result:
+        assert len(sub) <= 8
+
+
+def test_split_large_cluster_disconnected_files():
+    """Files with no edges still get assigned to sub-clusters."""
+    files = [f"f{i}.py" for i in range(20)]
+    edges = {}  # no edges at all
+    result = _split_large_cluster(files, edges, max_size=10)
+    all_files = sorted(f for sub in result for f in sub)
+    assert all_files == sorted(files)
+    for sub in result:
+        assert len(sub) <= 10
+
+
+def test_compute_clusters_splits_large_components(tmp_path):
+    """_compute_clusters auto-splits components exceeding max_size=15."""
+    # Create a 20-file connected component
+    for i in range(20):
+        content = f"from f{(i + 1) % 20} import x\n" if i < 19 else "x = 1\n"
+        (tmp_path / f"f{i}.py").write_text(content)
+
+    files = [tmp_path / f"f{i}.py" for i in range(20)]
+    graph = build_dependency_graph(files, tmp_path)
+
+    # All sub-clusters should be <= 15
+    for cluster in graph.clusters:
+        assert len(cluster) <= 15
+    # All files accounted for
+    all_files = sorted(f for c in graph.clusters for f in c)
+    assert len(all_files) == 20
+
+
+def test_format_for_llm_prompt_default_500_cap(tmp_path):
+    """Default max_edges is now 500 (was 150)."""
+    # Create enough edges to exceed 150 but stay under 500
+    for i in range(30):
+        deps = "\n".join(f"from mod{j} import x" for j in range(i + 1, min(i + 8, 30)))
+        (tmp_path / f"mod{i}.py").write_text(deps + "\nx = 1\n")
+
+    files = list(tmp_path.glob("*.py"))
+    graph = build_dependency_graph(files, tmp_path)
+    total_edges = sum(len(d) for d in graph.edges.values())
+
+    result = format_for_llm_prompt(graph)
+    # With old default of 150, this would be truncated. With 500, it should not.
+    if total_edges <= 500:
+        assert "more edges not shown" not in result
