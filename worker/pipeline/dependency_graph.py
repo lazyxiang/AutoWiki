@@ -305,58 +305,6 @@ def build_dependency_graph(
     return graph
 
 
-def _split_large_cluster(
-    cluster: list[str],
-    edges: dict[str, list[str]],
-    max_size: int = 15,
-) -> list[list[str]]:
-    """Split a large cluster into sub-clusters using BFS-seed grouping.
-
-    Picks the file with the most import edges as the first seed, BFS outward
-    to fill a sub-cluster up to max_size, then repeats with remaining files.
-    """
-    if len(cluster) <= max_size:
-        return [sorted(cluster)]
-
-    cluster_set = set(cluster)
-    # Build sub-graph adjacency (undirected for BFS); use sets to avoid
-    # duplicate neighbours when bidirectional edges are both present.
-    adj: dict[str, set[str]] = {f: set() for f in cluster}
-    for src in cluster:
-        for tgt in edges.get(src, []):
-            if tgt in cluster_set:
-                adj[src].add(tgt)
-                adj[tgt].add(src)
-
-    remaining = set(cluster)
-    sub_clusters: list[list[str]] = []
-
-    while remaining:
-        # Pick seed: file with most edges among remaining
-        seed = max(
-            remaining,
-            key=lambda f: len([n for n in adj.get(f, []) if n in remaining]),
-        )
-        # BFS from seed
-        visited: list[str] = []
-        queue = [seed]
-        seen = {seed}
-        while queue and len(visited) < max_size:
-            node = queue.pop(0)
-            if node not in remaining:
-                continue
-            visited.append(node)
-            remaining.discard(node)
-            for neighbor in adj.get(node, []):
-                if neighbor in remaining and neighbor not in seen:
-                    seen.add(neighbor)
-                    queue.append(neighbor)
-
-        sub_clusters.append(sorted(visited))
-
-    return sub_clusters
-
-
 def _compute_clusters(
     edges: dict[str, list[str]],
     all_files: set[str],
@@ -415,10 +363,10 @@ def _compute_clusters(
         root = find(f)
         groups.setdefault(root, []).append(f)
 
-    raw_clusters = sorted(groups.values(), key=lambda g: (-len(g), g[0]))
     result: list[list[str]] = []
-    for g in raw_clusters:
-        result.extend(_split_large_cluster(sorted(g), edges))
+    for g in groups.values():
+        result.append(sorted(g))
+    result.sort(key=lambda g: (-len(g), g[0]))
     return result
 
 
