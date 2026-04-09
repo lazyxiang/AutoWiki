@@ -585,7 +585,17 @@ async def generate_page_batch(
         specs_list.append(spec)
 
     system = _SYSTEM + get_language_instruction(wiki_language)
-    responses = await llm.generate_batch(prompts, system=system)
+    responses = await async_retry(
+        llm.generate_batch,
+        prompts,
+        system=system,
+        transient_exceptions=TRANSIENT_EXCEPTIONS,
+        on_retry=on_retry,
+    )
+    if len(responses) != len(specs_list):
+        raise ValueError(
+            f"Expected {len(specs_list)} batch responses, got {len(responses)}"
+        )
 
     results: list[PageResult] = []
     for spec, content in zip(specs_list, responses):

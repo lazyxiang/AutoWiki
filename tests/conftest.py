@@ -60,7 +60,11 @@ def mock_llm():
             return _default_structured
 
     m.generate_structured.side_effect = _structured_side_effect
-    m.generate_batch.return_value = ["Mocked wiki page content."]
+    # generate_batch must return one response per prompt; use a side_effect so
+    # the length matches whatever batch size the caller requests.
+    m.generate_batch.side_effect = lambda prompts, **kwargs: [
+        "Mocked wiki page content." for _ in prompts
+    ]
     return m
 
 

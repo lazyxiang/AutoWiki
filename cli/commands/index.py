@@ -5,10 +5,22 @@ import typer
 def index_cmd(
     url: str = typer.Argument(..., help="GitHub URL, e.g. github.com/owner/repo"),
     api_url: str = typer.Option("http://127.0.0.1:3001", envvar="AUTOWIKI_API_URL"),
+    reuse_index: bool = typer.Option(
+        False,
+        "--reuse-index",
+        help=(
+            "Skip re-embedding if a FAISS index already exists for this repo. "
+            "Useful for iterating on wiki structure without incurring embedding costs."
+        ),
+    ),
 ):
     """Index a GitHub repository."""
     try:
-        resp = httpx.post(f"{api_url}/api/repos", json={"url": url}, timeout=10)
+        resp = httpx.post(
+            f"{api_url}/api/repos",
+            json={"url": url, "reuse_index": reuse_index},
+            timeout=10,
+        )
         resp.raise_for_status()
         data = resp.json()
         typer.echo(f"Indexing started. Job ID: {data['job_id']}")

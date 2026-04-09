@@ -56,12 +56,13 @@ async def enqueue_full_index(
     owner: str,
     name: str,
     wiki_language: str = "en",
+    reuse_index: bool = False,
 ) -> str:
-    """Enqueue a full seven-stage wiki generation job for a repository.
+    """Enqueue a full six-stage wiki generation job for a repository.
 
     Pushes a ``run_full_index`` task to the ARQ queue.  The worker will run
     the complete pipeline: ingestion → AST analysis → dependency graph →
-    RAG indexing → wiki planning → page generation → diagram synthesis.
+    RAG indexing → wiki planning → page generation.
 
     Args:
         repo_id (str): Hex-encoded SHA-256 repository identifier (first 16
@@ -72,6 +73,9 @@ async def enqueue_full_index(
         name (str): GitHub repository name (e.g. ``"hello-world"``).
         wiki_language (str): ISO-639-1 language code for wiki content
             generation (e.g. ``"en"``, ``"zh"``).  Defaults to ``"en"``.
+        reuse_index (bool): When ``True``, preserve any existing FAISS index
+            and skip Stage 4 (RAG Indexer) if the index file is present.
+            Defaults to ``False``.
 
     Returns:
         str: The ``job_id`` passed in, returned as-is so callers can use this
@@ -94,6 +98,7 @@ async def enqueue_full_index(
         owner=owner,
         name=name,
         wiki_language=wiki_language,
+        reuse_index=reuse_index,
     )
     return job_id
 

@@ -419,6 +419,7 @@ async def _generate_outline(
     system: str,
     on_retry: OnRetryCallback | None,
     max_retries: int = 3,
+    _extra_context: str | None = None,
 ) -> list[dict]:
     """Phase 1: Generate page tree without file assignments."""
     prompt = _build_outline_prompt(
@@ -429,6 +430,8 @@ async def _generate_outline(
         clusters=clusters,
         page_range=page_range,
     )
+    if _extra_context:
+        prompt += f"\n\n{_extra_context}"
 
     for attempt in range(max_retries):
         try:
@@ -657,7 +660,9 @@ def validate_wiki_plan(
         while title_to_parent.get(current) is not None:
             current = title_to_parent[current]
             if current in seen:
-                break
+                raise ValueError(
+                    f"Wiki hierarchy contains a parent cycle involving '{current}'"
+                )
             seen.add(current)
             d += 1
         return d
@@ -705,6 +710,26 @@ def validate_wiki_plan(
     return WikiPlan(pages=pages)
 
 
+# Errors that come from the outline structure (titles, parents, page count),
+# not from file assignment.  These must be fixed by regenerating Phase 1.
+_OUTLINE_ERROR_PREFIXES = (
+    "Duplicate page slugs detected:",
+    "Wiki hierarchy contains a parent cycle",
+    "Wiki hierarchy is",
+    "All pages are top-level",
+    "Plan has ",
+    "Page missing 'title'",
+    "Page missing 'purpose'",
+    "Missing 'pages' key",
+    "Page plan must have at least one page",
+)
+
+
+def _is_outline_error(msg: str) -> bool:
+    """Return True if *msg* describes an outline-level validation failure."""
+    return any(msg.startswith(p) for p in _OUTLINE_ERROR_PREFIXES)
+
+
 async def generate_wiki_plan(
     file_analysis,
     repo_name: str,
@@ -719,7 +744,7 @@ async def generate_wiki_plan(
     """Generate a hierarchical wiki plan using two-phase LLM planning."""
     from worker.pipeline.dependency_graph import format_for_llm_prompt
 
-    file_summary = file_analysis.to_llm_summary(dep_graph=dep_graph)
+    file_summary = file_analysis.to_llm_summary(dep_graph=dep_graph, max_files=200)
     all_files = list(file_analysis.files.keys())
     dep_info = format_for_llm_prompt(dep_graph) if dep_graph is not None else None
     clusters = dep_graph.clusters if dep_graph is not None else None
@@ -760,8 +785,10 @@ async def generate_wiki_plan(
         max_retries=max_retries,
     )
 
-    # Phase 3: Validate — retry Phase 2 (re-assign files) on each failure,
-    # feeding the validation error back into the assignment prompt.
+    # Phase 3: Validate — retry the appropriate phase on each failure.
+    # Outline-level errors (duplicate slugs, bad hierarchy, too few pages)
+    # require regenerating Phase 1; assignment-level errors (over-stuffed or
+    # empty pages) only need a new Phase 2 pass.
     last_error: str = ""
     for attempt in range(max_retries):
         raw = {
@@ -785,7 +812,37 @@ async def generate_wiki_plan(
             )
         except ValueError as exc:
             last_error = str(exc)
-            if attempt < max_retries - 1:
+            if attempt >= max_retries - 1:
+                break
+            extra = f"Previous attempt was rejected: {last_error}. Please fix."
+            is_outline = _is_outline_error(last_error)
+            if is_outline:
+                logger.warning(
+                    "Wiki plan validation failed (attempt %d/%d): %s"
+                    " — outline-level error, regenerating Phase 1",
+                    attempt + 1,
+                    max_retries,
+                    last_error,
+                )
+                try:
+                    outline = await _generate_outline(
+                        file_summary=file_summary,
+                        repo_name=repo_name,
+                        llm=llm,
+                        readme=readme,
+                        dep_info=dep_info,
+                        clusters=clusters,
+                        page_range=page_range,
+                        system=system,
+                        on_retry=on_retry,
+                        max_retries=1,
+                        _extra_context=extra,
+                    )
+                except ValueError:
+                    break
+                # Fresh outline — start assignment without the stale error context
+                assign_extra = None
+            else:
                 logger.warning(
                     "Wiki plan validation failed (attempt %d/%d): %s"
                     " — retrying file assignment",
@@ -793,18 +850,18 @@ async def generate_wiki_plan(
                     max_retries,
                     last_error,
                 )
-                extra = f"Previous assignment was rejected: {last_error}. Please fix."
-                file_assignments = await _assign_files(
-                    outline=outline,
-                    file_summary=file_summary,
-                    dep_info=dep_info,
-                    all_files=all_files,
-                    llm=llm,
-                    system=system,
-                    on_retry=on_retry,
-                    max_retries=1,
-                    _extra_context=extra,
-                )
+                assign_extra = extra
+            file_assignments = await _assign_files(
+                outline=outline,
+                file_summary=file_summary,
+                dep_info=dep_info,
+                all_files=all_files,
+                llm=llm,
+                system=system,
+                on_retry=on_retry,
+                max_retries=1,
+                _extra_context=assign_extra,
+            )
 
     logger.warning(
         "Wiki plan validation failed after %d attempts: %s", max_retries, last_error

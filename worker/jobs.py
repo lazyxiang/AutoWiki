@@ -1,10 +1,12 @@
-"""ARQ job functions that orchestrate the 7-stage wiki generation pipeline.
+"""ARQ job functions that orchestrate the 6-stage wiki generation pipeline.
 
 Registered in ``worker/main.py`` as background tasks executed by the ARQ
 worker.  Two entry points are exposed:
 
 - ``run_full_index``: Complete pipeline from scratch — clears all previous
-  artifacts and runs all 7 stages for a repository.
+  artifacts and runs all 6 stages for a repository.  Pass
+  ``reuse_index=True`` to skip Stage 4 (RAG embedding) when a FAISS index
+  already exists for this repository.
 - ``run_refresh_index``: Incremental refresh — re-runs only the stages and
   pages that are affected by commits since the last index, with several
   fallback paths that escalate to a full reindex when necessary.
@@ -18,7 +20,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -34,7 +35,6 @@ from worker.embedding import make_embedding_provider
 from worker.llm import make_llm_provider
 from worker.pipeline.ast_analysis import FileAnalysis, analyze_all_files
 from worker.pipeline.dependency_graph import build_dependency_graph
-from worker.pipeline.diagram_synthesis import synthesize_diagrams
 from worker.pipeline.ingestion import (
     clone_or_fetch,
     extract_readme,
@@ -239,38 +239,6 @@ def _collect_page_deps(page_spec: WikiPageSpec, dep_graph: DependencyGraph) -> d
     return summarize_page_deps(page_spec.files or [], dep_graph)
 
 
-def _prepend_architecture_diagram(content: str, diagram: str) -> str:
-    """Prepend (or replace) the Architecture Mermaid block at the top of a page.
-
-    If the page already contains an ``## Architecture`` section with a
-    fenced ``mermaid`` code block, it is stripped via regex before the new
-    block is prepended.  This ensures that re-running the stage does not
-    accumulate duplicate diagram sections.
-
-    Args:
-        content (str): Existing Markdown content of the wiki page.
-        diagram (str): Raw Mermaid diagram source (without the fence).
-
-    Returns:
-        str: Updated page content with the new Architecture block prepended.
-
-    Example:
-        >>> updated = _prepend_architecture_diagram(page_md, mermaid_src)
-        >>> updated.startswith("## Architecture\\n\\n```mermaid\\n")
-        True
-    """
-    prefix = f"## Architecture\n\n```mermaid\n{diagram}\n```\n\n"
-    # Strip any existing Architecture block so we don't duplicate it
-    stripped = re.sub(
-        r"^## Architecture\s*\n+```mermaid\n.*?```\s*\n*",
-        "",
-        content,
-        count=1,
-        flags=re.DOTALL,
-    )
-    return prefix + stripped
-
-
 def _make_faiss_store(repo_data_dir: Path, embedding) -> FAISSStore:
     """Instantiate a FAISSStore pointed at the repository's index files.
 
@@ -307,8 +275,9 @@ async def run_full_index(
     name: str,
     clone_root: Path | None = None,
     wiki_language: str = "en",
+    reuse_index: bool = False,
 ) -> None:
-    """Run the complete 7-stage wiki generation pipeline for a repository.
+    """Run the complete 6-stage wiki generation pipeline for a repository.
 
     This is the primary ARQ job function.  It clears all existing artifacts
     at the start of each run to ensure a clean, reproducible output, then
@@ -316,10 +285,10 @@ async def run_full_index(
     after each one.
 
     Artifact clearing (before Stage 1):
-        Removes the FAISS index, metadata pickle, all Markdown files in
-        ``wiki/``, ``wiki_plan.json``, and ``architecture.mmd``.  Wiki page
-        rows in SQLite are also deleted so the DB stays in sync with the
-        file system.
+        Removes all Markdown files in ``wiki/`` and ``wiki_plan.json``.
+        Wiki page rows in SQLite are also deleted so the DB stays in sync
+        with the file system.  When *reuse_index* is ``True`` the FAISS
+        index and metadata files are preserved so Stage 4 can be skipped.
 
     Pipeline stages:
         1. **Ingestion** — Shallow-clone or fetch the repo; filter source
@@ -330,13 +299,12 @@ async def run_full_index(
         3. **Dependency Graph** — Build file-level import graph; cluster
            related files for context-aware page planning.
         4. **RAG Indexer** — Entity-aware chunking of source files + FAISS
-           ``IndexFlatIP`` build with embedding vectors.
+           ``IndexFlatIP`` build with embedding vectors.  Skipped when
+           *reuse_index* is ``True`` and a FAISS index already exists.
         5. **Wiki Planner** — LLM generates a logical page hierarchy
            (``WikiPlan``) with file-to-page assignments.
         6. **Page Generator** — For each page: RAG retrieval + LLM Markdown
            generation; results written to SQLite and ``wiki/*.md``.
-        7. **Architecture Diagram** — Mermaid diagram synthesised from the
-           wiki plan; prepended to the first wiki page.
 
     Args:
         ctx (dict): ARQ context dictionary (provided automatically by the
@@ -348,6 +316,10 @@ async def run_full_index(
         name (str): GitHub repository name.
         clone_root (Path | None): Override the default clone directory.
             Defaults to ``<data_dir>/repos/<repo_id>/clone``.
+        reuse_index (bool): When ``True``, preserve any existing FAISS index
+            and skip Stage 4 (RAG Indexer) if the index file is present.
+            Useful for iterating on wiki structure without re-embedding.
+            Defaults to ``False``.
 
     Returns:
         None
@@ -379,28 +351,27 @@ async def run_full_index(
         repo_data_dir.mkdir(parents=True, exist_ok=True)
 
         def _clear_repo_artifacts() -> None:
-            """Remove all generated files and search indices for the repository.
+            """Remove generated wiki files and optionally the search index.
 
-            Clears the FAISS index, metadata pickle, and all Markdown pages in
-            the wiki/ directory.  Also deletes the internal wiki plan and
-            Mermaid architecture diagram if they exist.  The git clone is
-            preserved.
+            Always removes all Markdown pages in ``wiki/`` and the internal
+            wiki plan.  When *reuse_index* is ``False`` the FAISS index and
+            metadata pickle are also deleted.  The git clone is preserved.
             """
             index_path = repo_data_dir / "faiss.index"
             meta_path = repo_data_dir / "faiss.meta.pkl"
             wiki_dir = repo_data_dir / "wiki"
             ast_dir = repo_data_dir / "ast"
-            for p in (index_path, meta_path):
-                if p.exists():
-                    p.unlink()
+            if not reuse_index:
+                for p in (index_path, meta_path):
+                    if p.exists():
+                        p.unlink()
             if wiki_dir.exists():
                 for f in wiki_dir.iterdir():
                     if f.is_file():
                         f.unlink()
-            for name_ in ("wiki_plan.json", "architecture.mmd"):
-                p = ast_dir / name_
-                if p.exists():
-                    p.unlink()
+            wiki_plan = ast_dir / "wiki_plan.json"
+            if wiki_plan.exists():
+                wiki_plan.unlink()
 
         await asyncio.get_running_loop().run_in_executor(None, _clear_repo_artifacts)
         # Delete all existing wiki page rows for this repo so the DB matches disk
@@ -490,19 +461,26 @@ async def run_full_index(
         index_path = repo_data_dir / "faiss.index"
         wiki_dir = repo_data_dir / "wiki"
         store = _make_faiss_store(repo_data_dir, embedding)
-        file_entities = {
-            rel: [e for e in info.entities] for rel, info in file_analysis.files.items()
-        }
-        logger.info("Building new RAG index at %s", index_path)
-        await build_rag_index(
-            files,
-            clone_root,
-            store,
-            embedding,
-            file_entities=file_entities,
-            on_retry=_on_retry,
-        )
-        logger.info("RAG index build complete")
+        if reuse_index and index_path.exists():
+            logger.info(
+                "Reusing existing FAISS index at %s (skipping embedding)", index_path
+            )
+            await loop.run_in_executor(None, store.load)
+        else:
+            file_entities = {
+                rel: [e for e in info.entities]
+                for rel, info in file_analysis.files.items()
+            }
+            logger.info("Building new RAG index at %s", index_path)
+            await build_rag_index(
+                files,
+                clone_root,
+                store,
+                embedding,
+                file_entities=file_entities,
+                on_retry=_on_retry,
+            )
+            logger.info("RAG index build complete")
         await _update_job(
             db_path,
             job_id,
@@ -601,34 +579,6 @@ async def run_full_index(
                 status_description=f"Generating pages (level {level_info})...",
             )
 
-        # Stage 7: Architecture Diagram — Mermaid diagram prepended to first page
-        logger.info("Stage 7: Architecture Diagram Synthesis starting")
-        diagram = await synthesize_diagrams(
-            plan, repo_name=name, llm=llm, wiki_language=wiki_language
-        )
-        if diagram is not None:
-            logger.info("Architecture diagram synthesized: %d chars", len(diagram))
-            if plan.pages:
-                async with get_session(db_path) as s:
-                    result_row = await s.execute(
-                        sa_select(WikiPage).where(
-                            WikiPage.repo_id == repo_id,
-                            WikiPage.slug == plan.pages[0].slug,
-                        )
-                    )
-                    first_page = result_row.scalar_one_or_none()
-                    if first_page is not None:
-                        first_page.content = _prepend_architecture_diagram(
-                            first_page.content, diagram
-                        )
-                        await s.commit()
-                        await _write_text_async(
-                            wiki_dir / f"{first_page.slug}.md", first_page.content
-                        )
-            await _write_text_async(ast_dir / "architecture.mmd", diagram)
-        else:
-            logger.info("No architecture diagram synthesized")
-
         structure_data = plan.to_api_structure()
         now = datetime.now(UTC)
         logger.info("Full index job complete for %s/%s", owner, name)
@@ -704,8 +654,6 @@ async def run_refresh_index(
         6. **Page Generator** — Regenerate only the newly planned pages;
            preserve the ``page_order`` of replaced pages so the navigation
            ordering stays stable.  Truly new pages are appended.
-        7. **Architecture Diagram** — Rebuild diagram from the merged plan
-           (new + preserved pages) and update the first wiki page.
 
     Page-notes merge:
         Before planning, the user-facing ``wiki.json`` is loaded and
@@ -1158,34 +1106,6 @@ async def run_refresh_index(
         ]
         merged_pages = list(plan.pages) + preserved_pages
         merged_plan = WikiPlan(repo_notes=old_plan.repo_notes, pages=merged_pages)
-
-        # Stage 7: Rebuild architecture diagram and update first wiki page
-        logger.info("Stage 7: Architecture Diagram Synthesis starting")
-        diagram = await synthesize_diagrams(
-            merged_plan, repo_name=name, llm=llm, wiki_language=wiki_language
-        )
-        if diagram:
-            logger.info("Architecture diagram synthesized: %d chars", len(diagram))
-            await _write_text_async(ast_dir / "architecture.mmd", diagram)
-            async with get_session(db_path) as s:
-                result_row = await s.execute(
-                    sa_select(WikiPage)
-                    .where(WikiPage.repo_id == repo_id)
-                    .order_by(WikiPage.page_order)
-                    .limit(1)
-                )
-                first_page = result_row.scalar_one_or_none()
-                if first_page is not None:
-                    first_page.content = _prepend_architecture_diagram(
-                        first_page.content, diagram
-                    )
-                    await s.commit()
-                    wiki_dir.mkdir(parents=True, exist_ok=True)
-                    await _write_text_async(
-                        wiki_dir / f"{first_page.slug}.md", first_page.content
-                    )
-        else:
-            logger.info("No architecture diagram synthesized")
 
         # Persist the merged plan so future refreshes have an accurate baseline
         wiki_dir.mkdir(parents=True, exist_ok=True)
