@@ -319,13 +319,14 @@ def _split_large_cluster(
         return [sorted(cluster)]
 
     cluster_set = set(cluster)
-    # Build sub-graph adjacency (undirected for BFS)
-    adj: dict[str, list[str]] = {f: [] for f in cluster}
+    # Build sub-graph adjacency (undirected for BFS); use sets to avoid
+    # duplicate neighbours when bidirectional edges are both present.
+    adj: dict[str, set[str]] = {f: set() for f in cluster}
     for src in cluster:
         for tgt in edges.get(src, []):
             if tgt in cluster_set:
-                adj[src].append(tgt)
-                adj[tgt].append(src)
+                adj[src].add(tgt)
+                adj[tgt].add(src)
 
     remaining = set(cluster)
     sub_clusters: list[list[str]] = []

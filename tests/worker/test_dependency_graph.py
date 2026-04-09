@@ -208,18 +208,17 @@ def test_compute_clusters_splits_large_components(tmp_path):
     assert len(all_files) == 20
 
 
-def test_format_for_llm_prompt_default_500_cap(tmp_path):
-    """Default max_edges is now 500 (was 150)."""
-    # Create enough edges to exceed 150 but stay under 500
-    for i in range(30):
-        deps = "\n".join(f"from mod{j} import x" for j in range(i + 1, min(i + 8, 30)))
-        (tmp_path / f"mod{i}.py").write_text(deps + "\nx = 1\n")
-
-    files = list(tmp_path.glob("*.py"))
-    graph = build_dependency_graph(files, tmp_path)
-    total_edges = sum(len(d) for d in graph.edges.values())
-
+def test_format_for_llm_prompt_default_500_cap():
+    """Default max_edges is 500, not 150."""
+    # Build a graph with ~200 edges — exceeds old 150 default, stays under new 500 cap.
+    files = [f"mod{i}.py" for i in range(20)]
+    # Create ~200 edges: each file imports the next ~10 files (circular-ish)
+    edges = {}
+    for i, src in enumerate(files):
+        edges[src] = [files[(i + j + 1) % len(files)] for j in range(10)]
+    graph = DependencyGraph(edges=edges, clusters=[], external_deps={})
     result = format_for_llm_prompt(graph)
-    # With old default of 150, this would be truncated. With 500, it should not.
-    if total_edges <= 500:
-        assert "more edges not shown" not in result
+    total_edges = sum(len(v) for v in edges.values())
+    assert total_edges > 150, f"Test setup: expected >150 edges, got {total_edges}"
+    assert total_edges <= 500, f"Test setup: expected <=500 edges, got {total_edges}"
+    assert "more edges not shown" not in result
