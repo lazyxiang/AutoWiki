@@ -44,6 +44,19 @@ def _slugify_title(text: str) -> str:
     return slug
 
 
+def _suggest_page_range(file_count: int, entity_count: int) -> tuple[int, int]:
+    """Suggest min/max page count based on repo complexity."""
+    if file_count < 10:
+        return (3, 6)
+    if file_count <= 30:
+        return (8, 15) if entity_count >= 50 else (5, 12)
+    if file_count <= 100:
+        return (15, 35) if entity_count >= 150 else (10, 25)
+    if file_count <= 300:
+        return (20, 50)
+    return (30, 70)
+
+
 @dataclass
 class WikiPageSpec:
     """Specification for a single wiki page within the plan.

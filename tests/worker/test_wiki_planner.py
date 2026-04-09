@@ -4,6 +4,7 @@ from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
 from worker.pipeline.wiki_planner import (
     WikiPageSpec,
     WikiPlan,
+    _suggest_page_range,
     generate_wiki_plan,
     validate_wiki_plan,
 )
@@ -244,3 +245,31 @@ def test_wiki_plan_to_api_structure():
     api_page = next(p for p in pages if p["title"] == "API Layer")
     assert api_page["slug"] == "api-layer"
     assert api_page["parent_slug"] == "overview"
+
+
+def test_suggest_page_range_small_repo():
+    assert _suggest_page_range(5, 10) == (3, 6)
+
+
+def test_suggest_page_range_medium_repo_few_entities():
+    assert _suggest_page_range(20, 30) == (5, 12)
+
+
+def test_suggest_page_range_medium_repo_many_entities():
+    assert _suggest_page_range(25, 80) == (8, 15)
+
+
+def test_suggest_page_range_large_repo_few_entities():
+    assert _suggest_page_range(60, 100) == (10, 25)
+
+
+def test_suggest_page_range_large_repo_many_entities():
+    assert _suggest_page_range(80, 200) == (15, 35)
+
+
+def test_suggest_page_range_very_large_repo():
+    assert _suggest_page_range(200, 500) == (20, 50)
+
+
+def test_suggest_page_range_huge_repo():
+    assert _suggest_page_range(500, 1000) == (30, 70)
