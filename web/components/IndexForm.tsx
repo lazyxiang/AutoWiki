@@ -7,9 +7,10 @@ import { submitRepo } from "@/lib/api";
 
 interface IndexFormProps {
   wikiLanguage?: string;
+  reuseIndex?: boolean;
 }
 
-export function IndexForm({ wikiLanguage = "en" }: IndexFormProps) {
+export function IndexForm({ wikiLanguage = "en", reuseIndex = false }: IndexFormProps) {
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -20,7 +21,7 @@ export function IndexForm({ wikiLanguage = "en" }: IndexFormProps) {
     setLoading(true);
     setError("");
     try {
-      const { repo_id, job_id } = await submitRepo(url, wikiLanguage);
+      const { repo_id, job_id } = await submitRepo(url, wikiLanguage, reuseIndex);
       const match = url.replace(/^https?:\/\//, "").match(/github\.com\/([^/]+)\/([^/]+)/);
       const owner = match?.[1] ?? "";
       const repo = match?.[2]?.replace(/\.git$/, "") ?? "";
