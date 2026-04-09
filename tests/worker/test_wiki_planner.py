@@ -416,6 +416,20 @@ def test_validate_rejects_too_deep_hierarchy():
         validate_wiki_plan(raw)
 
 
+def test_validate_allows_4_level_hierarchy():
+    """Hierarchy at exactly 4 levels deep should pass."""
+    raw = {
+        "pages": [
+            {"title": "L0", "purpose": ".", "files": ["a.py"]},
+            {"title": "L1", "purpose": ".", "parent": "L0", "files": ["b.py"]},
+            {"title": "L2", "purpose": ".", "parent": "L1", "files": ["c.py"]},
+            {"title": "L3", "purpose": ".", "parent": "L2", "files": ["d.py"]},
+        ]
+    }
+    plan = validate_wiki_plan(raw)
+    assert len(plan.pages) == 4
+
+
 def test_validate_rejects_flat_plan_for_large_repo():
     page1_files = [f"f{i}.py" for i in range(20)]
     page2_files = [f"g{i}.py" for i in range(15)]

@@ -634,7 +634,7 @@ def validate_wiki_plan(
     def _depth(title: str) -> int:
         d = 1
         current = title
-        seen: set[str] = set()
+        seen: set[str] = {title}
         while title_to_parent.get(current) is not None:
             current = title_to_parent[current]
             if current in seen:
