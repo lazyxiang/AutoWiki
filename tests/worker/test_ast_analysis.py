@@ -205,9 +205,9 @@ def test_to_llm_summary_with_dep_graph(tmp_path):
     assert "models.py" in dep_line
     assert "os" in dep_line
 
-    # models.py should have docstring line
+    # models.py should have (no dependencies) line then docstring line
     models_idx = next(i for i, line in enumerate(lines) if line.startswith("models.py"))
-    # Check that a docstring line exists within the next 2 lines
+    assert "(no dependencies)" in lines[models_idx + 1]
     docstring_found = any(
         "user model" in lines[models_idx + j].lower()
         for j in range(1, min(3, len(lines) - models_idx))
