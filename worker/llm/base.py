@@ -56,6 +56,8 @@ class LLMProvider(ABC):
         Default implementation uses asyncio.gather with a semaphore.
         Providers may override to use native batch APIs.
         """
+        if max_concurrency < 1:
+            raise ValueError(f"max_concurrency must be >= 1, got {max_concurrency}")
         sem = asyncio.Semaphore(max_concurrency)
 
         async def _one(prompt: str) -> str:
