@@ -98,3 +98,68 @@ async def test_openai_provider_generate():
         mock_create.return_value = mock_response
         result = await provider.generate("prompt")
     assert result == "OpenAI response"
+
+
+async def test_generate_batch_default_impl():
+    """Default generate_batch calls generate() for each prompt concurrently."""
+
+    class FakeLLM(LLMProvider):
+        async def generate(self, prompt: str, system: str = "") -> str:
+            return f"response:{prompt}"
+
+        async def generate_structured(self, prompt, schema, system=""):
+            return {}
+
+        async def generate_stream(self, prompt, system=""):
+            yield ""
+
+    llm = FakeLLM()
+    results = await llm.generate_batch(["a", "b", "c"], system="sys")
+    assert results == ["response:a", "response:b", "response:c"]
+
+
+async def test_generate_batch_respects_max_concurrency():
+    """At most max_concurrency calls run in parallel."""
+    import asyncio
+
+    concurrent = 0
+    max_seen = 0
+
+    class TrackingLLM(LLMProvider):
+        async def generate(self, prompt: str, system: str = "") -> str:
+            nonlocal concurrent, max_seen
+            concurrent += 1
+            max_seen = max(max_seen, concurrent)
+            await asyncio.sleep(0.01)
+            concurrent -= 1
+            return prompt
+
+        async def generate_structured(self, prompt, schema, system=""):
+            return {}
+
+        async def generate_stream(self, prompt, system=""):
+            yield ""
+
+    llm = TrackingLLM()
+    await llm.generate_batch([f"p{i}" for i in range(10)], max_concurrency=3)
+    assert max_seen <= 3
+
+
+async def test_logging_provider_wraps_generate_batch():
+    """LoggingLLMProvider delegates generate_batch to inner provider."""
+    from worker.llm.base import LoggingLLMProvider
+
+    class FakeLLM(LLMProvider):
+        async def generate(self, prompt: str, system: str = "") -> str:
+            return f"r:{prompt}"
+
+        async def generate_structured(self, prompt, schema, system=""):
+            return {}
+
+        async def generate_stream(self, prompt, system=""):
+            yield ""
+
+    inner = FakeLLM()
+    logged = LoggingLLMProvider(inner)
+    results = await logged.generate_batch(["x", "y"])
+    assert results == ["r:x", "r:y"]
