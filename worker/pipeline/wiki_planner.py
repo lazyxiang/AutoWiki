@@ -408,6 +408,102 @@ def _build_assignment_prompt(
     return "\n\n".join(sections)
 
 
+def _validate_outline_structure(
+    pages: list[dict],
+    page_range: tuple[int, int],
+    total_file_count: int,
+) -> None:
+    """Validate structural properties of a page outline (no file assignments needed).
+
+    Called inside :func:`_generate_outline` after each LLM response so that
+    outline-level errors are caught and retried in Phase 1, before Phase 2
+    (file assignment) is even attempted.
+
+    Checks:
+    - Duplicate slugs (two titles that normalise to the same URL slug).
+    - Parent cycles (circular parent references).
+    - Hierarchy depth > 4.
+    - Flat plan when the repository has > 30 files.
+    - Page count below the suggested minimum.
+
+    Raises:
+        ValueError: Describing the first constraint that is violated.
+    """
+    slug_counts: dict[str, int] = {}
+    for p in pages:
+        slug = _slugify_title(p["title"])
+        slug_counts[slug] = slug_counts.get(slug, 0) + 1
+    dupes = [s for s, cnt in slug_counts.items() if cnt > 1]
+    if dupes:
+        raise ValueError(f"Duplicate page slugs detected: {', '.join(dupes)}")
+
+    title_to_parent: dict[str, str | None] = {
+        p["title"]: p.get("parent") for p in pages
+    }
+    known = set(title_to_parent)
+
+    def _depth(title: str) -> int:
+        d, current, seen = 1, title, {title}
+        while (par := title_to_parent.get(current)) is not None:
+            if par not in known:
+                break  # dangling reference — treated as top-level
+            if par in seen:
+                raise ValueError(
+                    f"Wiki hierarchy contains a parent cycle involving '{par}'"
+                )
+            seen.add(par)
+            current = par
+            d += 1
+        return d
+
+    max_depth = max((_depth(p["title"]) for p in pages), default=1)
+    if max_depth > 4:
+        raise ValueError(
+            f"Wiki hierarchy is {max_depth} levels deep — flatten to at most 4 levels"
+        )
+    if max_depth == 1 and total_file_count > 30:
+        raise ValueError(
+            f"All pages are top-level — create 2-3 levels of hierarchy "
+            f"for a repo with {total_file_count} files"
+        )
+    if len(pages) < page_range[0]:
+        raise ValueError(
+            f"Plan has {len(pages)} pages but minimum is {page_range[0]} — "
+            "create more granular pages"
+        )
+
+
+def _validate_assignments(
+    result: dict[str, list[str]],
+    outline: list[dict],
+) -> None:
+    """Validate per-page file assignment counts.
+
+    Called inside :func:`_assign_files` after each LLM response so that
+    assignment-level errors are caught and retried in Phase 2.
+
+    Checks:
+    - No page has more than 25 files (over-stuffed pages make poor wiki pages).
+    - No non-overview page has zero files (empty pages add noise).
+
+    Raises:
+        ValueError: Describing the first constraint that is violated.
+    """
+    for page in outline:
+        title = page["title"]
+        files = result.get(title, [])
+        if len(files) > 25:
+            raise ValueError(
+                f"Page '{title}' has {len(files)} files — "
+                "split into focused sub-pages of ≤25 files each"
+            )
+        if "overview" not in title.lower() and len(files) == 0:
+            raise ValueError(
+                f"Page '{title}' has no files assigned — "
+                "either assign files or remove it"
+            )
+
+
 async def _generate_outline(
     file_summary: str,
     repo_name: str,
@@ -419,9 +515,16 @@ async def _generate_outline(
     system: str,
     on_retry: OnRetryCallback | None,
     max_retries: int = 3,
+    total_file_count: int = 0,
     _extra_context: str | None = None,
 ) -> list[dict]:
-    """Phase 1: Generate page tree without file assignments."""
+    """Phase 1: Generate page tree and validate outline structure.
+
+    Combines LLM generation with immediate structural validation so that
+    outline-level problems (duplicate slugs, cycles, wrong depth, flat plan,
+    too few pages) are caught and retried within this phase rather than being
+    deferred to a post-assignment validation step.
+    """
     prompt = _build_outline_prompt(
         file_summary=file_summary,
         repo_name=repo_name,
@@ -449,6 +552,7 @@ async def _generate_outline(
             for p in pages:
                 if "title" not in p or "purpose" not in p:
                     raise ValueError(f"Page missing title or purpose: {p}")
+            _validate_outline_structure(pages, page_range, total_file_count)
             return pages
         except (ValueError, json.JSONDecodeError, KeyError) as e:
             if attempt < max_retries - 1:
@@ -468,7 +572,12 @@ async def _assign_files(
     max_retries: int = 3,
     _extra_context: str | None = None,
 ) -> dict[str, list[str]]:
-    """Phase 2: Assign every file to a page. Returns {page_title: [files]}."""
+    """Phase 2: Assign every file to a page and validate assignments.
+
+    Combines LLM generation with immediate per-page constraint checking so
+    that over-stuffed pages (> 25 files) and empty non-overview pages are
+    caught and retried within this phase.
+    """
     prompt = _build_assignment_prompt(
         outline=outline,
         file_summary=file_summary,
@@ -508,13 +617,14 @@ async def _assign_files(
                 if f not in assigned_files:
                     result[first_title].append(f)
 
+            _validate_assignments(result, outline)
             return result
 
         except (ValueError, json.JSONDecodeError, KeyError) as e:
             if attempt < max_retries - 1:
                 prompt += f"\n\nPrevious attempt failed: {e}. Please fix and retry."
 
-    # Fallback: round-robin distribution
+    # Fallback: round-robin distribution (ignores validation constraints)
     result = {p["title"]: [] for p in outline}
     titles = [p["title"] for p in outline]
     for i, f in enumerate(sorted(all_files)):
@@ -710,26 +820,6 @@ def validate_wiki_plan(
     return WikiPlan(pages=pages)
 
 
-# Errors that come from the outline structure (titles, parents, page count),
-# not from file assignment.  These must be fixed by regenerating Phase 1.
-_OUTLINE_ERROR_PREFIXES = (
-    "Duplicate page slugs detected:",
-    "Wiki hierarchy contains a parent cycle",
-    "Wiki hierarchy is",
-    "All pages are top-level",
-    "Plan has ",
-    "Page missing 'title'",
-    "Page missing 'purpose'",
-    "Missing 'pages' key",
-    "Page plan must have at least one page",
-)
-
-
-def _is_outline_error(msg: str) -> bool:
-    """Return True if *msg* describes an outline-level validation failure."""
-    return any(msg.startswith(p) for p in _OUTLINE_ERROR_PREFIXES)
-
-
 async def generate_wiki_plan(
     file_analysis,
     repo_name: str,
@@ -741,7 +831,29 @@ async def generate_wiki_plan(
     existing_titles: set[str] | None = None,
     wiki_language: str = "en",
 ) -> WikiPlan:
-    """Generate a hierarchical wiki plan using two-phase LLM planning."""
+    """Generate a hierarchical wiki plan using two-phase LLM planning.
+
+    Each phase validates its own output and self-retries up to *max_retries*
+    times before surfacing an error, so problems are corrected as early as
+    possible:
+
+    * **Phase 1** (:func:`_generate_outline`) — Produces the page hierarchy
+      (titles, purposes, parent relationships) and immediately validates
+      structural constraints (duplicate slugs, cycles, depth, flat plan, page
+      count) via :func:`_validate_outline_structure`.  A bad outline is
+      re-generated within Phase 1 rather than being discovered after the
+      expensive Phase 2 LLM call.
+
+    * **Phase 2** (:func:`_assign_files`) — Assigns every source file to a
+      page and immediately validates per-page constraints (over-stuffed pages,
+      empty non-overview pages) via :func:`_validate_assignments`.  Bad
+      assignments are re-generated within Phase 2.
+
+    * **Final** — Combines outline + assignments into a :class:`WikiPlan` via
+      :func:`validate_wiki_plan`, which handles orphan-file assignment as a
+      normalisation step.  Any remaining error falls back to a cluster-based
+      plan.
+    """
     from worker.pipeline.dependency_graph import format_for_llm_prompt
 
     file_summary = file_analysis.to_llm_summary(dep_graph=dep_graph, max_files=200)
@@ -749,13 +861,12 @@ async def generate_wiki_plan(
     dep_info = format_for_llm_prompt(dep_graph) if dep_graph is not None else None
     clusters = dep_graph.clusters if dep_graph is not None else None
 
-    # Compute entity count for page range heuristic
     entity_count = sum(len(info.entities) for info in file_analysis.files.values())
     page_range = _suggest_page_range(len(all_files), entity_count)
 
     system = _SYSTEM + get_planner_language_instruction(wiki_language)
 
-    # Phase 1: Generate outline
+    # Phase 1: Generate outline + validate structure
     try:
         outline = await _generate_outline(
             file_summary=file_summary,
@@ -768,12 +879,12 @@ async def generate_wiki_plan(
             system=system,
             on_retry=on_retry,
             max_retries=max_retries,
+            total_file_count=len(all_files),
         )
     except ValueError:
-        # Fallback to cluster-based plan
         return _fallback_plan(repo_name, all_files, clusters)
 
-    # Phase 2: Assign files to pages
+    # Phase 2: Assign files + validate assignments
     file_assignments = await _assign_files(
         outline=outline,
         file_summary=file_summary,
@@ -785,88 +896,29 @@ async def generate_wiki_plan(
         max_retries=max_retries,
     )
 
-    # Phase 3: Validate — retry the appropriate phase on each failure.
-    # Outline-level errors (duplicate slugs, bad hierarchy, too few pages)
-    # require regenerating Phase 1; assignment-level errors (over-stuffed or
-    # empty pages) only need a new Phase 2 pass.
-    last_error: str = ""
-    for attempt in range(max_retries):
-        raw = {
-            "pages": [
-                {
-                    "title": p["title"],
-                    "purpose": p["purpose"],
-                    "parent": p.get("parent"),
-                    "files": file_assignments.get(p["title"], []),
-                }
-                for p in outline
-            ]
-        }
-        try:
-            return validate_wiki_plan(
-                raw,
-                all_files=all_files,
-                existing_titles=existing_titles,
-                clusters=clusters,
-                page_range=page_range,
-            )
-        except ValueError as exc:
-            last_error = str(exc)
-            if attempt >= max_retries - 1:
-                break
-            extra = f"Previous attempt was rejected: {last_error}. Please fix."
-            is_outline = _is_outline_error(last_error)
-            if is_outline:
-                logger.warning(
-                    "Wiki plan validation failed (attempt %d/%d): %s"
-                    " — outline-level error, regenerating Phase 1",
-                    attempt + 1,
-                    max_retries,
-                    last_error,
-                )
-                try:
-                    outline = await _generate_outline(
-                        file_summary=file_summary,
-                        repo_name=repo_name,
-                        llm=llm,
-                        readme=readme,
-                        dep_info=dep_info,
-                        clusters=clusters,
-                        page_range=page_range,
-                        system=system,
-                        on_retry=on_retry,
-                        max_retries=1,
-                        _extra_context=extra,
-                    )
-                except ValueError:
-                    break
-                # Fresh outline — start assignment without the stale error context
-                assign_extra = None
-            else:
-                logger.warning(
-                    "Wiki plan validation failed (attempt %d/%d): %s"
-                    " — retrying file assignment",
-                    attempt + 1,
-                    max_retries,
-                    last_error,
-                )
-                assign_extra = extra
-            file_assignments = await _assign_files(
-                outline=outline,
-                file_summary=file_summary,
-                dep_info=dep_info,
-                all_files=all_files,
-                llm=llm,
-                system=system,
-                on_retry=on_retry,
-                max_retries=1,
-                _extra_context=assign_extra,
-            )
-
-    logger.warning(
-        "Wiki plan validation failed after %d attempts: %s", max_retries, last_error
-    )
-    return _fallback_plan(repo_name, all_files, clusters)
+    # Final: combine and normalise (handles orphan files, safety-net checks)
+    raw = {
+        "pages": [
+            {
+                "title": p["title"],
+                "purpose": p["purpose"],
+                "parent": p.get("parent"),
+                "files": file_assignments.get(p["title"], []),
+            }
+            for p in outline
+        ]
+    }
+    try:
+        return validate_wiki_plan(
+            raw,
+            all_files=all_files,
+            existing_titles=existing_titles,
+            clusters=clusters,
+            page_range=page_range,
+        )
+    except ValueError as exc:
+        logger.warning("Final wiki plan validation failed: %s — using fallback", exc)
+        return _fallback_plan(repo_name, all_files, clusters)
 
 
 def _fallback_plan(

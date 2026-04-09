@@ -374,6 +374,66 @@ class FileInfo:
     summary: str = ""  # comma-joined top-20 entity names
 
 
+def _rank_files_by_importance(
+    rel_paths: list[str],
+    file_info: dict[str, FileInfo],
+    dep_graph: DependencyGraph | None = None,
+) -> list[str]:
+    """Return *rel_paths* sorted from most to least important.
+
+    Used by :meth:`FileAnalysis.to_llm_summary` to choose which files receive
+    full detail when the repository exceeds the per-prompt file cap.
+
+    Scoring (higher = more important):
+
+    * **Entity count × 2** — files with more named symbols contain more
+      architectural signal.
+    * **In-degree × 3** — files imported by many others are structural hubs;
+      requires *dep_graph*.
+    * **Entry-point name bonus +10** — ``main.py``, ``app.py``, ``index.ts``,
+      etc. are almost always relevant to understanding the project.
+    * **Shallowness bonus up to +3** — top-level files (fewer ``/`` in the
+      path) tend to be more central than deeply nested helpers.
+    """
+    # Pre-compute how many files import each path (in-degree)
+    in_degree: dict[str, int] = {}
+    if dep_graph is not None:
+        for deps in dep_graph.edges.values():
+            for dep in deps:
+                in_degree[dep] = in_degree.get(dep, 0) + 1
+
+    _ENTRY_NAMES = frozenset(
+        {
+            "main.py",
+            "app.py",
+            "index.py",
+            "index.ts",
+            "index.js",
+            "server.py",
+            "server.ts",
+            "server.js",
+            "cli.py",
+            "run.py",
+            "manage.py",
+            "wsgi.py",
+            "asgi.py",
+            "setup.py",
+        }
+    )
+
+    def _score(rel_path: str) -> float:
+        info = file_info.get(rel_path)
+        s = len(info.entities) * 2.0 if info else 0.0
+        s += in_degree.get(rel_path, 0) * 3.0
+        basename = rel_path.rsplit("/", 1)[-1].lower()
+        if basename in _ENTRY_NAMES:
+            s += 10.0
+        s += max(0, 3 - rel_path.count("/"))
+        return s
+
+    return sorted(rel_paths, key=_score, reverse=True)
+
+
 @dataclass
 class FileAnalysis:
     """Aggregated AST analysis results for all source files in a repository.
@@ -399,12 +459,22 @@ class FileAnalysis:
         Args:
             max_files: Maximum files with full detail. 0 means no limit (safety
                 cap at 800). Files beyond the cap are listed as bare paths.
+                When the repository exceeds the cap, the most important files
+                are selected via :func:`_rank_files_by_importance` rather than
+                falling back on alphabetical order.
             dep_graph: Optional dependency graph for import/external dep info.
         """
-        sorted_keys = sorted(self.files.keys())
+        all_keys = sorted(self.files.keys())
         cap = max_files if max_files > 0 else 800
-        detailed = sorted_keys[:cap]
-        overflow = sorted_keys[cap:]
+        if len(all_keys) > cap:
+            # Prioritise the most architecturally significant files
+            ranked = _rank_files_by_importance(all_keys, self.files, dep_graph)
+            detailed = ranked[:cap]
+            detailed_set = set(detailed)
+            overflow = [k for k in all_keys if k not in detailed_set]
+        else:
+            detailed = all_keys
+            overflow: list[str] = []
 
         lines: list[str] = []
         for rel_path in detailed:
