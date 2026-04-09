@@ -447,6 +447,7 @@ async def _assign_files(
     system: str,
     on_retry: OnRetryCallback | None,
     max_retries: int = 3,
+    _extra_context: str | None = None,
 ) -> dict[str, list[str]]:
     """Phase 2: Assign every file to a page. Returns {page_title: [files]}."""
     prompt = _build_assignment_prompt(
@@ -455,6 +456,8 @@ async def _assign_files(
         dep_info=dep_info,
         all_files=all_files,
     )
+    if _extra_context:
+        prompt += f"\n\n{_extra_context}"
 
     valid_titles = {p["title"] for p in outline}
     first_title = outline[0]["title"]
@@ -741,30 +744,56 @@ async def generate_wiki_plan(
         max_retries=max_retries,
     )
 
-    # Build raw dict format for validate_wiki_plan
-    raw = {
-        "pages": [
-            {
-                "title": p["title"],
-                "purpose": p["purpose"],
-                "parent": p.get("parent"),
-                "files": file_assignments.get(p["title"], []),
-            }
-            for p in outline
-        ]
-    }
+    # Phase 3: Validate — retry Phase 2 (re-assign files) on each failure,
+    # feeding the validation error back into the assignment prompt.
+    last_error: str = ""
+    for attempt in range(max_retries):
+        raw = {
+            "pages": [
+                {
+                    "title": p["title"],
+                    "purpose": p["purpose"],
+                    "parent": p.get("parent"),
+                    "files": file_assignments.get(p["title"], []),
+                }
+                for p in outline
+            ]
+        }
+        try:
+            return validate_wiki_plan(
+                raw,
+                all_files=all_files,
+                existing_titles=existing_titles,
+                clusters=clusters,
+                page_range=page_range,
+            )
+        except ValueError as exc:
+            last_error = str(exc)
+            if attempt < max_retries - 1:
+                logger.warning(
+                    "Wiki plan validation failed (attempt %d/%d): %s"
+                    " — retrying file assignment",
+                    attempt + 1,
+                    max_retries,
+                    last_error,
+                )
+                extra = f"Previous assignment was rejected: {last_error}. Please fix."
+                file_assignments = await _assign_files(
+                    outline=outline,
+                    file_summary=file_summary,
+                    dep_info=dep_info,
+                    all_files=all_files,
+                    llm=llm,
+                    system=system,
+                    on_retry=on_retry,
+                    max_retries=1,
+                    _extra_context=extra,
+                )
 
-    try:
-        return validate_wiki_plan(
-            raw,
-            all_files=all_files,
-            existing_titles=existing_titles,
-            clusters=clusters,
-            page_range=page_range,
-        )
-    except ValueError:
-        # Validation failed — fall back to cluster-based plan
-        return _fallback_plan(repo_name, all_files, clusters)
+    logger.warning(
+        "Wiki plan validation failed after %d attempts: %s", max_retries, last_error
+    )
+    return _fallback_plan(repo_name, all_files, clusters)
 
 
 def _fallback_plan(
