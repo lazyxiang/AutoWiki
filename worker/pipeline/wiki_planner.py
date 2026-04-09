@@ -329,11 +329,27 @@ def _build_outline_prompt(
         sections.append(f"Dependency relationships:\n{dep_info}")
 
     if clusters:
-        cluster_strs = [
-            f"  Cluster {i + 1}: {', '.join(c)}" for i, c in enumerate(clusters[:30])
-        ]
-        if len(clusters) > 30:
-            cluster_strs.append(f"  ... and {len(clusters) - 30} more clusters")
+        # Show small clusters (≤20 files) as explicit file lists — they carry
+        # actionable grouping signal.  Large clusters span most of the repo
+        # through shared utilities; listing all their files is noise since the
+        # dependency graph already captures those relationships.
+        _CLUSTER_DETAIL_LIMIT = 20
+        cluster_strs: list[str] = []
+        shown = 0
+        for c in clusters:
+            if shown >= 30:
+                break
+            if len(c) <= _CLUSTER_DETAIL_LIMIT:
+                cluster_strs.append(f"  Cluster ({len(c)} files): {', '.join(c)}")
+            else:
+                cluster_strs.append(
+                    f"  Large cluster ({len(c)} files) — see dependency "
+                    "relationships above for internal structure"
+                )
+            shown += 1
+        remaining = len(clusters) - shown
+        if remaining > 0:
+            cluster_strs.append(f"  ... and {remaining} more clusters")
         sections.append(
             "File clusters (files that import each other):\n" + "\n".join(cluster_strs)
         )
