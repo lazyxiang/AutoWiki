@@ -27,10 +27,15 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from worker.llm.base import LLMProvider
 from worker.pipeline.language import get_planner_language_instruction
 from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
+
+if TYPE_CHECKING:
+    from worker.pipeline.ast_analysis import FileAnalysis
+    from worker.pipeline.dependency_graph import DependencyGraph
 
 logger = logging.getLogger("worker.planner")
 
@@ -587,6 +592,8 @@ async def _assign_files(
     if _extra_context:
         prompt += f"\n\n{_extra_context}"
 
+    if not outline:
+        raise ValueError("Cannot assign files: outline is empty")
     valid_titles = {p["title"] for p in outline}
     first_title = outline[0]["title"]
 
@@ -800,15 +807,19 @@ def validate_wiki_plan(
 
     # Cluster coherence warning (not a rejection)
     if clusters:
+        # Pre-build file→page mapping once (O(pages × files_per_page))
+        # to avoid O(clusters × files × pages × files_per_page) nested loops.
+        file_to_page: dict[str, str] = {}
+        for p in pages:
+            for f in p.files:
+                file_to_page[f] = p.title
         for cluster in clusters:
             if len(cluster) <= 1:
                 continue
             page_titles_for_cluster: set[str] = set()
             for f in cluster:
-                for p in pages:
-                    if f in p.files:
-                        page_titles_for_cluster.add(p.title)
-                        break
+                if f in file_to_page:
+                    page_titles_for_cluster.add(file_to_page[f])
             if len(page_titles_for_cluster) > 3:
                 logger.warning(
                     "Cluster files [%s...] scattered across %d pages: %s",
@@ -821,10 +832,10 @@ def validate_wiki_plan(
 
 
 async def generate_wiki_plan(
-    file_analysis,
+    file_analysis: FileAnalysis,
     repo_name: str,
     llm: LLMProvider,
-    dep_graph=None,
+    dep_graph: DependencyGraph | None = None,
     max_retries: int = 3,
     readme: str | None = None,
     on_retry: OnRetryCallback | None = None,

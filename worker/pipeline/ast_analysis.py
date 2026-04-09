@@ -451,17 +451,18 @@ class FileAnalysis:
 
     def to_llm_summary(
         self,
-        max_files: int = 0,
+        max_files: int = 200,
         dep_graph: DependencyGraph | None = None,
     ) -> str:
         """Return per-file summaries with optional dependency and docstring context.
 
         Args:
-            max_files: Maximum files with full detail. 0 means no limit (safety
-                cap at 800). Files beyond the cap are listed as bare paths.
-                When the repository exceeds the cap, the most important files
-                are selected via :func:`_rank_files_by_importance` rather than
-                falling back on alphabetical order.
+            max_files: Maximum files with full detail. Defaults to 200. Pass
+                ``0`` to opt in to the expanded 800-file safety cap. Files
+                beyond the cap are listed as bare paths. When the repository
+                exceeds the cap, the most important files are selected via
+                :func:`_rank_files_by_importance` rather than falling back on
+                alphabetical order.
             dep_graph: Optional dependency graph for import/external dep info.
         """
         all_keys = sorted(self.files.keys())
@@ -487,16 +488,29 @@ class FileAnalysis:
                     f" {info.function_count} functions [{info.summary}]"
                 )
 
-            # Dependency line
+            # Dependency line (capped to keep token usage predictable)
+            _MAX_DEPS = 10
             if dep_graph is not None:
                 internal = dep_graph.edges.get(rel_path, [])
                 external = dep_graph.external_deps.get(rel_path, [])
                 if internal or external:
                     parts = []
                     if internal:
-                        parts.append(f"imports: {', '.join(internal)}")
+                        shown = internal[:_MAX_DEPS]
+                        suffix = (
+                            f", +{len(internal) - _MAX_DEPS} more"
+                            if len(internal) > _MAX_DEPS
+                            else ""
+                        )
+                        parts.append(f"imports: {', '.join(shown)}{suffix}")
                     if external:
-                        parts.append(f"external: {', '.join(external)}")
+                        shown = external[:_MAX_DEPS]
+                        suffix = (
+                            f", +{len(external) - _MAX_DEPS} more"
+                            if len(external) > _MAX_DEPS
+                            else ""
+                        )
+                        parts.append(f"external: {', '.join(shown)}{suffix}")
                     lines.append(f"  {' | '.join(parts)}")
                 elif not info.entities:
                     pass  # already shows (no named entities)
