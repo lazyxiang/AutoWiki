@@ -3,8 +3,6 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import Any
 
-from sqlalchemy import inspect, text
-from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from shared.models import Base
@@ -19,7 +17,6 @@ async def init_db(database_path: str) -> None:
     _engines[database_path] = engine
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        await conn.run_sync(_apply_migrations)
     _session_factories[database_path] = async_sessionmaker(
         engine, expire_on_commit=False
     )
@@ -34,68 +31,6 @@ async def get_session(database_path: str):
     factory = _session_factories[database_path]
     async with factory() as session:
         yield session
-
-
-def _apply_migrations(connection) -> None:
-    """Detect and apply missing columns for schema evolution."""
-    insp = inspect(connection)
-    if insp.has_table("wiki_pages"):
-        columns = {col["name"] for col in insp.get_columns("wiki_pages")}
-        if "description" not in columns:
-            try:
-                connection.execute(
-                    text("ALTER TABLE wiki_pages ADD COLUMN description TEXT")
-                )
-            except OperationalError as exc:
-                if "duplicate column name" not in str(exc).lower():
-                    raise
-
-    # repositories migrations
-    if insp.has_table("repositories"):
-        columns = {col["name"] for col in insp.get_columns("repositories")}
-        if "wiki_structure" not in columns:
-            try:
-                connection.execute(
-                    text("ALTER TABLE repositories ADD COLUMN wiki_structure TEXT")
-                )
-            except OperationalError as exc:
-                if "duplicate column name" not in str(exc).lower():
-                    raise
-        for col_name, col_type in [
-            ("description", "TEXT"),
-            ("stars", "INTEGER"),
-            ("language", "VARCHAR"),
-            ("wiki_language", "VARCHAR"),
-        ]:
-            if col_name not in columns:
-                try:
-                    connection.execute(
-                        text(
-                            f"ALTER TABLE repositories ADD COLUMN {col_name} {col_type}"
-                        )
-                    )
-                except OperationalError as exc:
-                    if "duplicate column name" not in str(exc).lower():
-                        raise
-        # Normalize legacy rows to default language (handle NULL or empty)
-        connection.execute(
-            text(
-                "UPDATE repositories SET wiki_language = 'en' "
-                "WHERE wiki_language IS NULL OR wiki_language = ''"
-            )
-        )
-
-    # jobs migrations
-    if insp.has_table("jobs"):
-        columns = {col["name"] for col in insp.get_columns("jobs")}
-        if "status_description" not in columns:
-            try:
-                connection.execute(
-                    text("ALTER TABLE jobs ADD COLUMN status_description TEXT")
-                )
-            except OperationalError as exc:
-                if "duplicate column name" not in str(exc).lower():
-                    raise
 
 
 async def dispose_db(database_path: str) -> None:
