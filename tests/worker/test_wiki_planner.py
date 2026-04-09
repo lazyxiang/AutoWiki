@@ -365,6 +365,82 @@ async def test_assign_files_orphans_distributed(mock_llm):
     assert "orphan.py" in result["Overview"]
 
 
+def test_validate_rejects_page_over_25_files():
+    raw = {
+        "pages": [
+            {
+                "title": "Mega Page",
+                "purpose": "Too many files.",
+                "files": [f"f{i}.py" for i in range(30)],
+            },
+        ]
+    }
+    with pytest.raises(ValueError, match="split into focused sub-pages"):
+        validate_wiki_plan(raw)
+
+
+def test_validate_rejects_empty_non_overview_page():
+    raw = {
+        "pages": [
+            {"title": "Overview", "purpose": "Top.", "files": ["main.py"]},
+            {"title": "Empty Page", "purpose": "Nothing here.", "files": []},
+        ]
+    }
+    with pytest.raises(ValueError, match="no files assigned"):
+        validate_wiki_plan(raw)
+
+
+def test_validate_allows_empty_overview_page():
+    """Overview page with 0 files is allowed (orphans get assigned to it)."""
+    raw = {
+        "pages": [
+            {"title": "Overview", "purpose": "Top.", "files": []},
+            {"title": "API", "purpose": "Endpoints.", "files": ["api.py"]},
+        ]
+    }
+    plan = validate_wiki_plan(raw)
+    assert len(plan.pages) == 2
+
+
+def test_validate_rejects_too_deep_hierarchy():
+    raw = {
+        "pages": [
+            {"title": "L0", "purpose": ".", "files": ["a.py"]},
+            {"title": "L1", "purpose": ".", "parent": "L0", "files": ["b.py"]},
+            {"title": "L2", "purpose": ".", "parent": "L1", "files": ["c.py"]},
+            {"title": "L3", "purpose": ".", "parent": "L2", "files": ["d.py"]},
+            {"title": "L4", "purpose": ".", "parent": "L3", "files": ["e.py"]},
+        ]
+    }
+    with pytest.raises(ValueError, match="flatten to at most 4 levels"):
+        validate_wiki_plan(raw)
+
+
+def test_validate_rejects_flat_plan_for_large_repo():
+    page1_files = [f"f{i}.py" for i in range(20)]
+    page2_files = [f"g{i}.py" for i in range(15)]
+    raw = {
+        "pages": [
+            {"title": "Page1", "purpose": ".", "files": page1_files},
+            {"title": "Page2", "purpose": ".", "files": page2_files},
+        ]
+    }
+    all_files = [f"f{i}.py" for i in range(20)] + [f"g{i}.py" for i in range(15)]
+    with pytest.raises(ValueError, match="create 2-3 levels of hierarchy"):
+        validate_wiki_plan(raw, all_files=all_files)
+
+
+def test_validate_rejects_too_few_pages():
+    many_files = [f"f{i}.py" for i in range(25)]
+    raw = {
+        "pages": [
+            {"title": "Overview", "purpose": ".", "files": many_files},
+        ]
+    }
+    with pytest.raises(ValueError, match="create more granular pages"):
+        validate_wiki_plan(raw, page_range=(5, 20))
+
+
 async def test_generate_wiki_plan_two_phase(mock_llm):
     """generate_wiki_plan uses two-phase planning."""
     # Phase 1 returns outline, Phase 2 returns assignments

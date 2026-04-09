@@ -501,6 +501,8 @@ def validate_wiki_plan(
     raw: dict,
     all_files: list[str] | None = None,
     existing_titles: set[str] | None = None,
+    clusters: list[list[str]] | None = None,
+    page_range: tuple[int, int] | None = None,
 ) -> WikiPlan:
     """Validate an LLM-produced wiki plan dict and return a :class:`WikiPlan`.
 
@@ -603,6 +605,83 @@ def validate_wiki_plan(
             )
             if overview:
                 overview.files = list(overview.files) + orphans
+
+    # ── Semantic validation ──────────────────────────────────────────────
+    import logging as _logging
+
+    _log = _logging.getLogger("worker.planner")
+
+    # Max files per page
+    for p in pages:
+        if len(p.files) > 25:
+            raise ValueError(
+                f"Page '{p.title}' has {len(p.files)} files — "
+                "split into focused sub-pages of ≤25 files each"
+            )
+
+    # No empty non-overview pages
+    for p in pages:
+        is_overview = "overview" in p.title.lower()
+        if not is_overview and len(p.files) == 0:
+            raise ValueError(
+                f"Page '{p.title}' has no files assigned — "
+                "either assign files or remove it"
+            )
+
+    # Hierarchy depth check
+    title_to_parent = {p.title: p.parent for p in pages}
+
+    def _depth(title: str) -> int:
+        d = 1
+        current = title
+        seen: set[str] = set()
+        while title_to_parent.get(current) is not None:
+            current = title_to_parent[current]
+            if current in seen:
+                break
+            seen.add(current)
+            d += 1
+        return d
+
+    max_depth = max((_depth(p.title) for p in pages), default=1)
+    if max_depth > 4:
+        raise ValueError(
+            f"Wiki hierarchy is {max_depth} levels deep — flatten to at most 4 levels"
+        )
+
+    # Flat plan check for repos with >30 files
+    total_file_count = len(all_files) if all_files else sum(len(p.files) for p in pages)
+    if max_depth == 1 and total_file_count > 30:
+        raise ValueError(
+            f"All pages are top-level — create 2-3 levels of "
+            f"hierarchy for a repo with {total_file_count} files"
+        )
+
+    # Page count vs suggested range
+    if page_range is not None and len(pages) < page_range[0]:
+        raise ValueError(
+            f"Plan has {len(pages)} pages but minimum is {page_range[0]} — "
+            "create more granular pages"
+        )
+
+    # Cluster coherence warning (not a rejection)
+    if clusters:
+        for cluster in clusters:
+            if len(cluster) <= 1:
+                continue
+            page_titles_for_cluster: set[str] = set()
+            for f in cluster:
+                for p in pages:
+                    if f in p.files:
+                        page_titles_for_cluster.add(p.title)
+                        break
+            if len(page_titles_for_cluster) > 3:
+                _log.warning(
+                    "Cluster files [%s...] scattered across %d pages: %s",
+                    cluster[0],
+                    len(page_titles_for_cluster),
+                    ", ".join(sorted(page_titles_for_cluster)),
+                )
 
     return WikiPlan(pages=pages)
 
