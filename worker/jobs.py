@@ -1082,6 +1082,7 @@ async def run_refresh_index(
 
         levels = compute_generation_order(plan)
         generated: dict[str, PageResult] = {}
+        refresh_order_counter = 0
 
         for depth_idx, level in enumerate(levels):
             specs_with_children: list[tuple[WikiPageSpec, list[PageResult] | None]] = []
@@ -1120,8 +1121,9 @@ async def run_refresh_index(
                     result.slug,
                     len(result.content),
                 )
-                fallback_order = max_existing_order + 1 + len(generated)
-                page_order = old_page_orders.get(result.slug, fallback_order)
+                page_order = old_page_orders.get(
+                    result.slug, max_existing_order + 1 + refresh_order_counter
+                )
                 async with get_session(db_path) as s:
                     s.add(
                         WikiPage(
@@ -1136,6 +1138,7 @@ async def run_refresh_index(
                         )
                     )
                     await s.commit()
+                refresh_order_counter += 1
                 await _write_text_async(wiki_dir / f"{result.slug}.md", result.content)
 
             progress = 65 + int(30 * (depth_idx + 1) / len(levels)) if levels else 95

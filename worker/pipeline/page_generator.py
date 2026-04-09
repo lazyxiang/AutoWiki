@@ -99,15 +99,18 @@ def compute_generation_order(plan: WikiPlan) -> list[list[WikiPageSpec]]:
     generated in parallel. Returns [[deepest], ..., [roots]].
     """
     title_to_page = {p.title: p for p in plan.pages}
-    depths: dict[str, int] = {}
+    _COMPUTING = object()  # sentinel to detect cycles
+    depths: dict[str, int | object] = {}
 
     def _get_depth(title: str) -> int:
         if title in depths:
-            return depths[title]
+            val = depths[title]
+            return 0 if val is _COMPUTING else val  # treat cycle as root
         page = title_to_page.get(title)
         if page is None or page.parent is None or page.parent not in title_to_page:
             depths[title] = 0
             return 0
+        depths[title] = _COMPUTING  # mark in-progress
         d = _get_depth(page.parent) + 1
         depths[title] = d
         return d
@@ -115,7 +118,7 @@ def compute_generation_order(plan: WikiPlan) -> list[list[WikiPageSpec]]:
     for p in plan.pages:
         _get_depth(p.title)
 
-    max_depth = max(depths.values(), default=0)
+    max_depth = max((v for v in depths.values() if isinstance(v, int)), default=0)
     levels: list[list[WikiPageSpec]] = []
     for d in range(max_depth, -1, -1):
         level = [p for p in plan.pages if depths.get(p.title, 0) == d]

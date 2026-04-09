@@ -172,6 +172,20 @@ def test_compute_generation_order_three_levels():
     assert levels[2][0].title == "Root"
 
 
+def test_compute_generation_order_handles_cycle():
+    """Cyclic parent references should not cause infinite recursion."""
+    plan = WikiPlan(
+        pages=[
+            WikiPageSpec(title="A", purpose=".", parent="B", files=["a.py"]),
+            WikiPageSpec(title="B", purpose=".", parent="A", files=["b.py"]),
+        ]
+    )
+    levels = compute_generation_order(plan)
+    # Both pages should appear somewhere (treated as roots due to cycle)
+    all_titles = {p.title for level in levels for p in level}
+    assert all_titles == {"A", "B"}
+
+
 async def test_generate_page_with_child_contents(mock_llm, mock_embedding):
     import tempfile
 
