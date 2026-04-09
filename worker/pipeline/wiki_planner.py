@@ -24,12 +24,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 
 from worker.llm.base import LLMProvider
 from worker.pipeline.language import get_planner_language_instruction
 from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
+
+logger = logging.getLogger("worker.planner")
 
 
 def _slugify_title(text: str) -> str:
@@ -607,9 +610,6 @@ def validate_wiki_plan(
                 overview.files = list(overview.files) + orphans
 
     # ── Semantic validation ──────────────────────────────────────────────
-    import logging as _logging
-
-    _log = _logging.getLogger("worker.planner")
 
     # Max files per page
     for p in pages:
@@ -676,7 +676,7 @@ def validate_wiki_plan(
                         page_titles_for_cluster.add(p.title)
                         break
             if len(page_titles_for_cluster) > 3:
-                _log.warning(
+                logger.warning(
                     "Cluster files [%s...] scattered across %d pages: %s",
                     cluster[0],
                     len(page_titles_for_cluster),
@@ -741,25 +741,30 @@ async def generate_wiki_plan(
         max_retries=max_retries,
     )
 
-    # Merge outline + assignments into WikiPlan
-    pages = []
-    for p in outline:
-        title = p["title"]
-        parent = p.get("parent")
-        # Validate parent against known titles
-        all_known = {pp["title"] for pp in outline} | (existing_titles or set())
-        if parent and parent not in all_known:
-            parent = None
-        pages.append(
-            WikiPageSpec(
-                title=title,
-                purpose=p["purpose"],
-                parent=parent,
-                files=file_assignments.get(title, []),
-            )
-        )
+    # Build raw dict format for validate_wiki_plan
+    raw = {
+        "pages": [
+            {
+                "title": p["title"],
+                "purpose": p["purpose"],
+                "parent": p.get("parent"),
+                "files": file_assignments.get(p["title"], []),
+            }
+            for p in outline
+        ]
+    }
 
-    return WikiPlan(pages=pages)
+    try:
+        return validate_wiki_plan(
+            raw,
+            all_files=all_files,
+            existing_titles=existing_titles,
+            clusters=clusters,
+            page_range=page_range,
+        )
+    except ValueError:
+        # Validation failed — fall back to cluster-based plan
+        return _fallback_plan(repo_name, all_files, clusters)
 
 
 def _fallback_plan(

@@ -464,6 +464,7 @@ async def test_generate_wiki_plan_two_phase(mock_llm):
             "pages": [
                 {"title": "Overview", "purpose": "Top-level overview."},
                 {"title": "Models", "purpose": "Data models."},
+                {"title": "Utilities", "purpose": "Utility helpers."},
             ]
         },
         # Phase 2: file assignment
@@ -471,6 +472,7 @@ async def test_generate_wiki_plan_two_phase(mock_llm):
             "assignments": [
                 {"file": "main.py", "page_title": "Overview"},
                 {"file": "models.py", "page_title": "Models"},
+                {"file": "utils.py", "page_title": "Utilities"},
             ]
         },
     ]
@@ -479,10 +481,13 @@ async def test_generate_wiki_plan_two_phase(mock_llm):
         files={
             "main.py": FileInfo(rel_path="main.py", entities=[], summary=""),
             "models.py": FileInfo(rel_path="models.py", entities=[], summary=""),
+            "utils.py": FileInfo(rel_path="utils.py", entities=[], summary=""),
         }
     )
     plan = await generate_wiki_plan(file_analysis, repo_name="test", llm=mock_llm)
-    assert len(plan.pages) == 2
-    assert {p.title for p in plan.pages} == {"Overview", "Models"}
-    assert plan.pages[0].files == ["main.py"]
-    assert plan.pages[1].files == ["models.py"]
+    assert len(plan.pages) == 3
+    assert {p.title for p in plan.pages} == {"Overview", "Models", "Utilities"}
+    titles = [p.title for p in plan.pages]
+    assert plan.pages[titles.index("Overview")].files == ["main.py"]
+    assert plan.pages[titles.index("Models")].files == ["models.py"]
+    assert plan.pages[titles.index("Utilities")].files == ["utils.py"]
