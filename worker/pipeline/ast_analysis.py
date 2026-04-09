@@ -24,7 +24,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from worker.pipeline.dependency_graph import DependencyGraph
 
 import tree_sitter_c as tsc
 import tree_sitter_c_sharp as tscsharp
@@ -386,39 +389,25 @@ class FileAnalysis:
 
     files: dict[str, FileInfo] = field(default_factory=dict)  # keyed by rel_path
 
-    def to_llm_summary(self, max_files: int = 200) -> str:
-        """Return compact per-file summaries suitable for an LLM planner prompt.
-
-        Files are sorted alphabetically by relative path, then truncated to
-        *max_files* entries.  Files with no recognised entities are shown with
-        the placeholder ``"(no named entities)"``.  If the total count exceeds
-        *max_files*, a trailing count line is appended.
+    def to_llm_summary(
+        self,
+        max_files: int = 0,
+        dep_graph: DependencyGraph | None = None,
+    ) -> str:
+        """Return per-file summaries with optional dependency and docstring context.
 
         Args:
-            max_files: Maximum number of files to include in the output before
-                adding a truncation line.  Defaults to ``200``.
-
-        Returns:
-            A multiline ``str`` where each line describes one file::
-
-                src/app.py: 1 classes, 3 functions [App, run, main, helper]
-                src/utils.py: 0 classes, 2 functions [parse_url, slugify]
-                ... and 47 more files
-
-        Example::
-
-            analysis = analyze_all_files(root, files)
-            summary = analysis.to_llm_summary(max_files=3)
-            # "api/routes.py: 0 classes, 2 functions [index, health]\\n"
-            # "src/app.py: 1 classes, 3 functions [App, run, main]\\n"
-            # "... and 12 more files"
+            max_files: Maximum files with full detail. 0 means no limit (safety
+                cap at 800). Files beyond the cap are listed as bare paths.
+            dep_graph: Optional dependency graph for import/external dep info.
         """
-        lines = []
         sorted_keys = sorted(self.files.keys())
-        truncated = sorted_keys[:max_files]
-        remaining = len(sorted_keys) - len(truncated)
+        cap = max_files if max_files > 0 else 800
+        detailed = sorted_keys[:cap]
+        overflow = sorted_keys[cap:]
 
-        for rel_path in truncated:
+        lines: list[str] = []
+        for rel_path in detailed:
             info = self.files[rel_path]
             if not info.entities:
                 lines.append(f"{rel_path}: (no named entities)")
@@ -428,8 +417,35 @@ class FileAnalysis:
                     f" {info.function_count} functions [{info.summary}]"
                 )
 
-        if remaining > 0:
-            lines.append(f"... and {remaining} more files")
+            # Dependency line
+            if dep_graph is not None:
+                internal = dep_graph.edges.get(rel_path, [])
+                external = dep_graph.external_deps.get(rel_path, [])
+                if internal or external:
+                    parts = []
+                    if internal:
+                        parts.append(f"imports: {', '.join(internal)}")
+                    if external:
+                        parts.append(f"external: {', '.join(external)}")
+                    lines.append(f"  {' | '.join(parts)}")
+                elif not info.entities:
+                    pass  # already shows (no named entities)
+                else:
+                    lines.append("  (no dependencies)")
+
+            # Docstring from first top-level entity
+            if info.entities:
+                for e in info.entities:
+                    if e.get("docstring"):
+                        doc = e["docstring"][:120].replace("\n", " ")
+                        lines.append(f'  "{doc}"')
+                        break
+
+        # Overflow files as bare paths
+        if overflow:
+            lines.append(f"... and {len(overflow)} more files (paths only):")
+            for rel_path in overflow:
+                lines.append(f"  {rel_path}")
 
         return "\n".join(lines)
 

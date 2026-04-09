@@ -173,7 +173,90 @@ def test_analyze_all_files_to_llm_summary_truncation(tmp_path):
     result = analyze_all_files(tmp_path, files)
     summary = result.to_llm_summary(max_files=2)
 
-    assert "... and 1 more files" in summary
+    assert "... and 1 more files (paths only):" in summary
+
+
+def test_to_llm_summary_with_dep_graph(tmp_path):
+    """to_llm_summary includes dep and docstring context when dep_graph provided."""
+    from worker.pipeline.dependency_graph import DependencyGraph
+
+    f1 = tmp_path / "main.py"
+    f1.write_text(
+        '"""Entry point for the app."""\n'
+        "import os\nfrom models import User\ndef run():\n    pass\n"
+    )
+    f2 = tmp_path / "models.py"
+    f2.write_text('class User:\n    """A user model."""\n    pass\n')
+
+    result = analyze_all_files(tmp_path, [f1, f2])
+
+    graph = DependencyGraph(
+        edges={"main.py": ["models.py"]},
+        clusters=[["main.py", "models.py"]],
+        external_deps={"main.py": ["os"]},
+    )
+    summary = result.to_llm_summary(dep_graph=graph)
+
+    # main.py should have import and external dep info
+    lines = summary.splitlines()
+    main_idx = next(i for i, line in enumerate(lines) if line.startswith("main.py"))
+    # Next line(s) should include imports info
+    dep_line = lines[main_idx + 1]
+    assert "models.py" in dep_line
+    assert "os" in dep_line
+
+    # models.py should have docstring line
+    models_idx = next(i for i, line in enumerate(lines) if line.startswith("models.py"))
+    # Check that a docstring line exists within the next 2 lines
+    docstring_found = any(
+        "user model" in lines[models_idx + j].lower()
+        for j in range(1, min(3, len(lines) - models_idx))
+    )
+    assert docstring_found
+
+
+def test_to_llm_summary_no_limit_by_default(tmp_path):
+    """max_files=0 (default) means no truncation."""
+    for i in range(10):
+        (tmp_path / f"mod{i}.py").write_text(f"def f{i}(): pass\n")
+
+    files = list(tmp_path.glob("*.py"))
+    result = analyze_all_files(tmp_path, files)
+    summary = result.to_llm_summary()
+
+    # All 10 files present, no truncation message
+    assert "more files" not in summary
+    for i in range(10):
+        assert f"mod{i}.py" in summary
+
+
+def test_to_llm_summary_safety_cap(tmp_path):
+    """Files beyond 800 are listed as bare paths."""
+    # Create a FileAnalysis with 802 entries directly to avoid disk I/O
+    files = {}
+    for i in range(802):
+        rel = f"mod{i:04d}.py"
+        files[rel] = FileInfo(
+            rel_path=rel,
+            entities=[
+                {"type": "function", "name": f"f{i}", "start_line": 1, "end_line": 1}
+            ],
+            class_count=0,
+            function_count=1,
+            summary=f"f{i}",
+        )
+    analysis = FileAnalysis(files=files)
+    summary = analysis.to_llm_summary()
+
+    # First 800 should have full detail
+    assert "mod0000.py: 0 classes, 1 functions" in summary
+    # Files beyond 800 should appear as bare paths
+    assert "mod0800.py" in summary
+    # The bare-path section should NOT have entity details
+    last_lines = summary.splitlines()[-5:]
+    # At least one bare path line should lack "classes"
+    bare_lines = [ln for ln in last_lines if "mod080" in ln and "classes" not in ln]
+    assert len(bare_lines) >= 1
 
 
 def test_analyze_all_files_no_entities(tmp_path):

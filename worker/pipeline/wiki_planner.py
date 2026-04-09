@@ -540,7 +540,7 @@ async def generate_wiki_plan(
         format_for_llm_prompt,
     )
 
-    file_summary = file_analysis.to_llm_summary()
+    file_summary = file_analysis.to_llm_summary(dep_graph=dep_graph)
     all_files = list(file_analysis.files.keys())
     dep_info = format_for_llm_prompt(dep_graph) if dep_graph is not None else None
     clusters = dep_graph.clusters if dep_graph is not None else None
