@@ -488,26 +488,29 @@ class FileAnalysis:
                     f" {info.function_count} functions [{info.summary}]"
                 )
 
-            # Dependency line (capped to keep token usage predictable)
-            _MAX_DEPS = 10
+            # Dependency line — asymmetric caps because internal imports are
+            # the primary coupling signal for page grouping while external
+            # package names mainly convey technology context.
+            _MAX_INTERNAL = 15  # enough signal even for large hub files
+            _MAX_EXTERNAL = 5  # package names rarely influence page grouping
             if dep_graph is not None:
                 internal = dep_graph.edges.get(rel_path, [])
                 external = dep_graph.external_deps.get(rel_path, [])
                 if internal or external:
                     parts = []
                     if internal:
-                        shown = internal[:_MAX_DEPS]
+                        shown = internal[:_MAX_INTERNAL]
                         suffix = (
-                            f", +{len(internal) - _MAX_DEPS} more"
-                            if len(internal) > _MAX_DEPS
+                            f", +{len(internal) - _MAX_INTERNAL} more"
+                            if len(internal) > _MAX_INTERNAL
                             else ""
                         )
                         parts.append(f"imports: {', '.join(shown)}{suffix}")
                     if external:
-                        shown = external[:_MAX_DEPS]
+                        shown = external[:_MAX_EXTERNAL]
                         suffix = (
-                            f", +{len(external) - _MAX_DEPS} more"
-                            if len(external) > _MAX_DEPS
+                            f", +{len(external) - _MAX_EXTERNAL} more"
+                            if len(external) > _MAX_EXTERNAL
                             else ""
                         )
                         parts.append(f"external: {', '.join(shown)}{suffix}")
