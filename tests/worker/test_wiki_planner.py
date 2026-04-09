@@ -279,3 +279,120 @@ def test_suggest_page_range_very_large_repo():
 
 def test_suggest_page_range_huge_repo():
     assert _suggest_page_range(500, 1000) == (30, 70)
+
+
+async def test_generate_outline(mock_llm):
+    """_generate_outline returns a list of page dicts with title/purpose/parent."""
+    from worker.pipeline.wiki_planner import _generate_outline
+
+    mock_llm.generate_structured.side_effect = None
+    mock_llm.generate_structured.return_value = {
+        "pages": [
+            {"title": "Overview", "purpose": "Top-level overview."},
+            {"title": "API", "purpose": "REST API.", "parent": "Overview"},
+            {"title": "Worker", "purpose": "Background jobs.", "parent": "Overview"},
+        ]
+    }
+    outline = await _generate_outline(
+        file_summary="main.py: 0 classes, 1 functions [run]",
+        repo_name="test",
+        llm=mock_llm,
+        readme="A test project.",
+        dep_info=None,
+        clusters=None,
+        page_range=(3, 10),
+        system="You are a planner.",
+        on_retry=None,
+    )
+    assert len(outline) == 3
+    assert outline[0]["title"] == "Overview"
+    assert outline[1].get("parent") == "Overview"
+
+
+async def test_assign_files(mock_llm):
+    """_assign_files returns a dict mapping page titles to file lists."""
+    from worker.pipeline.wiki_planner import _assign_files
+
+    mock_llm.generate_structured.side_effect = None
+    mock_llm.generate_structured.return_value = {
+        "assignments": [
+            {"file": "main.py", "page_title": "Overview"},
+            {"file": "api.py", "page_title": "API"},
+            {"file": "worker.py", "page_title": "Worker"},
+        ]
+    }
+    outline = [
+        {"title": "Overview", "purpose": "Top-level."},
+        {"title": "API", "purpose": "REST API."},
+        {"title": "Worker", "purpose": "Jobs."},
+    ]
+    result = await _assign_files(
+        outline=outline,
+        file_summary="main.py: ...\napi.py: ...\nworker.py: ...",
+        dep_info=None,
+        all_files=["main.py", "api.py", "worker.py"],
+        llm=mock_llm,
+        system="Assign files.",
+        on_retry=None,
+    )
+    assert result["Overview"] == ["main.py"]
+    assert result["API"] == ["api.py"]
+    assert result["Worker"] == ["worker.py"]
+
+
+async def test_assign_files_orphans_distributed(mock_llm):
+    """Files assigned to unknown pages get redistributed."""
+    from worker.pipeline.wiki_planner import _assign_files
+
+    mock_llm.generate_structured.side_effect = None
+    mock_llm.generate_structured.return_value = {
+        "assignments": [
+            {"file": "main.py", "page_title": "Overview"},
+            {"file": "orphan.py", "page_title": "NonExistent"},
+        ]
+    }
+    outline = [{"title": "Overview", "purpose": "Top."}]
+    result = await _assign_files(
+        outline=outline,
+        file_summary="main.py: ...\norphan.py: ...",
+        dep_info=None,
+        all_files=["main.py", "orphan.py"],
+        llm=mock_llm,
+        system="Assign.",
+        on_retry=None,
+    )
+    # orphan.py should be assigned to Overview (first page)
+    assert "orphan.py" in result["Overview"]
+
+
+async def test_generate_wiki_plan_two_phase(mock_llm):
+    """generate_wiki_plan uses two-phase planning."""
+    # Phase 1 returns outline, Phase 2 returns assignments
+    mock_llm.generate_structured.side_effect = [
+        # Phase 1: outline
+        {
+            "pages": [
+                {"title": "Overview", "purpose": "Top-level overview."},
+                {"title": "Models", "purpose": "Data models."},
+            ]
+        },
+        # Phase 2: file assignment
+        {
+            "assignments": [
+                {"file": "main.py", "page_title": "Overview"},
+                {"file": "models.py", "page_title": "Models"},
+            ]
+        },
+    ]
+
+    file_analysis = FileAnalysis(
+        files={
+            "main.py": FileInfo(rel_path="main.py", entities=[], summary=""),
+            "models.py": FileInfo(rel_path="models.py", entities=[], summary=""),
+        }
+    )
+    plan = await generate_wiki_plan(file_analysis, repo_name="test", llm=mock_llm)
+    assert len(plan.pages) == 2
+    assert {p.title for p in plan.pages} == {"Overview", "Models"}
+    assert plan.pages[0].files == ["main.py"]
+    assert plan.pages[1].files == ["models.py"]
