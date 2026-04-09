@@ -1,8 +1,17 @@
 # Wiki Planner & Generation Pipeline Improvements
 
 **Date**: 2026-04-08
-**Status**: Draft
+**Status**: Implemented (branch `feature/wiki-planner-improvements`)
 **Scope**: worker/llm, worker/pipeline, worker/jobs
+
+## Implementation notes (deviations from spec)
+
+- **`to_llm_summary` default**: spec said `max_files=0` (no limit, safety cap 800). Implemented as `max_files=200` so callers that omit the argument stay bounded. Pass `0` to explicitly opt in to the 800-file cap.
+- **Dependency list truncation**: each file's internal and external import lists are capped at 10 entries with a `+N more` suffix to prevent hub files from dominating the prompt.
+- **Stage 7 (diagram synthesis) removed**: `diagram_synthesis.py` was dropped entirely — the Overview page generator's prompt template already produces an architecture Mermaid diagram, making Stage 7 redundant. The pipeline is now 6 stages.
+- **`--reuse-index` / `reuse_index`**: new bool param threaded from CLI → `IndexRequest` → `enqueue_full_index` → `run_full_index`. When true, existing FAISS files are preserved and Stage 4 is skipped.
+- **Per-phase validation added**: `_validate_outline_structure()` fires immediately after Phase 1; `_validate_assignments()` fires immediately after Phase 2. This replaces the deferred Phase 3 retry loop and error-type classification helpers that were added mid-implementation but then superseded.
+- **Importance-ranked file selection**: when the file count exceeds `max_files`, `_rank_files_by_importance()` selects the most architecturally significant files (scored by entity count, in-degree, entry-point name bonus, shallowness) rather than falling back to alphabetical order.
 
 ## Problem
 
