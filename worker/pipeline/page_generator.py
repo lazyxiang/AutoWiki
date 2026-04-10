@@ -22,15 +22,19 @@ sections) and a standard *component* template for all other pages.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from worker.embedding.base import EmbeddingProvider
 from worker.llm.base import LLMProvider
 from worker.pipeline.language import get_language_instruction
 from worker.pipeline.rag_indexer import FAISSStore
-from worker.pipeline.wiki_planner import WikiPageSpec
+from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan
 from worker.utils.mermaid import sanitize_mermaid_blocks
 from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
+
+if TYPE_CHECKING:
+    from worker.pipeline.ast_analysis import FileAnalysis
+    from worker.pipeline.dependency_graph import DependencyGraph
 
 _SYSTEM = (
     "You are a senior technical writer creating comprehensive, "
@@ -65,6 +69,63 @@ _SYSTEM = (
     "- Organize content from high-level concepts down to "
     "implementation details"
 )
+
+
+_PARENT_TEMPLATE = (
+    'Write a wiki page for "{title}" that serves as the entry point '
+    "for its child pages. Structure:\n\n"
+    "## Overview\n"
+    "What this subsystem/area does and why it exists. "
+    "High-level narrative.\n\n"
+    "## Architecture\n"
+    "How the child components fit together. Include a Mermaid "
+    "diagram showing the relationships and data flow between "
+    "child components.\n\n"
+    "## Key Design Decisions\n"
+    "Important architectural choices that span multiple child "
+    "components.\n\n"
+    "## How It Works\n"
+    "End-to-end flow tying the child components together.\n\n"
+    "Do NOT duplicate content from child pages — reference "
+    "them by name.\n"
+    "Output Markdown only."
+)
+
+
+def compute_generation_order(plan: WikiPlan) -> list[list[WikiPageSpec]]:
+    """Return pages grouped by depth level, deepest first.
+
+    Pages at the same depth have no parent-child relationship and can be
+    generated in parallel. Returns [[deepest], ..., [roots]].
+    """
+    title_to_page = {p.title: p for p in plan.pages}
+    _COMPUTING = object()  # sentinel to detect cycles
+    depths: dict[str, int | object] = {}
+
+    def _get_depth(title: str) -> int:
+        if title in depths:
+            val = depths[title]
+            return 0 if val is _COMPUTING else val  # treat cycle as root
+        page = title_to_page.get(title)
+        if page is None or page.parent is None or page.parent not in title_to_page:
+            depths[title] = 0
+            return 0
+        depths[title] = _COMPUTING  # mark in-progress
+        d = _get_depth(page.parent) + 1
+        depths[title] = d
+        return d
+
+    for p in plan.pages:
+        _get_depth(p.title)
+
+    max_depth = max((v for v in depths.values() if isinstance(v, int)), default=0)
+    levels: list[list[WikiPageSpec]] = []
+    for d in range(max_depth, -1, -1):
+        level = [p for p in plan.pages if depths.get(p.title, 0) == d]
+        if level:
+            levels.append(level)
+
+    return levels
 
 
 @dataclass
@@ -193,6 +254,7 @@ def _build_page_prompt(
     repo_name: str,
     dep_info: dict[str, Any] | None = None,
     entity_details: list[dict[str, Any]] | None = None,
+    child_contents: list[PageResult] | None = None,
 ) -> str:
     """Build the full LLM prompt for generating a single wiki page.
 
@@ -259,9 +321,26 @@ def _build_page_prompt(
         f"Relevant source code (with file paths and line numbers):\n{context}"
     )
 
+    # Child page content for parent pages
+    if child_contents:
+        child_sections = []
+        for child in child_contents:
+            child_sections.append(f'### Child: "{child.title}"\n{child.content}')
+        sections.append(
+            "## Child Pages (already generated)\n"
+            "The following child pages have been written. Your role is to "
+            "SYNTHESIZE and CONNECT — provide the high-level narrative, "
+            "explain how these components relate, and add context that "
+            "individual pages cannot provide. Do NOT repeat details covered "
+            "in child pages; reference them instead.\n\n" + "\n\n".join(child_sections)
+        )
+
+    has_children = bool(child_contents)
     is_overview = spec.slug == "overview" or "overview" in spec.title.lower()
 
-    if is_overview:
+    if has_children:
+        sections.append(_PARENT_TEMPLATE.format(title=spec.title))
+    elif is_overview:
         sections.append(
             f"Write a comprehensive Overview wiki page for"
             f' the "{repo_name}" project. Structure:\n\n'
@@ -332,6 +411,7 @@ async def generate_page(
     entity_details: list[dict[str, Any]] | None = None,
     on_retry: OnRetryCallback | None = None,
     wiki_language: str = "en",
+    child_contents: list[PageResult] | None = None,
 ) -> PageResult:
     """Generate a single wiki page using multi-query RAG and an LLM.
 
@@ -417,7 +497,12 @@ async def generate_page(
         context_chunks = store.search(query_vecs[0], k=top_k)
 
     prompt = _build_page_prompt(
-        spec, context_chunks, repo_name, dep_info, entity_details
+        spec,
+        context_chunks,
+        repo_name,
+        dep_info,
+        entity_details,
+        child_contents=child_contents,
     )
     system = _SYSTEM + get_language_instruction(wiki_language)
     content = await async_retry(
@@ -430,3 +515,91 @@ async def generate_page(
 
     content = sanitize_mermaid_blocks(content)
     return PageResult(slug=spec.slug, title=spec.title, content=content)
+
+
+async def generate_page_batch(
+    specs_with_children: list[tuple[WikiPageSpec, list[PageResult] | None]],
+    store: FAISSStore,
+    llm: LLMProvider,
+    embedding: EmbeddingProvider,
+    repo_name: str,
+    file_analysis: FileAnalysis,
+    dep_graph: DependencyGraph,
+    on_retry: OnRetryCallback | None = None,
+    wiki_language: str = "en",
+) -> list[PageResult]:
+    """Generate all pages in a batch using llm.generate_batch()."""
+    from worker.pipeline.dependency_graph import summarize_page_deps
+
+    prompts: list[str] = []
+    specs_list: list[WikiPageSpec] = []
+
+    for spec, children in specs_with_children:
+        # Collect entities and deps for this page
+        entities = []
+        for rel_path in spec.files or []:
+            file_info = file_analysis.files.get(rel_path)
+            if file_info:
+                for e in file_info.entities:
+                    entities.append({**e, "file": rel_path})
+
+        dep_info = summarize_page_deps(spec.files or [], dep_graph)
+        dep_info_or_none = dep_info if any(dep_info.values()) else None
+        entities_or_none = entities if entities else None
+
+        # RAG retrieval
+        queries = [f"{spec.title} {' '.join((spec.files or [])[:5])}"]
+        if spec.purpose:
+            queries.append(spec.purpose)
+        if entities_or_none:
+            entity_names = [
+                e.get("name", "") for e in entities_or_none[:5] if e.get("name")
+            ]
+            if entity_names:
+                queries.append(" ".join(entity_names))
+
+        query_vecs = []
+        for q in queries:
+            vec = await async_retry(
+                embedding.embed,
+                q,
+                transient_exceptions=TRANSIENT_EXCEPTIONS,
+                on_retry=on_retry,
+            )
+            query_vecs.append(vec)
+
+        if len(query_vecs) > 1:
+            context_chunks = store.multi_search(query_vecs, k=12)
+        else:
+            context_chunks = store.search(query_vecs[0], k=12)
+
+        prompt = _build_page_prompt(
+            spec,
+            context_chunks,
+            repo_name,
+            dep_info_or_none,
+            entities_or_none,
+            child_contents=children,
+        )
+        prompts.append(prompt)
+        specs_list.append(spec)
+
+    system = _SYSTEM + get_language_instruction(wiki_language)
+    responses = await async_retry(
+        llm.generate_batch,
+        prompts,
+        system=system,
+        transient_exceptions=TRANSIENT_EXCEPTIONS,
+        on_retry=on_retry,
+    )
+    if len(responses) != len(specs_list):
+        raise ValueError(
+            f"Expected {len(specs_list)} batch responses, got {len(responses)}"
+        )
+
+    results: list[PageResult] = []
+    for spec, content in zip(specs_list, responses):
+        content = sanitize_mermaid_blocks(content)
+        results.append(PageResult(slug=spec.slug, title=spec.title, content=content))
+
+    return results

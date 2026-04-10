@@ -25,18 +25,17 @@ Storage (SQLite + FAISS + Markdown files at ~/.autowiki/)
 
 ### Core Components
 - **API Gateway** (`api/`) — FastAPI, REST + WebSocket endpoints, job enqueuing via ARQ
-- **Worker Service** (`worker/`) — ARQ background jobs, 7-stage generation pipeline
+- **Worker Service** (`worker/`) — ARQ background jobs, 6-stage generation pipeline
 - **Frontend** (`web/`) — Next.js 16.2.1 + TypeScript + Tailwind v4 + shadcn/ui, stateless SPA
 - **Storage** — SQLite for metadata, FAISS for vector index, Markdown files for wiki pages
 
-### Generation Pipeline (7 Stages)
+### Generation Pipeline (6 Stages)
 1. **Repo Ingestion** (`worker/pipeline/ingestion.py`) — shallow clone, file filtering, commit SHA
 2. **AST Analysis** (`worker/pipeline/ast_analysis.py`) — single-pass Tree-Sitter entity extraction → `FileAnalysis`
-3. **Dependency Graph** (`worker/pipeline/dependency_graph.py`) — file-level import graph + clusters
-4. **RAG Indexer** (`worker/pipeline/rag_indexer.py`) — LangChain chunking, FAISS IndexFlatIP
-5. **Wiki Planner** (`worker/pipeline/wiki_planner.py`) — LLM generates logical page tree with file assignments → `WikiPlan`
-6. **Page Generator** (`worker/pipeline/page_generator.py`) — RAG retrieval + LLM per-page Markdown
-7. **Architecture Diagram** (`worker/pipeline/diagram_synthesis.py`) — Mermaid diagram from wiki plan
+3. **Dependency Graph** (`worker/pipeline/dependency_graph.py`) — file-level import graph + BFS-split clusters
+4. **RAG Indexer** (`worker/pipeline/rag_indexer.py`) — LangChain chunking, FAISS IndexFlatIP (skippable with `reuse_index=True`)
+5. **Wiki Planner** (`worker/pipeline/wiki_planner.py`) — two-phase LLM plan: Phase 1 outline (hierarchy/titles/purposes) + Phase 2 file assignment; each phase validates and self-retries → `WikiPlan`
+6. **Page Generator** (`worker/pipeline/page_generator.py`) — bottom-up batched generation: leaf pages first, parents synthesize child Markdown via `generate_page_batch()`
 
 Supported AST languages: Python, JavaScript/JSX, TypeScript/TSX, Java, Go, Rust, C, C++, C#
 
@@ -50,7 +49,6 @@ Supported AST languages: Python, JavaScript/JSX, TypeScript/TSX, Java, Go, Rust,
     faiss.meta.pkl          ← chunk metadata
     ast/
       wiki_plan.json        ← internal wiki plan with file mappings (for refresh)
-      architecture.mmd      ← Mermaid architecture diagram
     wiki/
       wiki.json             ← user-facing wiki structure (for Phase 4 steering)
       *.md                  ← generated Markdown pages
@@ -80,9 +78,12 @@ Default LLM: `claude-sonnet-4-6`. Supported providers: `anthropic`, `openai`, `o
 - **Next.js 16.2.1**: Tailwind v4 (CSS-only, no `tailwind.config.ts`), `@base-ui/react` not `@radix-ui/react`
 - **Gemini providers**: `google-generativeai` is deprecated; both files have Phase 2 migration notes for `google-genai`
 - **ARQ worker**: blocking I/O must use `run_in_executor`; `clone_or_fetch` already wrapped
-- **Wiki plan**: LLM generates logical page hierarchy with file assignments; slugs derived from titles, not stored in wiki.json
+- **Wiki plan**: two-phase LLM process — Phase 1 generates outline (hierarchy/titles/purposes), Phase 2 assigns files; each phase validates and self-retries immediately; slugs derived from titles, not stored in wiki.json
 - **wiki.json format**: user-facing (title/purpose/parent/page_notes); `ast/wiki_plan.json` is internal (includes files); `Repository.wiki_structure` is API-compatible (includes derived slugs/parent_slugs for frontend)
 - **FileAnalysis**: single-pass AST analysis — `analyze_all_files()` replaces both `build_enhanced_module_tree()` and `_build_file_entities()`
+- **`to_llm_summary(max_files=200)`**: default 200 keeps prompts bounded; pass 0 to opt in to the 800-file safety cap; when capped, `_rank_files_by_importance()` selects the most architecturally significant files (entity count, in-degree, entry-point bonus, shallowness)
+- **`reuse_index`**: `IndexRequest.reuse_index` (API) / `--reuse-index` (CLI) skips Stage 4 (FAISS rebuild) and loads the existing index instead; threaded through `enqueue_full_index` → `run_full_index`
+- **`generate_batch` + bottom-up generation**: `LLMProvider.generate_batch()` runs prompts concurrently (semaphore-controlled); `compute_generation_order()` returns pages deepest-first so parents always receive finished child Markdown
 
 ## API Surface
 
@@ -99,7 +100,7 @@ WS    /ws/jobs/{job_id}                      # Stream job progress
 
 ### CLI (Phase 1)
 ```bash
-autowiki index github.com/owner/repo
+autowiki index github.com/owner/repo [--reuse-index]
 autowiki list
 autowiki serve [--port 3000] [--debug]
 autowiki config show

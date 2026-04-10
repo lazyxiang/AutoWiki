@@ -4,6 +4,7 @@ from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
 from worker.pipeline.wiki_planner import (
     WikiPageSpec,
     WikiPlan,
+    _suggest_page_range,
     generate_wiki_plan,
     validate_wiki_plan,
 )
@@ -244,3 +245,249 @@ def test_wiki_plan_to_api_structure():
     api_page = next(p for p in pages if p["title"] == "API Layer")
     assert api_page["slug"] == "api-layer"
     assert api_page["parent_slug"] == "overview"
+
+
+def test_suggest_page_range_small_repo():
+    assert _suggest_page_range(5, 10) == (3, 6)
+
+
+def test_suggest_page_range_boundary_file_count_10():
+    # file_count=10 is the first value NOT in the small-repo branch (< 10)
+    assert _suggest_page_range(10, 30) == (5, 12)
+    assert _suggest_page_range(10, 50) == (8, 15)
+
+
+def test_suggest_page_range_medium_repo_few_entities():
+    assert _suggest_page_range(20, 30) == (5, 12)
+
+
+def test_suggest_page_range_medium_repo_many_entities():
+    assert _suggest_page_range(25, 80) == (8, 15)
+
+
+def test_suggest_page_range_large_repo_few_entities():
+    assert _suggest_page_range(60, 100) == (10, 25)
+
+
+def test_suggest_page_range_large_repo_many_entities():
+    assert _suggest_page_range(80, 200) == (15, 35)
+
+
+def test_suggest_page_range_very_large_repo():
+    assert _suggest_page_range(200, 500) == (20, 50)
+
+
+def test_suggest_page_range_huge_repo():
+    assert _suggest_page_range(500, 1000) == (30, 70)
+
+
+async def test_generate_outline(mock_llm):
+    """_generate_outline returns a list of page dicts with title/purpose/parent."""
+    from worker.pipeline.wiki_planner import _generate_outline
+
+    mock_llm.generate_structured.side_effect = None
+    mock_llm.generate_structured.return_value = {
+        "pages": [
+            {"title": "Overview", "purpose": "Top-level overview."},
+            {"title": "API", "purpose": "REST API.", "parent": "Overview"},
+            {"title": "Worker", "purpose": "Background jobs.", "parent": "Overview"},
+        ]
+    }
+    outline = await _generate_outline(
+        file_summary="main.py: 0 classes, 1 functions [run]",
+        repo_name="test",
+        llm=mock_llm,
+        readme="A test project.",
+        dep_info=None,
+        clusters=None,
+        page_range=(3, 10),
+        system="You are a planner.",
+        on_retry=None,
+    )
+    assert len(outline) == 3
+    assert outline[0]["title"] == "Overview"
+    assert outline[1].get("parent") == "Overview"
+
+
+async def test_assign_files(mock_llm):
+    """_assign_files returns a dict mapping page titles to file lists."""
+    from worker.pipeline.wiki_planner import _assign_files
+
+    mock_llm.generate_structured.side_effect = None
+    mock_llm.generate_structured.return_value = {
+        "assignments": [
+            {"file": "main.py", "page_title": "Overview"},
+            {"file": "api.py", "page_title": "API"},
+            {"file": "worker.py", "page_title": "Worker"},
+        ]
+    }
+    outline = [
+        {"title": "Overview", "purpose": "Top-level."},
+        {"title": "API", "purpose": "REST API."},
+        {"title": "Worker", "purpose": "Jobs."},
+    ]
+    result = await _assign_files(
+        outline=outline,
+        file_summary="main.py: ...\napi.py: ...\nworker.py: ...",
+        dep_info=None,
+        all_files=["main.py", "api.py", "worker.py"],
+        llm=mock_llm,
+        system="Assign files.",
+        on_retry=None,
+    )
+    assert result["Overview"] == ["main.py"]
+    assert result["API"] == ["api.py"]
+    assert result["Worker"] == ["worker.py"]
+
+
+async def test_assign_files_orphans_distributed(mock_llm):
+    """Files assigned to unknown pages get redistributed."""
+    from worker.pipeline.wiki_planner import _assign_files
+
+    mock_llm.generate_structured.side_effect = None
+    mock_llm.generate_structured.return_value = {
+        "assignments": [
+            {"file": "main.py", "page_title": "Overview"},
+            {"file": "orphan.py", "page_title": "NonExistent"},
+        ]
+    }
+    outline = [{"title": "Overview", "purpose": "Top."}]
+    result = await _assign_files(
+        outline=outline,
+        file_summary="main.py: ...\norphan.py: ...",
+        dep_info=None,
+        all_files=["main.py", "orphan.py"],
+        llm=mock_llm,
+        system="Assign.",
+        on_retry=None,
+    )
+    # orphan.py should be assigned to Overview (first page)
+    assert "orphan.py" in result["Overview"]
+
+
+def test_validate_rejects_page_over_25_files():
+    raw = {
+        "pages": [
+            {
+                "title": "Mega Page",
+                "purpose": "Too many files.",
+                "files": [f"f{i}.py" for i in range(30)],
+            },
+        ]
+    }
+    with pytest.raises(ValueError, match="split into focused sub-pages"):
+        validate_wiki_plan(raw)
+
+
+def test_validate_rejects_empty_non_overview_page():
+    raw = {
+        "pages": [
+            {"title": "Overview", "purpose": "Top.", "files": ["main.py"]},
+            {"title": "Empty Page", "purpose": "Nothing here.", "files": []},
+        ]
+    }
+    with pytest.raises(ValueError, match="no files assigned"):
+        validate_wiki_plan(raw)
+
+
+def test_validate_allows_empty_overview_page():
+    """Overview page with 0 files is allowed (orphans get assigned to it)."""
+    raw = {
+        "pages": [
+            {"title": "Overview", "purpose": "Top.", "files": []},
+            {"title": "API", "purpose": "Endpoints.", "files": ["api.py"]},
+        ]
+    }
+    plan = validate_wiki_plan(raw)
+    assert len(plan.pages) == 2
+
+
+def test_validate_rejects_too_deep_hierarchy():
+    raw = {
+        "pages": [
+            {"title": "L0", "purpose": ".", "files": ["a.py"]},
+            {"title": "L1", "purpose": ".", "parent": "L0", "files": ["b.py"]},
+            {"title": "L2", "purpose": ".", "parent": "L1", "files": ["c.py"]},
+            {"title": "L3", "purpose": ".", "parent": "L2", "files": ["d.py"]},
+            {"title": "L4", "purpose": ".", "parent": "L3", "files": ["e.py"]},
+        ]
+    }
+    with pytest.raises(ValueError, match="flatten to at most 4 levels"):
+        validate_wiki_plan(raw)
+
+
+def test_validate_allows_4_level_hierarchy():
+    """Hierarchy at exactly 4 levels deep should pass."""
+    raw = {
+        "pages": [
+            {"title": "L0", "purpose": ".", "files": ["a.py"]},
+            {"title": "L1", "purpose": ".", "parent": "L0", "files": ["b.py"]},
+            {"title": "L2", "purpose": ".", "parent": "L1", "files": ["c.py"]},
+            {"title": "L3", "purpose": ".", "parent": "L2", "files": ["d.py"]},
+        ]
+    }
+    plan = validate_wiki_plan(raw)
+    assert len(plan.pages) == 4
+
+
+def test_validate_rejects_flat_plan_for_large_repo():
+    page1_files = [f"f{i}.py" for i in range(20)]
+    page2_files = [f"g{i}.py" for i in range(15)]
+    raw = {
+        "pages": [
+            {"title": "Page1", "purpose": ".", "files": page1_files},
+            {"title": "Page2", "purpose": ".", "files": page2_files},
+        ]
+    }
+    all_files = [f"f{i}.py" for i in range(20)] + [f"g{i}.py" for i in range(15)]
+    with pytest.raises(ValueError, match="create 2-3 levels of hierarchy"):
+        validate_wiki_plan(raw, all_files=all_files)
+
+
+def test_validate_rejects_too_few_pages():
+    many_files = [f"f{i}.py" for i in range(25)]
+    raw = {
+        "pages": [
+            {"title": "Overview", "purpose": ".", "files": many_files},
+        ]
+    }
+    with pytest.raises(ValueError, match="create more granular pages"):
+        validate_wiki_plan(raw, page_range=(5, 20))
+
+
+async def test_generate_wiki_plan_two_phase(mock_llm):
+    """generate_wiki_plan uses two-phase planning."""
+    # Phase 1 returns outline, Phase 2 returns assignments
+    mock_llm.generate_structured.side_effect = [
+        # Phase 1: outline
+        {
+            "pages": [
+                {"title": "Overview", "purpose": "Top-level overview."},
+                {"title": "Models", "purpose": "Data models."},
+                {"title": "Utilities", "purpose": "Utility helpers."},
+            ]
+        },
+        # Phase 2: file assignment
+        {
+            "assignments": [
+                {"file": "main.py", "page_title": "Overview"},
+                {"file": "models.py", "page_title": "Models"},
+                {"file": "utils.py", "page_title": "Utilities"},
+            ]
+        },
+    ]
+
+    file_analysis = FileAnalysis(
+        files={
+            "main.py": FileInfo(rel_path="main.py", entities=[], summary=""),
+            "models.py": FileInfo(rel_path="models.py", entities=[], summary=""),
+            "utils.py": FileInfo(rel_path="utils.py", entities=[], summary=""),
+        }
+    )
+    plan = await generate_wiki_plan(file_analysis, repo_name="test", llm=mock_llm)
+    assert len(plan.pages) == 3
+    assert {p.title for p in plan.pages} == {"Overview", "Models", "Utilities"}
+    titles = [p.title for p in plan.pages]
+    assert plan.pages[titles.index("Overview")].files == ["main.py"]
+    assert plan.pages[titles.index("Models")].files == ["models.py"]
+    assert plan.pages[titles.index("Utilities")].files == ["utils.py"]

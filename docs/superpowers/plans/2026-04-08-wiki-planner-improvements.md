@@ -1,6 +1,8 @@
 # Wiki Planner & Generation Pipeline Improvements — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Status: COMPLETE** — All 7 planned tasks implemented and merged to `feature/wiki-planner-improvements`. Additional scope items (Stage 7 removal, `--reuse-index`, per-phase validation, importance-ranked file capping) also implemented and committed.
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Transform the wiki generation pipeline from a flat single-pass system into a hierarchical multi-agent generator with richer context, two-phase planning, semantic validation, and bottom-up page synthesis.
 
@@ -9,6 +11,15 @@
 **Tech Stack:** Python 3.12, asyncio, Tree-Sitter, FAISS, pytest (asyncio_mode=auto)
 
 **Spec:** `docs/superpowers/specs/2026-04-08-wiki-planner-improvements-design.md`
+
+## Additional scope (beyond original plan)
+
+- **Stage 7 removed** (`diagram_synthesis.py`): redundant — the Overview page generator already emits an architecture Mermaid diagram via its prompt template. Pipeline is now 6 stages.
+- **`--reuse-index` / `reuse_index`**: new bool param threaded from CLI → API `IndexRequest` → `enqueue_full_index` → `run_full_index`. When set, skips clearing and re-building the FAISS index (useful for re-running just the wiki planning/generation stages).
+- **Per-phase validation** (`_validate_outline_structure`, `_validate_assignments`): validation now fires immediately after Phase 1 and Phase 2 respectively, triggering in-phase retries instead of waiting for the final `validate_wiki_plan()` call. The deferred Phase 3 retry loop and error-type classification helpers (`_OUTLINE_ERROR_PREFIXES`, `_is_outline_error`) were removed.
+- **Importance-ranked file capping** (`_rank_files_by_importance`): when `to_llm_summary()` would exceed the file cap, the 200 most architecturally significant files are selected (scored by entity count, in-degree, entry-point name bonus, and shallowness) rather than the first 200 alphabetically.
+- **`to_llm_summary` default changed to `max_files=200`**: calling without arguments is now safely bounded; pass `0` to opt in to the 800-file safety cap.
+- **Dependency list truncation**: each file's import/external lists are capped at 10 entries with `+N more` suffix to prevent hub files from dominating the prompt budget.
 
 ---
 
@@ -19,7 +30,7 @@
 - Modify: `worker/llm/base.py:48-93` (LoggingLLMProvider)
 - Test: `tests/worker/test_llm.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/worker/test_llm.py`:
 
@@ -97,13 +108,13 @@ async def test_logging_provider_wraps_generate_batch():
     assert results == ["r:x", "r:y"]
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/worker/test_llm.py::test_generate_batch_default_impl tests/worker/test_llm.py::test_generate_batch_respects_max_concurrency tests/worker/test_llm.py::test_logging_provider_wraps_generate_batch -v`
 
 Expected: FAIL — `generate_batch` does not exist yet.
 
-- [ ] **Step 3: Implement `generate_batch` on LLMProvider**
+- [x] **Step 3: Implement `generate_batch` on LLMProvider**
 
 In `worker/llm/base.py`, add `import asyncio` at the top. Then add this method to the `LLMProvider` class after the `generate_stream` abstract method (after line 45):
 
@@ -128,7 +139,7 @@ In `worker/llm/base.py`, add `import asyncio` at the top. Then add this method t
         return list(await asyncio.gather(*[_one(p) for p in prompts]))
 ```
 
-- [ ] **Step 4: Implement `generate_batch` on LoggingLLMProvider**
+- [x] **Step 4: Implement `generate_batch` on LoggingLLMProvider**
 
 Add this method to the `LoggingLLMProvider` class (after `generate_stream`):
 
@@ -153,13 +164,13 @@ Add this method to the `LoggingLLMProvider` class (after `generate_stream`):
         return results
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `uv run pytest tests/worker/test_llm.py -v`
 
 Expected: All tests PASS including the 3 new ones.
 
-- [ ] **Step 6: Lint and commit**
+- [x] **Step 6: Lint and commit**
 
 ```bash
 uv run ruff check worker/llm/base.py tests/worker/test_llm.py
@@ -176,7 +187,7 @@ git commit -m "feat: add generate_batch to LLMProvider with default asyncio.gath
 - Modify: `worker/pipeline/ast_analysis.py:389-434` (`FileAnalysis.to_llm_summary`)
 - Test: `tests/worker/test_ast_analysis.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/worker/test_ast_analysis.py`:
 
@@ -259,13 +270,13 @@ def test_to_llm_summary_safety_cap(tmp_path):
     assert len(bare_lines) >= 1
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/worker/test_ast_analysis.py::test_to_llm_summary_with_dep_graph tests/worker/test_ast_analysis.py::test_to_llm_summary_no_limit_by_default tests/worker/test_ast_analysis.py::test_to_llm_summary_safety_cap -v`
 
 Expected: FAIL — `to_llm_summary` doesn't accept `dep_graph` yet, and default `max_files=200` truncates.
 
-- [ ] **Step 3: Implement enriched `to_llm_summary`**
+- [x] **Step 3: Implement enriched `to_llm_summary`**
 
 Replace `to_llm_summary` method in `worker/pipeline/ast_analysis.py` (lines 389-434):
 
@@ -333,13 +344,13 @@ Replace `to_llm_summary` method in `worker/pipeline/ast_analysis.py` (lines 389-
         return "\n".join(lines)
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/worker/test_ast_analysis.py -v`
 
 Expected: All tests PASS. Note: `test_analyze_all_files_to_llm_summary_truncation` passes `max_files=2` explicitly, so it still works.
 
-- [ ] **Step 5: Update callers to pass dep_graph**
+- [x] **Step 5: Update callers to pass dep_graph**
 
 In `worker/jobs.py`, find `file_analysis.to_llm_summary()` call (used in `_write_text_async` around line 451). This is just for debug output, not for the planner. The planner call happens inside `generate_wiki_plan` → `_build_prompt`. Update `_build_prompt` in `worker/pipeline/wiki_planner.py` to accept and pass dep_graph:
 
@@ -367,13 +378,13 @@ to:
     file_summary = file_analysis.to_llm_summary(dep_graph=dep_graph)
 ```
 
-- [ ] **Step 6: Run full test suite**
+- [x] **Step 6: Run full test suite**
 
 Run: `uv run pytest tests/ --ignore=tests/e2e -v`
 
 Expected: All PASS.
 
-- [ ] **Step 7: Lint and commit**
+- [x] **Step 7: Lint and commit**
 
 ```bash
 uv run ruff check worker/pipeline/ast_analysis.py worker/pipeline/wiki_planner.py tests/worker/test_ast_analysis.py
@@ -391,7 +402,7 @@ git commit -m "feat: enrich file summaries with dependency info and docstrings"
 - Modify: `worker/pipeline/dependency_graph.py:369-423` (`format_for_llm_prompt`)
 - Test: `tests/worker/test_dependency_graph.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/worker/test_dependency_graph.py`:
 
@@ -469,13 +480,13 @@ def test_format_for_llm_prompt_default_500_cap(tmp_path):
         assert "more edges not shown" not in result
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/worker/test_dependency_graph.py::test_split_large_cluster_small_cluster_unchanged tests/worker/test_dependency_graph.py::test_split_large_cluster_splits_large tests/worker/test_dependency_graph.py::test_split_large_cluster_disconnected_files tests/worker/test_dependency_graph.py::test_compute_clusters_splits_large_components tests/worker/test_dependency_graph.py::test_format_for_llm_prompt_default_500_cap -v`
 
 Expected: FAIL — `_split_large_cluster` doesn't exist.
 
-- [ ] **Step 3: Implement `_split_large_cluster`**
+- [x] **Step 3: Implement `_split_large_cluster`**
 
 Add this function in `worker/pipeline/dependency_graph.py` before `_compute_clusters` (before line 308):
 
@@ -528,7 +539,7 @@ def _split_large_cluster(
     return sub_clusters
 ```
 
-- [ ] **Step 4: Modify `_compute_clusters` to use `_split_large_cluster`**
+- [x] **Step 4: Modify `_compute_clusters` to use `_split_large_cluster`**
 
 Replace the return statement in `_compute_clusters` (line 366):
 
@@ -546,7 +557,7 @@ To:
     return result
 ```
 
-- [ ] **Step 5: Change `format_for_llm_prompt` default `max_edges`**
+- [x] **Step 5: Change `format_for_llm_prompt` default `max_edges`**
 
 In `worker/pipeline/dependency_graph.py`, change the signature of `format_for_llm_prompt` (line 369):
 
@@ -560,13 +571,13 @@ To:
 def format_for_llm_prompt(graph: DependencyGraph, max_edges: int = 500) -> str:
 ```
 
-- [ ] **Step 6: Run tests to verify they pass**
+- [x] **Step 6: Run tests to verify they pass**
 
 Run: `uv run pytest tests/worker/test_dependency_graph.py -v`
 
 Expected: All PASS.
 
-- [ ] **Step 7: Lint and commit**
+- [x] **Step 7: Lint and commit**
 
 ```bash
 uv run ruff check worker/pipeline/dependency_graph.py tests/worker/test_dependency_graph.py
@@ -583,7 +594,7 @@ git commit -m "feat: add BFS-seed sub-clustering for large dependency components
 - Modify: `worker/pipeline/wiki_planner.py` (add `_suggest_page_range`)
 - Test: `tests/worker/test_wiki_planner.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/worker/test_wiki_planner.py`:
 
@@ -619,13 +630,13 @@ def test_suggest_page_range_huge_repo():
     assert _suggest_page_range(500, 1000) == (30, 70)
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/worker/test_wiki_planner.py::test_suggest_page_range_small_repo -v`
 
 Expected: FAIL — `_suggest_page_range` doesn't exist.
 
-- [ ] **Step 3: Implement `_suggest_page_range`**
+- [x] **Step 3: Implement `_suggest_page_range`**
 
 Add this function in `worker/pipeline/wiki_planner.py` after `_slugify_title` (after line 44):
 
@@ -643,13 +654,13 @@ def _suggest_page_range(file_count: int, entity_count: int) -> tuple[int, int]:
     return (30, 70)
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/worker/test_wiki_planner.py -v`
 
 Expected: All PASS.
 
-- [ ] **Step 5: Lint and commit**
+- [x] **Step 5: Lint and commit**
 
 ```bash
 uv run ruff check worker/pipeline/wiki_planner.py tests/worker/test_wiki_planner.py
@@ -668,7 +679,7 @@ git commit -m "feat: add dynamic page count heuristics for wiki planner"
 
 This is the largest task. We rewrite the core planning logic.
 
-- [ ] **Step 1: Write the failing tests for Phase 1 (outline generation)**
+- [x] **Step 1: Write the failing tests for Phase 1 (outline generation)**
 
 Add to `tests/worker/test_wiki_planner.py`:
 
@@ -700,7 +711,7 @@ async def test_generate_outline(mock_llm):
     assert outline[1].get("parent") == "Overview"
 ```
 
-- [ ] **Step 2: Write the failing tests for Phase 2 (file assignment)**
+- [x] **Step 2: Write the failing tests for Phase 2 (file assignment)**
 
 Add to `tests/worker/test_wiki_planner.py`:
 
@@ -759,7 +770,7 @@ async def test_assign_files_orphans_distributed(mock_llm):
     assert "orphan.py" in result["Overview"]
 ```
 
-- [ ] **Step 3: Write the failing test for the updated orchestrator**
+- [x] **Step 3: Write the failing test for the updated orchestrator**
 
 Add to `tests/worker/test_wiki_planner.py`:
 
@@ -797,13 +808,13 @@ async def test_generate_wiki_plan_two_phase(mock_llm):
     assert plan.pages[1].files == ["models.py"]
 ```
 
-- [ ] **Step 4: Run tests to verify they fail**
+- [x] **Step 4: Run tests to verify they fail**
 
 Run: `uv run pytest tests/worker/test_wiki_planner.py::test_generate_outline tests/worker/test_wiki_planner.py::test_assign_files tests/worker/test_wiki_planner.py::test_assign_files_orphans_distributed tests/worker/test_wiki_planner.py::test_generate_wiki_plan_two_phase -v`
 
 Expected: FAIL — functions don't exist.
 
-- [ ] **Step 5: Implement new schemas and prompt builders**
+- [x] **Step 5: Implement new schemas and prompt builders**
 
 In `worker/pipeline/wiki_planner.py`, replace `_WIKI_PLAN_SCHEMA` (lines 233-251) and `_build_prompt` (lines 279-358) with:
 
@@ -931,7 +942,7 @@ def _build_assignment_prompt(
     return "\n\n".join(sections)
 ```
 
-- [ ] **Step 6: Implement `_generate_outline`**
+- [x] **Step 6: Implement `_generate_outline`**
 
 Add after the prompt builders:
 
@@ -982,7 +993,7 @@ async def _generate_outline(
     raise ValueError("Failed to generate outline after all retries")
 ```
 
-- [ ] **Step 7: Implement `_assign_files`**
+- [x] **Step 7: Implement `_assign_files`**
 
 Add after `_generate_outline`:
 
@@ -1049,7 +1060,7 @@ async def _assign_files(
     return result
 ```
 
-- [ ] **Step 8: Rewrite `generate_wiki_plan` to use two-phase approach**
+- [x] **Step 8: Rewrite `generate_wiki_plan` to use two-phase approach**
 
 Replace the `generate_wiki_plan` function body (lines 471-611). Keep the signature but update the implementation:
 
@@ -1169,11 +1180,11 @@ def _fallback_plan(
     return WikiPlan(pages=fallback_pages)
 ```
 
-- [ ] **Step 9: Remove old `_WIKI_PLAN_SCHEMA` and `_build_prompt`**
+- [x] **Step 9: Remove old `_WIKI_PLAN_SCHEMA` and `_build_prompt`**
 
 Delete the old `_WIKI_PLAN_SCHEMA` (lines 233-251) and `_build_prompt` function (lines 279-358) — they have been replaced by the phase-specific schemas and prompt builders.
 
-- [ ] **Step 10: Update `conftest.py` mock to support two-phase calls**
+- [x] **Step 10: Update `conftest.py` mock to support two-phase calls**
 
 The mock_llm in `tests/conftest.py` returns a fixed dict for `generate_structured`. With two-phase planning, it gets called twice with different schemas. Update:
 
@@ -1256,13 +1267,13 @@ def mock_llm():
     return m
 ```
 
-- [ ] **Step 11: Run full test suite**
+- [x] **Step 11: Run full test suite**
 
 Run: `uv run pytest tests/ --ignore=tests/e2e -v`
 
 Expected: All PASS. If integration tests fail due to mock changes, adjust the mock responses.
 
-- [ ] **Step 12: Lint and commit**
+- [x] **Step 12: Lint and commit**
 
 ```bash
 uv run ruff check worker/pipeline/wiki_planner.py tests/worker/test_wiki_planner.py tests/conftest.py
@@ -1279,7 +1290,7 @@ git commit -m "feat: implement two-phase wiki planning (outline + file assignmen
 - Modify: `worker/pipeline/wiki_planner.py` (`validate_wiki_plan`)
 - Test: `tests/worker/test_wiki_planner.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/worker/test_wiki_planner.py`:
 
@@ -1353,13 +1364,13 @@ def test_validate_rejects_too_few_pages():
         validate_wiki_plan(raw, page_range=(5, 20))
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/worker/test_wiki_planner.py::test_validate_rejects_page_over_25_files tests/worker/test_wiki_planner.py::test_validate_rejects_empty_non_overview_page tests/worker/test_wiki_planner.py::test_validate_rejects_too_deep_hierarchy tests/worker/test_wiki_planner.py::test_validate_rejects_flat_plan_for_large_repo tests/worker/test_wiki_planner.py::test_validate_rejects_too_few_pages -v`
 
 Expected: FAIL — current validation doesn't check these.
 
-- [ ] **Step 3: Implement enhanced validation**
+- [x] **Step 3: Implement enhanced validation**
 
 Update `validate_wiki_plan` in `worker/pipeline/wiki_planner.py`. Add new parameters and checks after the existing structural checks (orphan file assignment). Insert the semantic checks before the `return WikiPlan(pages=pages)` line:
 
@@ -1457,19 +1468,19 @@ After the orphan-files block and before `return WikiPlan(pages=pages)`, add:
                 )
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/worker/test_wiki_planner.py -v`
 
 Expected: All PASS. Existing tests should still pass — they have ≤3 files per page, valid hierarchy, etc.
 
-- [ ] **Step 5: Run full test suite**
+- [x] **Step 5: Run full test suite**
 
 Run: `uv run pytest tests/ --ignore=tests/e2e -v`
 
 Expected: All PASS.
 
-- [ ] **Step 6: Lint and commit**
+- [x] **Step 6: Lint and commit**
 
 ```bash
 uv run ruff check worker/pipeline/wiki_planner.py tests/worker/test_wiki_planner.py
@@ -1490,7 +1501,7 @@ git commit -m "feat: add semantic validation rules to wiki plan validator"
 
 This is the most complex task. We'll break it into sub-steps.
 
-- [ ] **Step 1: Write the failing test for `compute_generation_order`**
+- [x] **Step 1: Write the failing test for `compute_generation_order`**
 
 Add to `tests/worker/test_page_generator.py`:
 
@@ -1535,13 +1546,13 @@ def test_compute_generation_order_three_levels():
     assert levels[2][0].title == "Root"
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/worker/test_page_generator.py::test_compute_generation_order_single_level tests/worker/test_page_generator.py::test_compute_generation_order_two_levels tests/worker/test_page_generator.py::test_compute_generation_order_three_levels -v`
 
 Expected: FAIL — function doesn't exist.
 
-- [ ] **Step 3: Implement `compute_generation_order`**
+- [x] **Step 3: Implement `compute_generation_order`**
 
 Add to `worker/pipeline/page_generator.py` after the imports:
 
@@ -1584,13 +1595,13 @@ def compute_generation_order(plan: WikiPlan) -> list[list[WikiPageSpec]]:
     return levels
 ```
 
-- [ ] **Step 4: Run the generation order tests**
+- [x] **Step 4: Run the generation order tests**
 
 Run: `uv run pytest tests/worker/test_page_generator.py::test_compute_generation_order_single_level tests/worker/test_page_generator.py::test_compute_generation_order_two_levels tests/worker/test_page_generator.py::test_compute_generation_order_three_levels -v`
 
 Expected: PASS.
 
-- [ ] **Step 5: Write the failing test for parent page generation with child content**
+- [x] **Step 5: Write the failing test for parent page generation with child content**
 
 Add to `tests/worker/test_page_generator.py`:
 
@@ -1638,13 +1649,13 @@ async def test_generate_page_with_child_contents(mock_llm, mock_embedding):
     assert "Handles HTTP requests" in prompt
 ```
 
-- [ ] **Step 6: Run the test to verify it fails**
+- [x] **Step 6: Run the test to verify it fails**
 
 Run: `uv run pytest tests/worker/test_page_generator.py::test_generate_page_with_child_contents -v`
 
 Expected: FAIL — `generate_page` doesn't accept `child_contents`.
 
-- [ ] **Step 7: Update `generate_page` to accept child contents**
+- [x] **Step 7: Update `generate_page` to accept child contents**
 
 In `worker/pipeline/page_generator.py`, update `generate_page` signature to add `child_contents`:
 
@@ -1664,7 +1675,7 @@ async def generate_page(
 ) -> PageResult:
 ```
 
-- [ ] **Step 8: Add parent-specific prompt template**
+- [x] **Step 8: Add parent-specific prompt template**
 
 Add after `_SYSTEM` in `worker/pipeline/page_generator.py`:
 
@@ -1690,7 +1701,7 @@ _PARENT_TEMPLATE = (
 )
 ```
 
-- [ ] **Step 9: Update `_build_page_prompt` to include child content**
+- [x] **Step 9: Update `_build_page_prompt` to include child content**
 
 Update `_build_page_prompt` to accept and use child contents:
 
@@ -1742,7 +1753,7 @@ Then update the instruction block selection. Replace the `is_overview` / `else` 
         )
 ```
 
-- [ ] **Step 10: Update `generate_page` to pass child_contents through**
+- [x] **Step 10: Update `generate_page` to pass child_contents through**
 
 In the `generate_page` function body, pass `child_contents` to `_build_page_prompt`:
 
@@ -1753,7 +1764,7 @@ In the `generate_page` function body, pass `child_contents` to `_build_page_prom
     )
 ```
 
-- [ ] **Step 11: Implement `generate_page_batch`**
+- [x] **Step 11: Implement `generate_page_batch`**
 
 Add to `worker/pipeline/page_generator.py`:
 
@@ -1830,13 +1841,13 @@ async def generate_page_batch(
     return results
 ```
 
-- [ ] **Step 12: Run page generator tests**
+- [x] **Step 12: Run page generator tests**
 
 Run: `uv run pytest tests/worker/test_page_generator.py -v`
 
 Expected: All PASS.
 
-- [ ] **Step 13: Update `run_full_index` in `worker/jobs.py`**
+- [x] **Step 13: Update `run_full_index` in `worker/jobs.py`**
 
 Replace the flat loop (Stage 6 section, lines 535-582) with bottom-up generation:
 
@@ -1925,7 +1936,7 @@ from worker.pipeline.page_generator import (
 
 Then remove the local imports of `compute_generation_order` and `generate_page_batch` from inside `run_full_index` and `run_refresh_index`.
 
-- [ ] **Step 14: Update `run_refresh_index` Stage 6**
+- [x] **Step 14: Update `run_refresh_index` Stage 6**
 
 Replace the flat loop in `run_refresh_index` (around lines 1050-1093) with bottom-up generation. This is similar to the full index but also needs to load preserved page content from disk for child pages:
 
@@ -2020,13 +2031,13 @@ Replace the flat loop in `run_refresh_index` (around lines 1050-1093) with botto
             )
 ```
 
-- [ ] **Step 15: Run full test suite**
+- [x] **Step 15: Run full test suite**
 
 Run: `uv run pytest tests/ --ignore=tests/e2e -v`
 
 Expected: All PASS. The integration tests (`test_full_pipeline_produces_pages`, `test_full_index_job_updates_status`, etc.) exercise `run_full_index` end-to-end and will validate the new bottom-up flow.
 
-- [ ] **Step 16: Lint and commit**
+- [x] **Step 16: Lint and commit**
 
 ```bash
 uv run ruff check worker/pipeline/page_generator.py worker/jobs.py tests/worker/test_page_generator.py
@@ -2043,13 +2054,13 @@ git commit -m "feat: implement bottom-up multi-agent page generation with child 
 - All modified files from Tasks 1-7
 - Test: `tests/test_integration.py`
 
-- [ ] **Step 1: Run the full test suite**
+- [x] **Step 1: Run the full test suite**
 
 Run: `uv run pytest tests/ --ignore=tests/e2e -v --tb=short`
 
 Expected: All PASS.
 
-- [ ] **Step 2: Run linters**
+- [x] **Step 2: Run linters**
 
 ```bash
 uv run ruff check .
@@ -2058,7 +2069,7 @@ uv run ruff format --check .
 
 Expected: No errors.
 
-- [ ] **Step 3: Run frontend lint**
+- [x] **Step 3: Run frontend lint**
 
 ```bash
 npm run lint --prefix web
@@ -2066,11 +2077,11 @@ npm run lint --prefix web
 
 Expected: No errors (no frontend files changed).
 
-- [ ] **Step 4: Verify no stale imports or dead code**
+- [x] **Step 4: Verify no stale imports or dead code**
 
 Check that the old `_WIKI_PLAN_SCHEMA` and `_build_prompt` are fully removed from `wiki_planner.py`. Check that `generate_page` import in `jobs.py` is still present (used by refresh path if needed, or remove if fully replaced by `generate_page_batch`).
 
-- [ ] **Step 5: Commit any cleanup**
+- [x] **Step 5: Commit any cleanup**
 
 ```bash
 git add -A

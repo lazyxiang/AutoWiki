@@ -37,10 +37,15 @@ class IndexRequest(BaseModel):
         wiki_language (str): ISO-639-1 language code for the generated wiki
             content.  Defaults to ``"en"`` (English).  Use ``"zh"`` to
             generate the wiki in Chinese (简体中文).
+        reuse_index (bool): When ``True``, preserve any existing FAISS index
+            for this repository and skip Stage 4 (RAG embedding) if the
+            index is already present.  Useful for iterating on wiki structure
+            without re-embedding the entire codebase.  Defaults to ``False``.
     """
 
     url: str
     wiki_language: str = "en"
+    reuse_index: bool = False
 
 
 @router.post("", status_code=202)
@@ -150,7 +155,12 @@ async def submit_repo(req: IndexRequest):
 
     try:
         await enqueue_full_index(
-            repo_id, job_id, owner, name, wiki_language=req.wiki_language
+            repo_id,
+            job_id,
+            owner,
+            name,
+            wiki_language=req.wiki_language,
+            reuse_index=req.reuse_index,
         )
     except Exception:
         # If Redis is unavailable, mark the job failed immediately so the

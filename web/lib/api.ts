@@ -18,11 +18,15 @@ const API_URL =
  * @param wikiLanguage - The language for wiki generation (default: "en").
  * @returns A promise resolving to the repository ID, job ID, and status.
  */
-export async function submitRepo(url: string, wikiLanguage: string = "en") {
+export async function submitRepo(
+  url: string,
+  wikiLanguage: string = "en",
+  reuseIndex: boolean = false,
+) {
   const res = await fetch(`${API_URL}/api/repos`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url, wiki_language: wikiLanguage }),
+    body: JSON.stringify({ url, wiki_language: wikiLanguage, reuse_index: reuseIndex }),
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json() as Promise<{ repo_id: string; job_id: string; status: string }>;

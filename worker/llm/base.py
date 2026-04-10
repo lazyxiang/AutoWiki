@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from abc import ABC, abstractmethod
@@ -43,6 +44,27 @@ class LLMProvider(ABC):
         self, prompt: str, system: str = ""
     ) -> AsyncIterator[str]:
         """Async generator that yields text chunks as they arrive."""
+
+    async def generate_batch(
+        self,
+        prompts: list[str],
+        system: str = "",
+        max_concurrency: int = 5,
+    ) -> list[str]:
+        """Generate responses for multiple prompts concurrently.
+
+        Default implementation uses asyncio.gather with a semaphore.
+        Providers may override to use native batch APIs.
+        """
+        if max_concurrency < 1:
+            raise ValueError(f"max_concurrency must be >= 1, got {max_concurrency}")
+        sem = asyncio.Semaphore(max_concurrency)
+
+        async def _one(prompt: str) -> str:
+            async with sem:
+                return await self.generate(prompt, system)
+
+        return list(await asyncio.gather(*[_one(p) for p in prompts]))
 
 
 class LoggingLLMProvider(LLMProvider):
@@ -90,3 +112,22 @@ class LoggingLLMProvider(LLMProvider):
         logger.debug(
             "LLM RESPONSE (stream): [FINISHED] %s", _truncate("".join(full_response))
         )
+
+    async def generate_batch(
+        self,
+        prompts: list[str],
+        system: str = "",
+        max_concurrency: int = 5,
+    ) -> list[str]:
+        logger.debug(
+            "LLM REQUEST (batch): %d prompts, system=%s",
+            len(prompts),
+            _truncate(system),
+        )
+        results = await self._provider.generate_batch(prompts, system, max_concurrency)
+        logger.debug(
+            "LLM RESPONSE (batch): %d responses, total %d chars",
+            len(results),
+            sum(len(r) for r in results),
+        )
+        return results

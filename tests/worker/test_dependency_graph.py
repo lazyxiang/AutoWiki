@@ -152,3 +152,37 @@ def test_unsupported_extension_returns_no_imports(tmp_path):
     f.write_text("a,b,c\n1,2,3\n")
     imports = _extract_imports(f, f.read_text())
     assert imports == []
+
+
+def test_compute_clusters_connected_chain(tmp_path):
+    """_compute_clusters groups a chain of imports into one connected component."""
+    # Create a 20-file chain: f0→f1→f2→...→f18, f19 isolated
+    for i in range(20):
+        content = f"from f{i + 1} import x\n" if i < 19 else "x = 1\n"
+        (tmp_path / f"f{i}.py").write_text(content)
+
+    files = [tmp_path / f"f{i}.py" for i in range(20)]
+    graph = build_dependency_graph(files, tmp_path)
+
+    # All 20 files must be accounted for
+    all_files = sorted(f for c in graph.clusters for f in c)
+    assert len(all_files) == 20
+    # All files in one weakly-connected component (chain is fully connected)
+    assert len(graph.clusters) == 1
+    assert len(graph.clusters[0]) == 20
+
+
+def test_format_for_llm_prompt_default_500_cap():
+    """Default max_edges is 500, not 150."""
+    # Build a graph with ~200 edges — exceeds old 150 default, stays under new 500 cap.
+    files = [f"mod{i}.py" for i in range(20)]
+    # Create ~200 edges: each file imports the next ~10 files (circular-ish)
+    edges = {}
+    for i, src in enumerate(files):
+        edges[src] = [files[(i + j + 1) % len(files)] for j in range(10)]
+    graph = DependencyGraph(edges=edges, clusters=[], external_deps={})
+    result = format_for_llm_prompt(graph)
+    total_edges = sum(len(v) for v in edges.values())
+    assert total_edges > 150, f"Test setup: expected >150 edges, got {total_edges}"
+    assert total_edges <= 500, f"Test setup: expected <=500 edges, got {total_edges}"
+    assert "more edges not shown" not in result

@@ -80,11 +80,6 @@ async def test_run_full_index_persists_wiki_plan(tmp_path, mock_llm, mock_embedd
         ),
         patch("worker.jobs.make_llm_provider", return_value=mock_llm),
         patch("worker.jobs.make_embedding_provider", return_value=mock_embedding),
-        patch(
-            "worker.jobs.synthesize_diagrams",
-            new_callable=AsyncMock,
-            return_value="graph TD\n  A-->B",
-        ),
     ):
         cfg = mock_cfg.return_value
         cfg.database_path = tmp_path / "test.db"
@@ -139,7 +134,7 @@ async def test_run_full_index_persists_wiki_plan(tmp_path, mock_llm, mock_embedd
             )
             assert "purpose" in page
 
-        # Verify Stage 6: diagram prepended to first wiki page in DB
+        # Verify Stage 6: wiki pages written to DB
         from sqlalchemy import select as sa_select
 
         from shared.models import WikiPage
@@ -152,8 +147,7 @@ async def test_run_full_index_persists_wiki_plan(tmp_path, mock_llm, mock_embedd
             )
             pages = result.scalars().all()
         assert len(pages) > 0
-        assert "## Architecture" in pages[0].content
-        assert "```mermaid" in pages[0].content
+        assert all(p.content for p in pages)
     finally:
         await dispose_db(db_path)
 

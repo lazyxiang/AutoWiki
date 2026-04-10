@@ -363,10 +363,14 @@ def _compute_clusters(
         root = find(f)
         groups.setdefault(root, []).append(f)
 
-    return [sorted(g) for g in sorted(groups.values(), key=lambda g: (-len(g), g[0]))]
+    result: list[list[str]] = []
+    for g in groups.values():
+        result.append(sorted(g))
+    result.sort(key=lambda g: (-len(g), g[0]))
+    return result
 
 
-def format_for_llm_prompt(graph: DependencyGraph, max_edges: int = 150) -> str:
+def format_for_llm_prompt(graph: DependencyGraph, max_edges: int = 500) -> str:
     """Format the dependency graph as a compact string for the LLM planner prompt.
 
     Renders each source file's internal imports as a single line using the
@@ -380,7 +384,7 @@ def format_for_llm_prompt(graph: DependencyGraph, max_edges: int = 150) -> str:
         graph: A :class:`DependencyGraph` as returned by
             :func:`build_dependency_graph`.
         max_edges: Maximum number of individual import edges to include before
-            truncating.  Defaults to ``150``.
+            truncating.  Defaults to ``500``.
 
     Returns:
         A multiline ``str`` suitable for embedding in an LLM prompt, or the

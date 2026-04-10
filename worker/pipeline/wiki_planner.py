@@ -24,12 +24,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from worker.llm.base import LLMProvider
 from worker.pipeline.language import get_planner_language_instruction
 from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
+
+if TYPE_CHECKING:
+    from worker.pipeline.ast_analysis import FileAnalysis
+    from worker.pipeline.dependency_graph import DependencyGraph
+
+logger = logging.getLogger("worker.planner")
 
 
 def _slugify_title(text: str) -> str:
@@ -42,6 +50,19 @@ def _slugify_title(text: str) -> str:
     if not slug:
         return "page-" + hashlib.sha1(text.encode("utf-8")).hexdigest()[:8]
     return slug
+
+
+def _suggest_page_range(file_count: int, entity_count: int) -> tuple[int, int]:
+    """Suggest min/max page count based on repo complexity."""
+    if file_count < 10:
+        return (3, 6)
+    if file_count <= 30:
+        return (8, 15) if entity_count >= 50 else (5, 12)
+    if file_count <= 100:
+        return (15, 35) if entity_count >= 150 else (10, 25)
+    if file_count <= 300:
+        return (20, 50)
+    return (30, 70)
 
 
 @dataclass
@@ -230,7 +251,7 @@ class WikiPlan:
         }
 
 
-_WIKI_PLAN_SCHEMA = {
+_OUTLINE_SCHEMA = {
     "type": "object",
     "properties": {
         "pages": {
@@ -241,13 +262,30 @@ _WIKI_PLAN_SCHEMA = {
                     "title": {"type": "string"},
                     "purpose": {"type": "string"},
                     "parent": {"type": ["string", "null"]},
-                    "files": {"type": "array", "items": {"type": "string"}},
                 },
-                "required": ["title", "purpose", "files"],
+                "required": ["title", "purpose"],
             },
         }
     },
     "required": ["pages"],
+}
+
+_ASSIGNMENT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "assignments": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "file": {"type": "string"},
+                    "page_title": {"type": "string"},
+                },
+                "required": ["file", "page_title"],
+            },
+        }
+    },
+    "required": ["assignments"],
 }
 
 _SYSTEM = (
@@ -276,51 +314,19 @@ _SYSTEM = (
 )
 
 
-def _build_prompt(
+def _build_outline_prompt(
     file_summary: str,
     repo_name: str,
     readme: str | None = None,
     dep_info: str | None = None,
     clusters: list[list[str]] | None = None,
-    all_files: list[str] | None = None,
+    page_range: tuple[int, int] = (5, 20),
 ) -> str:
-    """Assemble the full LLM prompt for the wiki-planning step.
-
-    Builds a multi-section prompt by concatenating available information
-    about the repository.  Each optional section is only appended when the
-    corresponding argument is not ``None``:
-
-    * **README section** — Provides a human-written project overview; limited
-      to the first 2000 characters to avoid exceeding context limits.
-    * **File summaries section** — The text produced by
-      ``FileAnalysis.to_llm_summary()``, listing each file with its detected
-      entities and docstrings.
-    * **Dependency relationships section** — The formatted dependency graph
-      text, showing which files import which.
-    * **Cluster suggestions section** — Up to 8 import-graph clusters (up to
-      10 files each shown) as hints for grouping related files.
-    * **Planning guidelines section** — Instructions and the JSON schema the
-      LLM must conform to.
-
-    Args:
-        file_summary: Pre-formatted text output of
-            ``FileAnalysis.to_llm_summary()``.
-        repo_name: Human-readable repository name (e.g. ``"owner/repo"``).
-        readme: Optional README content (truncated internally to 2000 chars).
-        dep_info: Optional pre-formatted dependency graph text.
-        clusters: Optional list of file-path lists representing import-graph
-            clusters detected by the dependency analysis stage.
-        all_files: Optional list of all relative file paths; used to embed
-            the exact file count in the planning guidelines so the LLM knows
-            it must cover every file.
-
-    Returns:
-        str: The full prompt string, with sections separated by blank lines.
-    """
+    """Build the Phase 1 prompt: generate page tree without file assignments."""
     sections = [f"Repository: {repo_name}"]
 
     if readme:
-        sections.append(f"README (excerpt):\n{readme[:2000]}")
+        sections.append(f"README:\n{readme}")
 
     sections.append(f"File summaries:\n{file_summary}")
 
@@ -328,29 +334,47 @@ def _build_prompt(
         sections.append(f"Dependency relationships:\n{dep_info}")
 
     if clusters:
-        cluster_strs = [
-            f"  Cluster {i + 1}: {', '.join(c[:10])}"
-            for i, c in enumerate(clusters[:8])
-        ]
+        # Show small clusters (≤20 files) as explicit file lists — they carry
+        # actionable grouping signal.  Large clusters span most of the repo
+        # through shared utilities; listing all their files is noise since the
+        # dependency graph already captures those relationships.
+        _CLUSTER_DETAIL_LIMIT = 20
+        cluster_strs: list[str] = []
+        shown = 0
+        for c in clusters:
+            if shown >= 30:
+                break
+            if len(c) <= _CLUSTER_DETAIL_LIMIT:
+                cluster_strs.append(f"  Cluster ({len(c)} files): {', '.join(c)}")
+            else:
+                cluster_strs.append(
+                    f"  Large cluster ({len(c)} files) — see dependency "
+                    "relationships above for internal structure"
+                )
+            shown += 1
+        remaining = len(clusters) - shown
+        if remaining > 0:
+            cluster_strs.append(f"  ... and {remaining} more clusters")
         sections.append(
-            "Suggested clusters (files that import each other):\n"
-            + "\n".join(cluster_strs)
+            "File clusters (files that import each other):\n" + "\n".join(cluster_strs)
         )
 
-    total_files = len(all_files) if all_files else 0
-    schema_json = json.dumps(_WIKI_PLAN_SCHEMA, indent=2)
+    schema_json = json.dumps(_OUTLINE_SCHEMA, indent=2)
+    min_pages, max_pages = page_range
     sections.append(
         "Create a hierarchical wiki plan. Guidelines:\n"
-        f"- Assign ALL {total_files} source files to pages\n"
-        "- Each page MUST have: title (descriptive, concept-oriented), "
-        "purpose (1-2 sentences), files (list of rel_paths from the "
-        "file summaries), and optionally parent (title of parent page)\n"
-        "- Group files by semantic purpose, not by directory structure — "
-        "files from different directories may belong on the same page\n"
+        f"- Create between {min_pages} and {max_pages} pages. Prefer more granular "
+        "pages over broad ones — a focused page covering 3-5 related files is better "
+        "than a sprawling page covering 15+. Each page should have a clear, single "
+        "responsibility.\n"
+        "- Each page MUST have: title (descriptive, concept-oriented) and "
+        "purpose (1-2 sentences explaining WHAT the page covers and WHY a "
+        "developer would read it)\n"
+        "- Optionally set parent (title of parent page) for hierarchy\n"
+        "- Group by semantic purpose, not directory structure\n"
         "- Create 2-3 levels of hierarchy for larger repos\n"
         "- Page titles should describe concepts/components, not directory names\n"
-        "- The purpose should explain WHAT the page covers and WHY a "
-        "developer would read it\n\n"
+        "- Do NOT assign files to pages — just define the page structure\n\n"
         "Output JSON matching this schema:\n"
         f"{schema_json}"
     )
@@ -358,10 +382,269 @@ def _build_prompt(
     return "\n\n".join(sections)
 
 
+def _build_assignment_prompt(
+    outline: list[dict],
+    file_summary: str,
+    dep_info: str | None = None,
+    all_files: list[str] | None = None,
+) -> str:
+    """Build the Phase 2 prompt: assign every file to exactly one page."""
+    sections = []
+
+    outline_str = json.dumps(outline, indent=2)
+    sections.append(f"Wiki page structure:\n{outline_str}")
+    sections.append(f"File summaries:\n{file_summary}")
+
+    if dep_info:
+        sections.append(f"Dependency relationships:\n{dep_info}")
+
+    total = len(all_files) if all_files else 0
+    schema_json = json.dumps(_ASSIGNMENT_SCHEMA, indent=2)
+    sections.append(
+        f"Assign ALL {total} source files to pages. Guidelines:\n"
+        "- Every file must be assigned to exactly one page\n"
+        "- Files that import each other should be on the same page when possible\n"
+        "- Assign files based on semantic purpose, not directory structure\n"
+        "- Each assignment must reference an existing page title exactly\n\n"
+        "Output JSON matching this schema:\n"
+        f"{schema_json}"
+    )
+
+    return "\n\n".join(sections)
+
+
+def _validate_outline_structure(
+    pages: list[dict],
+    page_range: tuple[int, int],
+    total_file_count: int,
+) -> None:
+    """Validate structural properties of a page outline (no file assignments needed).
+
+    Called inside :func:`_generate_outline` after each LLM response so that
+    outline-level errors are caught and retried in Phase 1, before Phase 2
+    (file assignment) is even attempted.
+
+    Checks:
+    - Duplicate slugs (two titles that normalise to the same URL slug).
+    - Parent cycles (circular parent references).
+    - Hierarchy depth > 4.
+    - Flat plan when the repository has > 30 files.
+    - Page count below the suggested minimum.
+
+    Raises:
+        ValueError: Describing the first constraint that is violated.
+    """
+    slug_counts: dict[str, int] = {}
+    for p in pages:
+        slug = _slugify_title(p["title"])
+        slug_counts[slug] = slug_counts.get(slug, 0) + 1
+    dupes = [s for s, cnt in slug_counts.items() if cnt > 1]
+    if dupes:
+        raise ValueError(f"Duplicate page slugs detected: {', '.join(dupes)}")
+
+    title_to_parent: dict[str, str | None] = {
+        p["title"]: p.get("parent") for p in pages
+    }
+    known = set(title_to_parent)
+
+    def _depth(title: str) -> int:
+        d, current, seen = 1, title, {title}
+        while (par := title_to_parent.get(current)) is not None:
+            if par not in known:
+                break  # dangling reference — treated as top-level
+            if par in seen:
+                raise ValueError(
+                    f"Wiki hierarchy contains a parent cycle involving '{par}'"
+                )
+            seen.add(par)
+            current = par
+            d += 1
+        return d
+
+    max_depth = max((_depth(p["title"]) for p in pages), default=1)
+    if max_depth > 4:
+        raise ValueError(
+            f"Wiki hierarchy is {max_depth} levels deep — flatten to at most 4 levels"
+        )
+    if max_depth == 1 and total_file_count > 30:
+        raise ValueError(
+            f"All pages are top-level — create 2-3 levels of hierarchy "
+            f"for a repo with {total_file_count} files"
+        )
+    if len(pages) < page_range[0]:
+        raise ValueError(
+            f"Plan has {len(pages)} pages but minimum is {page_range[0]} — "
+            "create more granular pages"
+        )
+
+
+def _validate_assignments(
+    result: dict[str, list[str]],
+    outline: list[dict],
+) -> None:
+    """Validate per-page file assignment counts.
+
+    Called inside :func:`_assign_files` after each LLM response so that
+    assignment-level errors are caught and retried in Phase 2.
+
+    Checks:
+    - No page has more than 25 files (over-stuffed pages make poor wiki pages).
+    - No non-overview page has zero files (empty pages add noise).
+
+    Raises:
+        ValueError: Describing the first constraint that is violated.
+    """
+    for page in outline:
+        title = page["title"]
+        files = result.get(title, [])
+        if len(files) > 25:
+            raise ValueError(
+                f"Page '{title}' has {len(files)} files — "
+                "split into focused sub-pages of ≤25 files each"
+            )
+        if "overview" not in title.lower() and len(files) == 0:
+            raise ValueError(
+                f"Page '{title}' has no files assigned — "
+                "either assign files or remove it"
+            )
+
+
+async def _generate_outline(
+    file_summary: str,
+    repo_name: str,
+    llm: LLMProvider,
+    readme: str | None,
+    dep_info: str | None,
+    clusters: list[list[str]] | None,
+    page_range: tuple[int, int],
+    system: str,
+    on_retry: OnRetryCallback | None,
+    max_retries: int = 3,
+    total_file_count: int = 0,
+    _extra_context: str | None = None,
+) -> list[dict]:
+    """Phase 1: Generate page tree and validate outline structure.
+
+    Combines LLM generation with immediate structural validation so that
+    outline-level problems (duplicate slugs, cycles, wrong depth, flat plan,
+    too few pages) are caught and retried within this phase rather than being
+    deferred to a post-assignment validation step.
+    """
+    prompt = _build_outline_prompt(
+        file_summary=file_summary,
+        repo_name=repo_name,
+        readme=readme,
+        dep_info=dep_info,
+        clusters=clusters,
+        page_range=page_range,
+    )
+    if _extra_context:
+        prompt += f"\n\n{_extra_context}"
+
+    for attempt in range(max_retries):
+        try:
+            raw = await async_retry(
+                llm.generate_structured,
+                prompt,
+                schema=_OUTLINE_SCHEMA,
+                system=system,
+                transient_exceptions=TRANSIENT_EXCEPTIONS,
+                on_retry=on_retry,
+            )
+            pages = raw.get("pages", [])
+            if not pages:
+                raise ValueError("Outline has no pages")
+            for p in pages:
+                if "title" not in p or "purpose" not in p:
+                    raise ValueError(f"Page missing title or purpose: {p}")
+            _validate_outline_structure(pages, page_range, total_file_count)
+            return pages
+        except (ValueError, json.JSONDecodeError, KeyError) as e:
+            if attempt < max_retries - 1:
+                prompt += f"\n\nPrevious attempt failed: {e}. Please fix and retry."
+
+    raise ValueError("Failed to generate outline after all retries")
+
+
+async def _assign_files(
+    outline: list[dict],
+    file_summary: str,
+    dep_info: str | None,
+    all_files: list[str],
+    llm: LLMProvider,
+    system: str,
+    on_retry: OnRetryCallback | None,
+    max_retries: int = 3,
+    _extra_context: str | None = None,
+) -> dict[str, list[str]]:
+    """Phase 2: Assign every file to a page and validate assignments.
+
+    Combines LLM generation with immediate per-page constraint checking so
+    that over-stuffed pages (> 25 files) and empty non-overview pages are
+    caught and retried within this phase.
+    """
+    prompt = _build_assignment_prompt(
+        outline=outline,
+        file_summary=file_summary,
+        dep_info=dep_info,
+        all_files=all_files,
+    )
+    if _extra_context:
+        prompt += f"\n\n{_extra_context}"
+
+    if not outline:
+        raise ValueError("Cannot assign files: outline is empty")
+    valid_titles = {p["title"] for p in outline}
+    first_title = outline[0]["title"]
+
+    for attempt in range(max_retries):
+        try:
+            raw = await async_retry(
+                llm.generate_structured,
+                prompt,
+                schema=_ASSIGNMENT_SCHEMA,
+                system=system,
+                transient_exceptions=TRANSIENT_EXCEPTIONS,
+                on_retry=on_retry,
+            )
+            assignments = raw.get("assignments", [])
+            result: dict[str, list[str]] = {p["title"]: [] for p in outline}
+            assigned_files: set[str] = set()
+
+            for a in assignments:
+                f = a.get("file", "")
+                title = a.get("page_title", "")
+                if f in all_files and f not in assigned_files:
+                    target = title if title in valid_titles else first_title
+                    result[target].append(f)
+                    assigned_files.add(f)
+
+            # Assign any unassigned files to the first page
+            for f in all_files:
+                if f not in assigned_files:
+                    result[first_title].append(f)
+
+            _validate_assignments(result, outline)
+            return result
+
+        except (ValueError, json.JSONDecodeError, KeyError) as e:
+            if attempt < max_retries - 1:
+                prompt += f"\n\nPrevious attempt failed: {e}. Please fix and retry."
+
+    # Fallback: round-robin distribution (ignores validation constraints)
+    result = {p["title"]: [] for p in outline}
+    titles = [p["title"] for p in outline]
+    for i, f in enumerate(sorted(all_files)):
+        result[titles[i % len(titles)]].append(f)
+    return result
+
+
 def validate_wiki_plan(
     raw: dict,
     all_files: list[str] | None = None,
     existing_titles: set[str] | None = None,
+    clusters: list[list[str]] | None = None,
+    page_range: tuple[int, int] | None = None,
 ) -> WikiPlan:
     """Validate an LLM-produced wiki plan dict and return a :class:`WikiPlan`.
 
@@ -465,115 +748,196 @@ def validate_wiki_plan(
             if overview:
                 overview.files = list(overview.files) + orphans
 
+    # ── Semantic validation ──────────────────────────────────────────────
+
+    # Max files per page
+    for p in pages:
+        if len(p.files) > 25:
+            raise ValueError(
+                f"Page '{p.title}' has {len(p.files)} files — "
+                "split into focused sub-pages of ≤25 files each"
+            )
+
+    # No empty non-overview pages
+    for p in pages:
+        is_overview = "overview" in p.title.lower()
+        if not is_overview and len(p.files) == 0:
+            raise ValueError(
+                f"Page '{p.title}' has no files assigned — "
+                "either assign files or remove it"
+            )
+
+    # Hierarchy depth check
+    title_to_parent = {p.title: p.parent for p in pages}
+
+    def _depth(title: str) -> int:
+        d = 1
+        current = title
+        seen: set[str] = {title}
+        while title_to_parent.get(current) is not None:
+            current = title_to_parent[current]
+            if current in seen:
+                raise ValueError(
+                    f"Wiki hierarchy contains a parent cycle involving '{current}'"
+                )
+            seen.add(current)
+            d += 1
+        return d
+
+    max_depth = max((_depth(p.title) for p in pages), default=1)
+    if max_depth > 4:
+        raise ValueError(
+            f"Wiki hierarchy is {max_depth} levels deep — flatten to at most 4 levels"
+        )
+
+    # Flat plan check for repos with >30 files
+    total_file_count = len(all_files) if all_files else sum(len(p.files) for p in pages)
+    if max_depth == 1 and total_file_count > 30:
+        raise ValueError(
+            f"All pages are top-level — create 2-3 levels of "
+            f"hierarchy for a repo with {total_file_count} files"
+        )
+
+    # Page count vs suggested range
+    if page_range is not None and len(pages) < page_range[0]:
+        raise ValueError(
+            f"Plan has {len(pages)} pages but minimum is {page_range[0]} — "
+            "create more granular pages"
+        )
+
+    # Cluster coherence warning (not a rejection)
+    if clusters:
+        # Pre-build file→page mapping once (O(pages × files_per_page))
+        # to avoid O(clusters × files × pages × files_per_page) nested loops.
+        file_to_page: dict[str, str] = {}
+        for p in pages:
+            for f in p.files:
+                file_to_page[f] = p.title
+        for cluster in clusters:
+            if len(cluster) <= 1:
+                continue
+            page_titles_for_cluster: set[str] = set()
+            for f in cluster:
+                if f in file_to_page:
+                    page_titles_for_cluster.add(file_to_page[f])
+            if len(page_titles_for_cluster) > 3:
+                logger.warning(
+                    "Cluster files [%s...] scattered across %d pages: %s",
+                    cluster[0],
+                    len(page_titles_for_cluster),
+                    ", ".join(sorted(page_titles_for_cluster)),
+                )
+
     return WikiPlan(pages=pages)
 
 
 async def generate_wiki_plan(
-    file_analysis,  # FileAnalysis from ast_analysis
+    file_analysis: FileAnalysis,
     repo_name: str,
     llm: LLMProvider,
-    dep_graph=None,  # DependencyGraph from dependency_graph (optional)
+    dep_graph: DependencyGraph | None = None,
     max_retries: int = 3,
     readme: str | None = None,
     on_retry: OnRetryCallback | None = None,
     existing_titles: set[str] | None = None,
     wiki_language: str = "en",
 ) -> WikiPlan:
-    """Generate a hierarchical wiki plan for a repository using an LLM.
+    """Generate a hierarchical wiki plan using two-phase LLM planning.
 
-    Orchestrates the full planning workflow:
+    Each phase validates its own output and self-retries up to *max_retries*
+    times before surfacing an error, so problems are corrected as early as
+    possible:
 
-    1. Converts *file_analysis* to an LLM-readable text summary.
-    2. Formats dependency info and cluster hints from *dep_graph* (if given).
-    3. Builds the prompt via :func:`_build_prompt`.
-    4. Calls ``llm.generate_structured`` with ``_WIKI_PLAN_SCHEMA`` inside an
-       ``async_retry`` wrapper (for transient API errors).
-    5. Validates the LLM output with :func:`validate_wiki_plan`; if validation
-       raises, appends the error to the prompt and retries up to *max_retries*
-       times in total.
-    6. If all retries are exhausted, falls back to a flat plan: one
-       ``"Overview"`` page plus one ``"Component N"`` page per import-graph
-       cluster (clusters are split into sub-pages of at most 20 files).  All
-       files not placed in a cluster page are routed to Overview.
+    * **Phase 1** (:func:`_generate_outline`) — Produces the page hierarchy
+      (titles, purposes, parent relationships) and immediately validates
+      structural constraints (duplicate slugs, cycles, depth, flat plan, page
+      count) via :func:`_validate_outline_structure`.  A bad outline is
+      re-generated within Phase 1 rather than being discovered after the
+      expensive Phase 2 LLM call.
 
-    Args:
-        file_analysis: A :class:`~worker.pipeline.ast_analysis.FileAnalysis`
-            instance containing the per-file entity data for the repository.
-        repo_name: Human-readable repository name used in prompts and fallback
-            page purposes (e.g. ``"owner/repo"``).
-        llm: An :class:`~worker.llm.base.LLMProvider` instance used to call
-            the LLM for structured JSON generation.
-        dep_graph: Optional
-            :class:`~worker.pipeline.dependency_graph.DependencyGraph`
-            providing import relationships and cluster suggestions.
-        max_retries: Maximum number of LLM call + validation attempts before
-            the fallback plan is used.  Defaults to ``3``.
-        readme: Optional README text extracted by
-            :func:`~worker.pipeline.ingestion.extract_readme`; included in the
-            prompt when provided.
-        on_retry: Optional callback passed to ``async_retry`` for progress
-            reporting on transient embedding/LLM failures.
-        existing_titles: Optional set of page titles from the *unchanged*
-            portion of an existing wiki plan (for partial incremental refresh).
-            Passed through to :func:`validate_wiki_plan`.
+    * **Phase 2** (:func:`_assign_files`) — Assigns every source file to a
+      page and immediately validates per-page constraints (over-stuffed pages,
+      empty non-overview pages) via :func:`_validate_assignments`.  Bad
+      assignments are re-generated within Phase 2.
 
-    Returns:
-        WikiPlan: A validated :class:`WikiPlan` where every source file in
-        *file_analysis* is assigned to exactly one page.
-
-    Example:
-        >>> plan = await generate_wiki_plan(
-        ...     file_analysis=analysis,
-        ...     repo_name="owner/my-repo",
-        ...     llm=llm_provider,
-        ...     dep_graph=dep_graph,
-        ...     readme=readme_text,
-        ... )
-        >>> len(plan.pages)
-        12
-        >>> plan.pages[0].title
-        'Overview'
+    * **Final** — Combines outline + assignments into a :class:`WikiPlan` via
+      :func:`validate_wiki_plan`, which handles orphan-file assignment as a
+      normalisation step.  Any remaining error falls back to a cluster-based
+      plan.
     """
-    from worker.pipeline.ast_analysis import FileAnalysis  # noqa: F401
-    from worker.pipeline.dependency_graph import (  # noqa: F401
-        DependencyGraph,
-        format_for_llm_prompt,
-    )
+    from worker.pipeline.dependency_graph import format_for_llm_prompt
 
-    file_summary = file_analysis.to_llm_summary()
+    file_summary = file_analysis.to_llm_summary(dep_graph=dep_graph, max_files=200)
     all_files = list(file_analysis.files.keys())
     dep_info = format_for_llm_prompt(dep_graph) if dep_graph is not None else None
     clusters = dep_graph.clusters if dep_graph is not None else None
 
-    prompt = _build_prompt(
-        file_summary=file_summary,
-        repo_name=repo_name,
-        readme=readme,
-        dep_info=dep_info,
-        clusters=clusters,
-        all_files=all_files,
-    )
+    entity_count = sum(len(info.entities) for info in file_analysis.files.values())
+    page_range = _suggest_page_range(len(all_files), entity_count)
 
     system = _SYSTEM + get_planner_language_instruction(wiki_language)
-    for attempt in range(max_retries):
-        try:
-            raw = await async_retry(
-                llm.generate_structured,
-                prompt,
-                schema=_WIKI_PLAN_SCHEMA,
-                system=system,
-                transient_exceptions=TRANSIENT_EXCEPTIONS,
-                on_retry=on_retry,
-            )
-            return validate_wiki_plan(
-                raw, all_files=all_files, existing_titles=existing_titles
-            )
-        except (ValueError, json.JSONDecodeError, KeyError) as e:
-            if attempt < max_retries - 1:
-                prompt += f"\n\nPrevious attempt failed: {e}. Please fix and retry."
 
-    # Fallback: flat plan - Overview + one page per dependency cluster.
-    # Every file must be assigned exactly once.
+    # Phase 1: Generate outline + validate structure
+    try:
+        outline = await _generate_outline(
+            file_summary=file_summary,
+            repo_name=repo_name,
+            llm=llm,
+            readme=readme,
+            dep_info=dep_info,
+            clusters=clusters,
+            page_range=page_range,
+            system=system,
+            on_retry=on_retry,
+            max_retries=max_retries,
+            total_file_count=len(all_files),
+        )
+    except ValueError:
+        return _fallback_plan(repo_name, all_files, clusters)
+
+    # Phase 2: Assign files + validate assignments
+    file_assignments = await _assign_files(
+        outline=outline,
+        file_summary=file_summary,
+        dep_info=dep_info,
+        all_files=all_files,
+        llm=llm,
+        system=system,
+        on_retry=on_retry,
+        max_retries=max_retries,
+    )
+
+    # Final: combine and normalise (handles orphan files, safety-net checks)
+    raw = {
+        "pages": [
+            {
+                "title": p["title"],
+                "purpose": p["purpose"],
+                "parent": p.get("parent"),
+                "files": file_assignments.get(p["title"], []),
+            }
+            for p in outline
+        ]
+    }
+    try:
+        return validate_wiki_plan(
+            raw,
+            all_files=all_files,
+            existing_titles=existing_titles,
+            clusters=clusters,
+            page_range=page_range,
+        )
+    except ValueError as exc:
+        logger.warning("Final wiki plan validation failed: %s — using fallback", exc)
+        return _fallback_plan(repo_name, all_files, clusters)
+
+
+def _fallback_plan(
+    repo_name: str,
+    all_files: list[str],
+    clusters: list[list[str]] | None,
+) -> WikiPlan:
+    """Build a flat cluster-based fallback plan when LLM planning fails."""
     fallback_pages = [
         WikiPageSpec(
             title="Overview",
@@ -588,7 +952,6 @@ async def generate_wiki_plan(
         assigned: set[str] = set()
         page_num = 1
         for cluster in clusters:
-            # Split large clusters into pages of up to 20 files each
             for offset in range(0, max(1, len(cluster)), 20):
                 chunk = cluster[offset : offset + 20]
                 if not chunk:
@@ -603,9 +966,7 @@ async def generate_wiki_plan(
                 )
                 assigned.update(chunk)
             page_num += 1
-        # Route any file not placed in a cluster page to Overview
         fallback_pages[0].files = [f for f in (all_files or []) if f not in assigned]
     else:
-        # No clusters: put all files in Overview
         fallback_pages[0].files = list(all_files or [])
     return WikiPlan(pages=fallback_pages)

@@ -121,9 +121,6 @@ async def test_run_refresh_index_with_changes(tmp_path, mock_llm, mock_embedding
         ),
         patch("worker.jobs.make_llm_provider", return_value=mock_llm),
         patch("worker.jobs.make_embedding_provider", return_value=mock_embedding),
-        patch(
-            "worker.jobs.synthesize_diagrams", new_callable=AsyncMock, return_value=None
-        ),
     ):
         cfg = mock_cfg.return_value
         cfg.database_path = tmp_path / "test.db"
