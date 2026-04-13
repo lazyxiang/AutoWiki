@@ -212,3 +212,41 @@ async def test_run_targeted_revision_fixes_claims():
     )
     assert "Revised content" in result
     mock_llm.generate.assert_called_once()
+
+
+async def test_run_targeted_revision_fixes_diagram():
+    from worker.pipeline.fact_check import FactCheckIssue, run_targeted_revision
+
+    mock_llm = AsyncMock()
+    mock_llm.generate.return_value = "```mermaid\nflowchart TD\n  A-->C\n```"
+
+    draft = (
+        "## Flow\n\n"
+        "**Diagram: Data flow**\n\n"
+        "```mermaid\nflowchart TD\n  A-->B\n```\n\n"
+        "*Source: main.py:1-10*\n\n"
+        "Some text after.\n"
+    )
+    issues = [
+        FactCheckIssue(
+            kind="diagram",
+            diagram_index=0,
+            section="## Flow",
+            reason="Wrong direction",
+            suggested_fix="Change B to C",
+        )
+    ]
+    context = [PromptSegment(text="context", cacheable=True)]
+
+    result = await run_targeted_revision(
+        draft=draft,
+        issues=issues,
+        context_segments=context,
+        llm=mock_llm,
+    )
+    # Original diagram should be replaced
+    assert "A-->B" not in result
+    assert "A-->C" in result
+    # Text after should be preserved
+    assert "Some text after." in result
+    mock_llm.generate.assert_called_once()

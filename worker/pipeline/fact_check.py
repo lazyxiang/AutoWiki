@@ -198,7 +198,7 @@ def strip_failed_diagram(
     section_header = section.strip()
     section_start = draft.find(section_header)
     if section_start == -1:
-        section_start = 0
+        return draft
 
     next_section = re.search(
         r"^## ", draft[section_start + len(section_header) :], re.MULTILINE
@@ -300,7 +300,7 @@ async def run_targeted_revision(
 
         section_text = revised[section_start:]
         matches = list(mermaid_pattern.finditer(section_text))
-        idx = diag_issue.diagram_index or 0
+        idx = diag_issue.diagram_index if diag_issue.diagram_index is not None else 0
         if idx >= len(matches):
             continue
 
