@@ -1,4 +1,8 @@
+import tempfile
 from pathlib import Path
+from unittest.mock import AsyncMock
+
+import numpy as np
 
 from worker.pipeline.page_generator import (
     PageResult,
@@ -8,126 +12,164 @@ from worker.pipeline.page_generator import (
 from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan
 
 
-async def test_generate_page_returns_markdown(mock_llm, mock_embedding):
-    import tempfile
-
-    import numpy as np
-
+def _make_store():
     from worker.pipeline.rag_indexer import FAISSStore
 
-    with tempfile.TemporaryDirectory() as tmp:
-        store = FAISSStore(
-            dimension=1536,
-            index_path=Path(tmp) / "idx",
-            meta_path=Path(tmp) / "meta.pkl",
-        )
-        store.add(
-            [np.zeros(1536, dtype=np.float32)],
-            [
-                {
-                    "text": "class User: pass",
-                    "file": "models.py",
-                    "start_line": 1,
-                    "end_line": 1,
-                }
-            ],
-        )
+    tmpdir = tempfile.mkdtemp()
+    store = FAISSStore(
+        dimension=1536,
+        index_path=Path(tmpdir) / "idx",
+        meta_path=Path(tmpdir) / "meta.pkl",
+    )
+    store.add(
+        [np.zeros(1536, dtype=np.float32)],
+        [
+            {
+                "text": "class User: pass",
+                "file": "models.py",
+                "start_line": 1,
+                "end_line": 1,
+            }
+        ],
+    )
+    return store
 
-        spec = WikiPageSpec(
-            title="Models",
-            purpose="Data model classes.",
-            files=["models.py"],
-        )
-        result = await generate_page(
-            spec, store, mock_llm, mock_embedding, repo_name="test"
-        )
+
+def _make_mock_fast_llm():
+    """Mock fast LLM for outline + fact-check passes."""
+    m = AsyncMock()
+    m.generate_structured.side_effect = [
+        # First call: outline
+        {
+            "sections": [
+                {
+                    "heading": "Overview",
+                    "kind": "prose",
+                    "focus": "What it does",
+                    "diagram": None,
+                },
+                {
+                    "heading": "Architecture",
+                    "kind": "prose+diagram",
+                    "focus": "How it works",
+                    "diagram": {
+                        "type": "flowchart",
+                        "purpose": "Component flow",
+                        "source_files": ["models.py"],
+                    },
+                },
+            ],
+            "key_claims": [
+                "User class defines the data model",
+                "Models are stored in SQLite",
+                "User has an id field",
+            ],
+        },
+        # Second call: fact-check
+        {"verdict": "pass", "issues": []},
+    ]
+    return m
+
+
+async def test_generate_page_multi_pass(mock_embedding):
+    store = _make_store()
+    llm = AsyncMock()
+    llm.generate.return_value = (
+        "## Overview\n\nThe models module defines data classes.\n\n"
+        "## Architecture\n\n"
+        "**Diagram: Component flow**\n\n"
+        "```mermaid\nflowchart TD\n  A-->B\n```\n\n"
+        "*Source: models.py:1-10*\n"
+    )
+    fast_llm = _make_mock_fast_llm()
+
+    spec = WikiPageSpec(
+        title="Models", purpose="Data model classes.", files=["models.py"]
+    )
+    result = await generate_page(
+        spec,
+        store,
+        llm,
+        fast_llm,
+        mock_embedding,
+        repo_name="test",
+    )
     assert isinstance(result, PageResult)
     assert result.slug == "models"
     assert len(result.content) > 0
+    # Verify both LLMs were called
+    assert fast_llm.generate_structured.call_count == 2  # outline + fact-check
+    assert llm.generate.call_count == 1  # draft only
 
 
-async def test_generate_page_with_dep_info_and_entities(mock_llm, mock_embedding):
-    import tempfile
+async def test_generate_page_with_fact_check_fail_triggers_revision(mock_embedding):
+    store = _make_store()
+    llm = AsyncMock()
+    fast_llm = AsyncMock()
 
-    import numpy as np
-
-    from worker.pipeline.rag_indexer import FAISSStore
-
-    with tempfile.TemporaryDirectory() as tmp:
-        store = FAISSStore(
-            dimension=1536,
-            index_path=Path(tmp) / "idx",
-            meta_path=Path(tmp) / "meta.pkl",
-        )
-        store.add(
-            [np.zeros(1536, dtype=np.float32)],
-            [
+    fast_llm.generate_structured.side_effect = [
+        # Outline
+        {
+            "sections": [
                 {
-                    "text": "class User: pass",
-                    "file": "models.py",
-                    "start_line": 1,
-                    "end_line": 5,
+                    "heading": "Overview",
+                    "kind": "prose",
+                    "focus": "f",
+                    "diagram": {
+                        "type": "flowchart",
+                        "purpose": "p",
+                        "source_files": ["models.py"],
+                    },
+                },
+            ],
+            "key_claims": ["claim 1", "claim 2", "claim 3"],
+        },
+        # Fact-check: fail
+        {
+            "verdict": "fail",
+            "issues": [
+                {
+                    "kind": "claim",
+                    "claim": "claim 1",
+                    "section": "## Overview",
+                    "reason": "Not supported",
+                    "suggested_fix": "Remove it",
                 }
             ],
-        )
+        },
+    ]
 
-        spec = WikiPageSpec(
-            title="Models",
-            purpose="User and Post data models.",
-            files=["models.py"],
-        )
-        dep_info = {
-            "depends_on": ["utils"],
-            "depended_by": ["api"],
-            "external_deps": ["sqlalchemy"],
-        }
-        entity_details = [
-            {
-                "type": "class",
-                "name": "User",
-                "signature": "User(Base)",
-                "file": "models.py",
-                "start_line": 1,
-                "end_line": 10,
-                "docstring": "Represents a user account.",
-            },
+    _diagram = "```mermaid\nflowchart TD\n  A-->B\n```\n\n*Source: models.py:1-10*"
+    llm.generate.side_effect = [
+        f"## Overview\n\n**Diagram: Flow**\n\n{_diagram}",
+        f"## Overview\n\nRevised content.\n\n**Diagram: Flow**\n\n{_diagram}",
+    ]
+
+    spec = WikiPageSpec(title="Models", purpose="Test.", files=["models.py"])
+    await generate_page(
+        spec,
+        store,
+        llm,
+        fast_llm,
+        mock_embedding,
+        repo_name="test",
+    )
+    assert llm.generate.call_count == 2  # draft + revision
+
+
+def test_compute_generation_order_unchanged():
+    """Verify compute_generation_order still works."""
+    plan = WikiPlan(
+        pages=[
+            WikiPageSpec(title="Overview", purpose="Root."),
+            WikiPageSpec(title="API", purpose="API.", parent="Overview"),
+            WikiPageSpec(title="Worker", purpose="Worker.", parent="Overview"),
         ]
-        result = await generate_page(
-            spec,
-            store,
-            mock_llm,
-            mock_embedding,
-            repo_name="test",
-            dep_info=dep_info,
-            entity_details=entity_details,
-        )
-    assert isinstance(result, PageResult)
-    assert result.content.strip() != ""
-
-
-async def test_generate_page_content_is_non_empty(mock_llm, mock_embedding):
-    import tempfile
-
-    import numpy as np
-
-    from worker.pipeline.rag_indexer import FAISSStore
-
-    with tempfile.TemporaryDirectory() as tmp:
-        store = FAISSStore(
-            dimension=1536,
-            index_path=Path(tmp) / "idx",
-            meta_path=Path(tmp) / "meta.pkl",
-        )
-        store.add(
-            [np.zeros(1536, dtype=np.float32)], [{"text": "x = 1", "file": "main.py"}]
-        )
-        spec = WikiPageSpec(
-            title="Overview", purpose="High-level overview.", files=["main.py"]
-        )
-        result = await generate_page(
-            spec, store, mock_llm, mock_embedding, repo_name="test"
-        )
-    assert result.content.strip() != ""
+    )
+    levels = compute_generation_order(plan)
+    assert len(levels) == 2
+    assert all(p.parent == "Overview" for p in levels[0])
+    assert levels[1][0].title == "Overview"
 
 
 def test_compute_generation_order_single_level():
@@ -184,64 +226,3 @@ def test_compute_generation_order_handles_cycle():
     # Both pages should appear somewhere (treated as roots due to cycle)
     all_titles = {p.title for level in levels for p in level}
     assert all_titles == {"A", "B"}
-
-
-async def test_generate_page_with_child_contents(mock_llm, mock_embedding):
-    import tempfile
-
-    import numpy as np
-
-    from worker.pipeline.rag_indexer import FAISSStore
-
-    with tempfile.TemporaryDirectory() as tmp:
-        store = FAISSStore(
-            dimension=1536,
-            index_path=Path(tmp) / "idx",
-            meta_path=Path(tmp) / "meta.pkl",
-        )
-        store.add(
-            [np.zeros(1536, dtype=np.float32)],
-            [
-                {
-                    "text": "class App: pass",
-                    "file": "app.py",
-                    "start_line": 1,
-                    "end_line": 1,
-                }
-            ],
-        )
-
-        parent_spec = WikiPageSpec(
-            title="System Overview",
-            purpose="Top-level architecture.",
-            files=["app.py"],
-        )
-        child_results = [
-            PageResult(
-                slug="api",
-                title="API Layer",
-                content="## API\nHandles HTTP requests.",
-            ),
-            PageResult(
-                slug="worker",
-                title="Worker",
-                content="## Worker\nProcesses background jobs.",
-            ),
-        ]
-        result = await generate_page(
-            parent_spec,
-            store,
-            mock_llm,
-            mock_embedding,
-            repo_name="test",
-            child_contents=child_results,
-        )
-    assert isinstance(result, PageResult)
-    assert result.slug == "system-overview"
-    # The mock returns "Mocked wiki page content." but the important thing
-    # is that generate() was called with a prompt containing child content
-    call_args = mock_llm.generate.call_args
-    prompt = call_args[0][0]
-    assert "API Layer" in prompt
-    assert "Worker" in prompt
-    assert "Handles HTTP requests" in prompt

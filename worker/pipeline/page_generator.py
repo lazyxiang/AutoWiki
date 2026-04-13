@@ -1,22 +1,21 @@
-"""Stage 6 of the generation pipeline.
+"""Stage 6 of the generation pipeline — multi-pass wiki page orchestrator.
 
-Covers multi-query RAG retrieval and LLM page generation.
+Each :class:`~worker.pipeline.wiki_planner.WikiPageSpec` is processed through
+a 4-pass pipeline:
 
-For each :class:`~worker.pipeline.wiki_planner.WikiPageSpec` in the wiki
-plan, this module:
+1. **Outline** (fast model) — produces a structured ``PageOutline`` with
+   sections, planned diagrams, and key claims to verify.
+2. **Draft** (main model) — generates full Markdown from the outline using
+   multi-query RAG context.
+3. **Fact-check** (fast model) — verifies key claims and diagrams against the
+   source code; returns a :class:`~worker.pipeline.fact_check.FactCheckResult`.
+4. **Revision** (main model, conditional) — applies targeted fixes when the
+   fact-check verdict is ``"fail"``; falls back to deterministic claim/diagram
+   stripping for any still-flagged issues.
 
-1. Constructs two or more semantic search queries (multi-query RAG) based on
-   the page title, purpose, and key entity names.
-2. Embeds all queries and performs a deduplicated multi-search against the
-   :class:`~worker.pipeline.rag_indexer.FAISSStore`.
-3. Formats the retrieved source-code chunks, entity details, and dependency
-   info into a structured LLM prompt.
-4. Calls the LLM (with ``async_retry`` for transient errors) and wraps the
-   resulting Markdown in a :class:`PageResult`.
-
-The module uses two distinct prompt templates: a richer *overview* template
-for the top-level ``"Overview"`` page (adds Architecture and Getting Started
-sections) and a standard *component* template for all other pages.
+Post-processing: :func:`~worker.pipeline.diagram_post_processor.ensure_diagram_headers`
+and :func:`~worker.utils.mermaid.sanitize_mermaid_blocks` are applied to the
+final draft.
 """
 
 from __future__ import annotations
@@ -26,70 +25,13 @@ from typing import TYPE_CHECKING, Any
 
 from worker.embedding.base import EmbeddingProvider
 from worker.llm.base import LLMProvider
-from worker.pipeline.language import get_language_instruction
 from worker.pipeline.rag_indexer import FAISSStore
 from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan
-from worker.utils.mermaid import sanitize_mermaid_blocks
 from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
 
 if TYPE_CHECKING:
     from worker.pipeline.ast_analysis import FileAnalysis
     from worker.pipeline.dependency_graph import DependencyGraph
-
-_SYSTEM = (
-    "You are a senior technical writer creating comprehensive, "
-    "production-quality wiki documentation for a software "
-    "repository. Your goal is to help developers new to this "
-    "codebase understand it quickly and thoroughly.\n\n"
-    "Rules:\n"
-    "- Every technical claim MUST be grounded in the provided "
-    "source code — do not invent APIs, classes, or features "
-    "not present in the code context\n"
-    "- After each major section or subsection, add a source "
-    "annotation in italics citing where the information comes "
-    "from: *Source: path/to/file.py:10-45*\n"
-    "- Include Mermaid diagrams where they aid understanding "
-    "— use ```mermaid code blocks\n"
-    "- Choose diagram types that best fit the content:\n"
-    "  - flowchart TD for architecture/data flow\n"
-    "  - classDiagram for class relationships\n"
-    "  - sequenceDiagram for request/response flows\n"
-    "  - graph LR for dependency relationships\n"
-    "- IMPORTANT Mermaid quoting rules — violating these causes "
-    "parse errors:\n"
-    '  - Node labels with special chars: A["Server (HTTP)"] '
-    "not A[Server (HTTP)]\n"
-    '  - Edge labels with special chars: -->|"GET /api/{id}"| '
-    "not -->|GET /api/{id}|\n"
-    "  - Special characters requiring quotes: ( ) { } | < > /\n"
-    "- Write for developers who are new to this codebase but "
-    "experienced programmers\n"
-    "- Use precise technical language and include concrete "
-    "code examples from the source\n"
-    "- Organize content from high-level concepts down to "
-    "implementation details"
-)
-
-
-_PARENT_TEMPLATE = (
-    'Write a wiki page for "{title}" that serves as the entry point '
-    "for its child pages. Structure:\n\n"
-    "## Overview\n"
-    "What this subsystem/area does and why it exists. "
-    "High-level narrative.\n\n"
-    "## Architecture\n"
-    "How the child components fit together. Include a Mermaid "
-    "diagram showing the relationships and data flow between "
-    "child components.\n\n"
-    "## Key Design Decisions\n"
-    "Important architectural choices that span multiple child "
-    "components.\n\n"
-    "## How It Works\n"
-    "End-to-end flow tying the child components together.\n\n"
-    "Do NOT duplicate content from child pages — reference "
-    "them by name.\n"
-    "Output Markdown only."
-)
 
 
 def compute_generation_order(plan: WikiPlan) -> list[list[WikiPageSpec]]:
@@ -248,162 +190,11 @@ def _format_context_chunks(context_chunks: list[dict]) -> str:
     return "\n\n---\n\n".join(sections)
 
 
-def _build_page_prompt(
-    spec: WikiPageSpec,
-    context_chunks: list[dict],
-    repo_name: str,
-    dep_info: dict[str, Any] | None = None,
-    entity_details: list[dict[str, Any]] | None = None,
-    child_contents: list[PageResult] | None = None,
-) -> str:
-    """Build the full LLM prompt for generating a single wiki page.
-
-    Assembles a structured prompt from all available context.  The final
-    instruction section branches on whether the page is an *overview* page
-    (slug equals ``"overview"`` or title contains the word ``"overview"``):
-
-    * **Overview branch** — Requests sections: Overview, Architecture (with
-      Mermaid flowchart), Key Components, Getting Started, Technology Stack.
-    * **Non-overview branch** — Requests sections: Overview, Architecture
-      (optional diagram), Key Components, Dependencies & Interactions, Source
-      Files.
-
-    Args:
-        spec: The :class:`WikiPageSpec` being generated.
-        context_chunks: RAG-retrieved source-code chunk dicts (formatted by
-            :func:`_format_context_chunks`).
-        repo_name: Human-readable repository name included in the prompt
-            heading and instruction text.
-        dep_info: Optional dependency info dict with keys ``"depends_on"``
-            (list[str]), ``"depended_by"`` (list[str]), and
-            ``"external_deps"`` (list[str]).
-        entity_details: Optional list of entity dicts formatted by
-            :func:`_format_entity_details`.
-
-    Returns:
-        str: The complete LLM prompt as a single string, with sections
-        separated by blank lines.
-    """
-    context = _format_context_chunks(context_chunks)
-
-    sections = [
-        f"Repository: {repo_name}",
-        f"Page: {spec.title}",
-    ]
-
-    if spec.purpose:
-        sections.append(f"Purpose: {spec.purpose}")
-
-    sections.append(f"Source files: {', '.join(spec.files or [])}")
-
-    # Dependency context
-    if dep_info:
-        deps_on = dep_info.get("depends_on", [])
-        deps_by = dep_info.get("depended_by", [])
-        ext_deps = dep_info.get("external_deps", [])
-        dep_lines = []
-        if deps_on:
-            dep_lines.append(f"- Depends on: {', '.join(deps_on)}")
-        if deps_by:
-            dep_lines.append(f"- Depended on by: {', '.join(deps_by)}")
-        if ext_deps:
-            dep_lines.append(f"- External dependencies: {', '.join(ext_deps[:10])}")
-        if dep_lines:
-            sections.append("Dependencies:\n" + "\n".join(dep_lines))
-
-    # Entity details
-    if entity_details:
-        sections.append(
-            f"Key entities in these modules:\n{_format_entity_details(entity_details)}"
-        )
-
-    sections.append(
-        f"Relevant source code (with file paths and line numbers):\n{context}"
-    )
-
-    # Child page content for parent pages
-    if child_contents:
-        child_sections = []
-        for child in child_contents:
-            child_sections.append(f'### Child: "{child.title}"\n{child.content}')
-        sections.append(
-            "## Child Pages (already generated)\n"
-            "The following child pages have been written. Your role is to "
-            "SYNTHESIZE and CONNECT — provide the high-level narrative, "
-            "explain how these components relate, and add context that "
-            "individual pages cannot provide. Do NOT repeat details covered "
-            "in child pages; reference them instead.\n\n" + "\n\n".join(child_sections)
-        )
-
-    has_children = bool(child_contents)
-    is_overview = spec.slug == "overview" or "overview" in spec.title.lower()
-
-    if has_children:
-        sections.append(_PARENT_TEMPLATE.format(title=spec.title))
-    elif is_overview:
-        sections.append(
-            f"Write a comprehensive Overview wiki page for"
-            f' the "{repo_name}" project. Structure:\n\n'
-            "## Overview\n"
-            "What this project does, its primary use cases, "
-            "and the problem it solves.\n\n"
-            "## Architecture\n"
-            "Include a Mermaid diagram (```mermaid flowchart) "
-            "showing the major components and how they "
-            "connect.\n"
-            "Describe the high-level architecture, service "
-            "topology, and data flow.\n\n"
-            "## Key Components\n"
-            "For each major subsystem/module, provide a brief "
-            "description of its role.\n"
-            "After each component description, cite the "
-            "source: *Source: file.py:line-line*\n\n"
-            "## Getting Started\n"
-            "How a developer would begin working with this "
-            "codebase (entry points, key files to read "
-            "first).\n\n"
-            "## Technology Stack\n"
-            "Key frameworks, libraries, and tools used.\n\n"
-            "Output Markdown only."
-        )
-    else:
-        sections.append(
-            f"Write a comprehensive wiki page for"
-            f' "{spec.title}". Structure:\n\n'
-            "## Overview\n"
-            "Brief description of this component's role, "
-            "purpose, and design rationale.\n\n"
-            "## Architecture\n"
-            "Include a Mermaid diagram if it helps explain "
-            "relationships (class diagram, flowchart, or "
-            "sequence diagram).\n"
-            "Only include a diagram if it adds genuine "
-            "value — not every page needs one.\n\n"
-            "## Key Components\n"
-            "For each major class/function in this module:\n"
-            "- What it does and why it exists\n"
-            "- Its interface/signature\n"
-            "- Key implementation details\n"
-            "- Usage example from the codebase if available\n"
-            "After each subsection, cite the source: "
-            "*Source: file.py:line-line*\n\n"
-            "## Dependencies & Interactions\n"
-            "How this module connects to other parts of the "
-            "codebase.\n"
-            "What it depends on and what depends on it.\n\n"
-            "## Source Files\n"
-            "Table or list of all source files covered by "
-            "this page with brief descriptions.\n\n"
-            "Output Markdown only."
-        )
-
-    return "\n\n".join(sections)
-
-
 async def generate_page(
     spec: WikiPageSpec,
     store: FAISSStore,
     llm: LLMProvider,
+    fast_llm: LLMProvider,
     embedding: EmbeddingProvider,
     repo_name: str,
     top_k: int = 12,
@@ -413,74 +204,33 @@ async def generate_page(
     wiki_language: str = "en",
     child_contents: list[PageResult] | None = None,
 ) -> PageResult:
-    """Generate a single wiki page using multi-query RAG and an LLM.
+    """Generate a wiki page using the 4-pass pipeline.
 
-    **Multi-query RAG strategy**: Instead of a single embedding query, up to
-    three queries are constructed and embedded independently:
-
-    1. ``"{title} {first 5 file paths}"`` — anchors the search to the page's
-       assigned files.
-    2. ``"{purpose}"`` — (added when *spec.purpose* is non-empty) retrieves
-       chunks semantically related to the page's stated goal.
-    3. ``"{entity_name1} {entity_name2} ..."`` — (added when *entity_details*
-       is non-empty) targets chunks that mention specific classes or functions.
-
-    All query vectors are passed to
-    :meth:`~worker.pipeline.rag_indexer.FAISSStore.multi_search` (or
-    :meth:`~worker.pipeline.rag_indexer.FAISSStore.search` for a single
-    query), which deduplicates results so the same chunk is not sent to the
-    LLM twice.
-
-    Args:
-        spec: The :class:`WikiPageSpec` describing the page to generate.
-        store: A loaded :class:`~worker.pipeline.rag_indexer.FAISSStore`
-            containing the repository's indexed chunks.
-        llm: An :class:`~worker.llm.base.LLMProvider` instance used to
-            generate the Markdown content.
-        embedding: An :class:`~worker.embedding.base.EmbeddingProvider`
-            instance used to embed the search queries.
-        repo_name: Human-readable repository name included in the prompt.
-        top_k: Number of nearest neighbours to retrieve *per query* before
-            deduplication.  Defaults to ``12``.
-        dep_info: Optional dependency info dict with keys ``"depends_on"``,
-            ``"depended_by"``, and ``"external_deps"`` (all ``list[str]``).
-        entity_details: Optional list of entity dicts (classes, functions)
-            from the AST analysis stage; used both as additional query text
-            and formatted inline in the prompt.
-        on_retry: Optional callback invoked on each retry by ``async_retry``
-            (useful for progress reporting).
-
-    Returns:
-        PageResult: A :class:`PageResult` with ``slug``, ``title``, and
-        ``content`` (the LLM-generated Markdown string).
-
-    Example:
-        >>> result = await generate_page(
-        ...     spec=WikiPageSpec(title="API Gateway", purpose="Handles HTTP.",
-        ...                       files=["api/main.py"]),
-        ...     store=store,
-        ...     llm=llm_provider,
-        ...     embedding=embedding_provider,
-        ...     repo_name="owner/repo",
-        ... )
-        >>> result.slug
-        'api-gateway'
-        >>> result.content[:20]
-        '## Overview\\n\\nThe AP'
+    Pass 1 (outline): fast_llm produces a structured outline.
+    Pass 2 (draft): llm generates full Markdown from the outline.
+    Pass 3 (fact-check): fast_llm verifies key claims against source.
+    Pass 4 (revision): llm fixes issues if fact-check fails (max 1 attempt).
     """
-    # Multi-query RAG: generate multiple semantic queries for better coverage
-    queries = [f"{spec.title} {' '.join((spec.files or [])[:5])}"]
+    from worker.pipeline.diagram_post_processor import ensure_diagram_headers
+    from worker.pipeline.fact_check import (
+        run_fact_check,
+        run_targeted_revision,
+        strip_failed_claim,
+        strip_failed_diagram,
+    )
+    from worker.pipeline.page_draft import build_draft_prompt, generate_draft
+    from worker.pipeline.page_outline import generate_page_outline
+    from worker.utils.mermaid import sanitize_mermaid_blocks
 
+    # ── RAG retrieval ──
+    queries = [f"{spec.title} {' '.join((spec.files or [])[:5])}"]
     if spec.purpose:
         queries.append(spec.purpose)
-
-    # Add entity names as queries for targeted retrieval
     if entity_details:
         entity_names = [e.get("name", "") for e in entity_details[:5] if e.get("name")]
         if entity_names:
             queries.append(" ".join(entity_names))
 
-    # Embed all queries and do multi-search
     query_vecs = []
     for q in queries:
         vec = await async_retry(
@@ -492,35 +242,104 @@ async def generate_page(
         query_vecs.append(vec)
 
     if len(query_vecs) > 1:
-        context_chunks = store.multi_search(query_vecs, k=top_k)
+        context_chunks = store.multi_search(query_vecs, k=top_k, doc_k=1)
     else:
-        context_chunks = store.search(query_vecs[0], k=top_k)
+        context_chunks = store.search(query_vecs[0], k=top_k, doc_k=1)
 
-    prompt = _build_page_prompt(
-        spec,
-        context_chunks,
-        repo_name,
-        dep_info,
-        entity_details,
-        child_contents=child_contents,
-    )
-    system = _SYSTEM + get_language_instruction(wiki_language)
-    content = await async_retry(
-        llm.generate,
-        prompt,
-        system=system,
-        transient_exceptions=TRANSIENT_EXCEPTIONS,
+    # ── Build reusable context strings ──
+    entity_summaries = _format_entity_details(entity_details or [])
+    dep_info_str = None
+    if dep_info:
+        dep_lines = []
+        for key in ("depends_on", "depended_by", "external_deps"):
+            vals = dep_info.get(key, [])
+            if vals:
+                dep_lines.append(f"- {key}: {', '.join(str(v) for v in vals[:10])}")
+        dep_info_str = "\n".join(dep_lines) if dep_lines else None
+
+    child_titles = [c.title for c in child_contents] if child_contents else None
+
+    # ── Pass 1: Outline (fast model) ──
+    outline = await generate_page_outline(
+        spec=spec,
+        entity_summaries=entity_summaries,
+        dep_info=dep_info_str,
+        fast_llm=fast_llm,
         on_retry=on_retry,
+        child_titles=child_titles,
+        wiki_language=wiki_language,
     )
 
-    content = sanitize_mermaid_blocks(content)
-    return PageResult(slug=spec.slug, title=spec.title, content=content)
+    # ── Pass 2: Draft (main model) ──
+    draft = await generate_draft(
+        spec=spec,
+        outline=outline,
+        context_chunks=context_chunks,
+        repo_name=repo_name,
+        llm=llm,
+        dep_info=dep_info,
+        entity_details=entity_details,
+        child_contents=child_contents,
+        on_retry=on_retry,
+        wiki_language=wiki_language,
+    )
+
+    # ── Pass 3: Fact-check (fast model) ──
+    targeted_chunks = _format_context_chunks(context_chunks)
+    fc_result = await run_fact_check(
+        draft=draft,
+        outline=outline,
+        entity_summaries=entity_summaries,
+        dep_info=dep_info_str,
+        targeted_chunks=targeted_chunks,
+        fast_llm=fast_llm,
+        on_retry=on_retry,
+        wiki_language=wiki_language,
+    )
+
+    # ── Pass 4: Targeted revision (main model, conditional) ──
+    if fc_result.verdict == "fail" and fc_result.issues:
+        context_segments = build_draft_prompt(
+            spec=spec,
+            outline=outline,
+            context_chunks=context_chunks,
+            repo_name=repo_name,
+            dep_info=dep_info,
+            entity_details=entity_details,
+            child_contents=child_contents,
+        )
+        cache_segs = [s for s in context_segments if s.cacheable]
+
+        draft = await run_targeted_revision(
+            draft=draft,
+            issues=fc_result.issues,
+            context_segments=cache_segs,
+            llm=llm,
+            on_retry=on_retry,
+            wiki_language=wiki_language,
+        )
+
+        # Deterministic fallback: strip any still-flagged issues
+        for issue in fc_result.issues:
+            if issue.kind == "claim" and issue.claim:
+                draft = strip_failed_claim(draft, issue.claim, issue.reason)
+            elif issue.kind == "diagram" and issue.diagram_index is not None:
+                draft = strip_failed_diagram(
+                    draft, issue.section, issue.diagram_index, issue.reason
+                )
+
+    # ── Post-processing ──
+    draft = ensure_diagram_headers(draft, default_source_files=spec.files)
+    draft = sanitize_mermaid_blocks(draft)
+
+    return PageResult(slug=spec.slug, title=spec.title, content=draft)
 
 
 async def generate_page_batch(
     specs_with_children: list[tuple[WikiPageSpec, list[PageResult] | None]],
     store: FAISSStore,
     llm: LLMProvider,
+    fast_llm: LLMProvider,
     embedding: EmbeddingProvider,
     repo_name: str,
     file_analysis: FileAnalysis,
@@ -528,14 +347,14 @@ async def generate_page_batch(
     on_retry: OnRetryCallback | None = None,
     wiki_language: str = "en",
 ) -> list[PageResult]:
-    """Generate all pages in a batch using llm.generate_batch()."""
+    """Generate all pages in a batch using the multi-pass pipeline."""
+    import asyncio
+
     from worker.pipeline.dependency_graph import summarize_page_deps
 
-    prompts: list[str] = []
-    specs_list: list[WikiPageSpec] = []
-
-    for spec, children in specs_with_children:
-        # Collect entities and deps for this page
+    async def _gen_one(
+        spec: WikiPageSpec, children: list[PageResult] | None
+    ) -> PageResult:
         entities = []
         for rel_path in spec.files or []:
             file_info = file_analysis.files.get(rel_path)
@@ -547,59 +366,29 @@ async def generate_page_batch(
         dep_info_or_none = dep_info if any(dep_info.values()) else None
         entities_or_none = entities if entities else None
 
-        # RAG retrieval
-        queries = [f"{spec.title} {' '.join((spec.files or [])[:5])}"]
-        if spec.purpose:
-            queries.append(spec.purpose)
-        if entities_or_none:
-            entity_names = [
-                e.get("name", "") for e in entities_or_none[:5] if e.get("name")
-            ]
-            if entity_names:
-                queries.append(" ".join(entity_names))
-
-        query_vecs = []
-        for q in queries:
-            vec = await async_retry(
-                embedding.embed,
-                q,
-                transient_exceptions=TRANSIENT_EXCEPTIONS,
-                on_retry=on_retry,
-            )
-            query_vecs.append(vec)
-
-        if len(query_vecs) > 1:
-            context_chunks = store.multi_search(query_vecs, k=12)
-        else:
-            context_chunks = store.search(query_vecs[0], k=12)
-
-        prompt = _build_page_prompt(
-            spec,
-            context_chunks,
-            repo_name,
-            dep_info_or_none,
-            entities_or_none,
+        return await generate_page(
+            spec=spec,
+            store=store,
+            llm=llm,
+            fast_llm=fast_llm,
+            embedding=embedding,
+            repo_name=repo_name,
+            dep_info=dep_info_or_none,
+            entity_details=entities_or_none,
+            on_retry=on_retry,
+            wiki_language=wiki_language,
             child_contents=children,
         )
-        prompts.append(prompt)
-        specs_list.append(spec)
 
-    system = _SYSTEM + get_language_instruction(wiki_language)
-    responses = await async_retry(
-        llm.generate_batch,
-        prompts,
-        system=system,
-        transient_exceptions=TRANSIENT_EXCEPTIONS,
-        on_retry=on_retry,
+    sem = asyncio.Semaphore(5)
+
+    async def _bounded(
+        spec: WikiPageSpec, children: list[PageResult] | None
+    ) -> PageResult:
+        async with sem:
+            return await _gen_one(spec, children)
+
+    results = await asyncio.gather(
+        *[_bounded(spec, children) for spec, children in specs_with_children]
     )
-    if len(responses) != len(specs_list):
-        raise ValueError(
-            f"Expected {len(specs_list)} batch responses, got {len(responses)}"
-        )
-
-    results: list[PageResult] = []
-    for spec, content in zip(specs_list, responses):
-        content = sanitize_mermaid_blocks(content)
-        results.append(PageResult(slug=spec.slug, title=spec.title, content=content))
-
-    return results
+    return list(results)
