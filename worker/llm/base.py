@@ -7,6 +7,8 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from typing import Any
 
+from worker.llm.prompt_segment import PromptInput, normalize_prompt, segments_to_text
+
 logger = logging.getLogger("worker.llm")
 
 
@@ -30,25 +32,25 @@ def _truncate(text: str, max_len: int = 2000) -> str:
 
 class LLMProvider(ABC):
     @abstractmethod
-    async def generate(self, prompt: str, system: str = "") -> str:
+    async def generate(self, prompt: PromptInput, system: PromptInput = "") -> str:
         """Generate text from a prompt. Returns the full response string."""
 
     @abstractmethod
     async def generate_structured(
-        self, prompt: str, schema: dict[str, Any], system: str = ""
+        self, prompt: PromptInput, schema: dict[str, Any], system: PromptInput = ""
     ) -> dict[str, Any]:
         """Generate and parse a JSON response matching the given schema."""
 
     @abstractmethod
     async def generate_stream(
-        self, prompt: str, system: str = ""
+        self, prompt: PromptInput, system: PromptInput = ""
     ) -> AsyncIterator[str]:
         """Async generator that yields text chunks as they arrive."""
 
     async def generate_batch(
         self,
-        prompts: list[str],
-        system: str = "",
+        prompts: list[PromptInput],
+        system: PromptInput = "",
         max_concurrency: int = 5,
     ) -> list[str]:
         """Generate responses for multiple prompts concurrently.
@@ -60,7 +62,7 @@ class LLMProvider(ABC):
             raise ValueError(f"max_concurrency must be >= 1, got {max_concurrency}")
         sem = asyncio.Semaphore(max_concurrency)
 
-        async def _one(prompt: str) -> str:
+        async def _one(prompt: PromptInput) -> str:
             async with sem:
                 return await self.generate(prompt, system)
 
@@ -73,40 +75,42 @@ class LoggingLLMProvider(LLMProvider):
     def __init__(self, provider: LLMProvider):
         self._provider = provider
 
-    async def generate(self, prompt: str, system: str = "") -> str:
+    async def generate(self, prompt: PromptInput, system: PromptInput = "") -> str:
         logger.debug(
             "LLM REQUEST (generate): system=%s, prompt=%s",
-            _truncate(system),
-            _truncate(prompt),
+            _truncate(segments_to_text(normalize_prompt(system))),
+            _truncate(segments_to_text(normalize_prompt(prompt))),
         )
-        response = await self._provider.generate(prompt, system)
+        response = await self._provider.generate(prompt, system=system)
         logger.debug("LLM RESPONSE (generate): %s", _truncate(response))
         return response
 
     async def generate_structured(
-        self, prompt: str, schema: dict[str, Any], system: str = ""
+        self, prompt: PromptInput, schema: dict[str, Any], system: PromptInput = ""
     ) -> dict[str, Any]:
         logger.debug(
             "LLM REQUEST (structured): system=%s, schema=%s, prompt=%s",
-            _truncate(system),
+            _truncate(segments_to_text(normalize_prompt(system))),
             json.dumps(schema),
-            _truncate(prompt),
+            _truncate(segments_to_text(normalize_prompt(prompt))),
         )
-        response = await self._provider.generate_structured(prompt, schema, system)
+        response = await self._provider.generate_structured(
+            prompt, schema, system=system
+        )
         logger.debug("LLM RESPONSE (structured): %s", _truncate(json.dumps(response)))
         return response
 
     async def generate_stream(
-        self, prompt: str, system: str = ""
+        self, prompt: PromptInput, system: PromptInput = ""
     ) -> AsyncIterator[str]:
         logger.debug(
             "LLM REQUEST (stream): system=%s, prompt=%s",
-            _truncate(system),
-            _truncate(prompt),
+            _truncate(segments_to_text(normalize_prompt(system))),
+            _truncate(segments_to_text(normalize_prompt(prompt))),
         )
         logger.debug("LLM RESPONSE (stream): [STARTING STREAM]")
         full_response = []
-        async for chunk in self._provider.generate_stream(prompt, system):
+        async for chunk in self._provider.generate_stream(prompt, system=system):
             full_response.append(chunk)
             yield chunk
         logger.debug(
@@ -115,16 +119,18 @@ class LoggingLLMProvider(LLMProvider):
 
     async def generate_batch(
         self,
-        prompts: list[str],
-        system: str = "",
+        prompts: list[PromptInput],
+        system: PromptInput = "",
         max_concurrency: int = 5,
     ) -> list[str]:
         logger.debug(
             "LLM REQUEST (batch): %d prompts, system=%s",
             len(prompts),
-            _truncate(system),
+            _truncate(segments_to_text(normalize_prompt(system))),
         )
-        results = await self._provider.generate_batch(prompts, system, max_concurrency)
+        results = await self._provider.generate_batch(
+            prompts, system=system, max_concurrency=max_concurrency
+        )
         logger.debug(
             "LLM RESPONSE (batch): %d responses, total %d chars",
             len(results),
