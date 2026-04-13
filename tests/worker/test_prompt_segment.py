@@ -179,3 +179,70 @@ def test_anthropic_segments_to_content_all_cacheable():
     assert "cache_control" not in result[1]
     assert "cache_control" in result[2]
     assert result[2]["cache_control"]["type"] == "ephemeral"
+
+
+async def test_openai_provider_concatenates_segments(monkeypatch):
+    """OpenAI provider should concatenate segment texts in order."""
+    from worker.llm.openai_provider import OpenAIProvider
+
+    provider = OpenAIProvider(api_key="test-key", model="test-model")
+
+    captured_kwargs = {}
+
+    async def mock_create(**kwargs):
+        captured_kwargs.update(kwargs)
+        from unittest.mock import MagicMock
+
+        resp = MagicMock()
+        resp.choices = [MagicMock(message=MagicMock(content="ok"))]
+        return resp
+
+    monkeypatch.setattr(provider._client.chat.completions, "create", mock_create)
+
+    segments = [
+        PromptSegment(text="cached part", cacheable=True),
+        PromptSegment(text=" variable part"),
+    ]
+    await provider.generate(segments, system="sys")
+
+    messages = captured_kwargs["messages"]
+    # System + user
+    assert messages[0] == {"role": "system", "content": "sys"}
+    assert messages[1] == {"role": "user", "content": "cached part variable part"}
+
+
+async def test_ollama_provider_concatenates_segments(monkeypatch):
+    """Ollama provider should concatenate segment texts."""
+    from worker.llm.ollama_provider import OllamaProvider
+
+    provider = OllamaProvider(model="test", base_url="http://localhost:11434")
+
+    captured_payload = {}
+
+    async def mock_post(url, json=None):
+        captured_payload.update(json)
+        from unittest.mock import MagicMock
+
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = {"response": "ok"}
+        return resp
+
+    from unittest.mock import AsyncMock, MagicMock
+
+    import httpx
+
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(side_effect=mock_post)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: mock_client)
+
+    segments = [
+        PromptSegment(text="cached ", cacheable=True),
+        PromptSegment(text="tail"),
+    ]
+    await provider.generate(segments, system="sys")
+
+    assert captured_payload["prompt"] == "cached tail"
+    assert captured_payload["system"] == "sys"
