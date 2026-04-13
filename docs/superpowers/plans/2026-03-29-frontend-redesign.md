@@ -8,6 +8,6 @@
 
 ---
 
-## Status: Implemented (Phase 2)
+## Status: Implemented (Wiki Optimization Phase)
 
 The frontend redesign is fully implemented as part of the Phase 2 launch.

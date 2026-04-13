@@ -4,7 +4,7 @@ This file provides guidance to GEMINI when working with code in this repository.
 
 ## Project Status
 
-AutoWiki **Phase 1 and Phase 2 are complete**. Phase 1 tagged `v0.1.0-phase1`; Phase 2 (chat, diagrams, incremental refresh) merged via PR #4.
+AutoWiki **Phase 1, Phase 2, and the Wiki Optimization Phase are complete**. Phase 1 tagged `v0.1.0-phase1`; Phase 2 (chat, diagrams, incremental refresh) merged via PR #4; Wiki Optimization (two-phase planning, bottom-up generation, unified AST) completed 2026-04-12.
 
 ## What AutoWiki Is
 
@@ -145,7 +145,8 @@ Non-Docker: `autowiki serve` spawns API + worker + Next.js as subprocesses.
 ## Phased Delivery
 
 - **Phase 1** ✅ — Core pipeline (index + static wiki + REST API + web UI + CLI)
-- **Phase 2** ✅ — Incremental refresh + Q&A chat + dependency diagrams (merged PR #4)
+- **Phase 2** ✅ — Incremental refresh + Q&A chat + dependency diagrams
+- **Wiki Optimization Phase** ✅ — Two-phase planning, bottom-up generation, unified AST, multi-language support (completed 2026-04-12)
 - **Phase 3** — Deep Research mode + MCP server
 - **Phase 4** — GitHub webhooks + user steering (`.autowiki/wiki.json`)
 - **Phase 5** — GitLab/Bitbucket + hybrid search

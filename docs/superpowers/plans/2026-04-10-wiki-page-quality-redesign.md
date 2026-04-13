@@ -1,6 +1,6 @@
 # Wiki Page Quality Redesign — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers: REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking. Status: Implemented (Wiki Optimization Phase)
 
 **Goal:** Replace the single-pass wiki page generator with a multi-pass pipeline (outline → draft → fact-check → revision) that produces better-grounded, hallucination-resistant wiki pages with richer Mermaid diagrams, while keeping cost flat via a fast/main model split and prompt caching.
 

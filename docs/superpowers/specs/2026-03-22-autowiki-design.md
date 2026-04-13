@@ -175,6 +175,6 @@ wiki_pages (
 
 ---
 
-## Status: Phase 2 Complete (2026-04-12)
+## Status: Wiki Optimization Phase Complete (2026-04-12)
 
 Phase 1 and Phase 2 are fully implemented. The system now supports hierarchical wiki generation, incremental refresh, Q&A chat, and per-page architecture diagrams.

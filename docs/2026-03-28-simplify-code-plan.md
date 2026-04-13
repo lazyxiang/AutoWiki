@@ -59,6 +59,6 @@ Used a YAML extension field (`x-common-env: &common-env`) to DRY the 13 identica
 
 ---
 
-## Status: Implemented (Phase 2)
+## Status: Implemented (Wiki Optimization Phase)
 
 This plan is fully implemented. Note that several helpers planned for `worker/jobs.py` were ultimately rendered unnecessary or were superseded by the **Pipeline Refactoring Plan** which moved the logic into more granular pipeline modules (like `ast_analysis.py`).

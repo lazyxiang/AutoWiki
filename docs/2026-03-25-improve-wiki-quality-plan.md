@@ -344,7 +344,7 @@ description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 ---
 
-## Status: Outdated (Phase 2)
+## Status: Outdated (Wiki Optimization Phase)
 
 Most components of this plan were successfully implemented during Phase 1, but several technical details were superseded by the **Pipeline Refactoring Plan** (2026-03-28) in Phase 2:
 

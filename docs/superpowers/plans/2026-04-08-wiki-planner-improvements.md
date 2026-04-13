@@ -1,6 +1,6 @@
 # Wiki Planner & Generation Pipeline Improvements — Implementation Plan
 
-> **Status: COMPLETE** — All 7 planned tasks implemented and merged to `feature/wiki-planner-improvements`. Additional scope items (Stage 7 removal, `--reuse-index`, per-phase validation, importance-ranked file capping) also implemented and committed.
+> **Status: Implemented (Wiki Optimization Phase)** — All 7 planned tasks implemented and merged to `feature/wiki-planner-improvements`. Additional scope items (Stage 7 removal, `--reuse-index`, per-phase validation, importance-ranked file capping) also implemented and committed.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 

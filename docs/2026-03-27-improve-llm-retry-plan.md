@@ -57,7 +57,7 @@ const { repo_id, job_id } = await submitRepo(url, force); (OUTDATED: reuseIndex)
 
 ---
 
-## Status: Implemented (Phase 2)
+## Status: Implemented (Wiki Optimization Phase)
 
 This plan is fully implemented. Note the following naming and architectural changes in the final version:
 - The `force` flag was renamed to `reuse_index` in the API and worker. 

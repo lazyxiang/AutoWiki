@@ -158,6 +158,6 @@ git commit -m "fix: add base styles for Markdown content rendering"
 
 ---
 
-## Status: Implemented (Phase 2)
+## Status: Implemented (Wiki Optimization Phase)
 
 This plan has been fully implemented as part of Phase 1 and 2. Note that the hierarchical sidebar now uses `parent` title references in the `WikiPlan` (internal) which are translated to `parent_slug` for the API and frontend, following the **Pipeline Refactoring Plan**.

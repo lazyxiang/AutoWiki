@@ -44,6 +44,6 @@ Replicate the clean, modern, light-mode-first visual style of `deepwiki.com` acr
 
 ---
 
-## Status: Implemented (Phase 2)
+## Status: Implemented (Wiki Optimization Phase)
 
-This design was fully implemented in Phase 2.
+This design was fully implemented in the Wiki Optimization Phase.
