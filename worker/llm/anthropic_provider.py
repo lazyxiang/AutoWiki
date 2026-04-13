@@ -76,6 +76,10 @@ class AnthropicProvider(LLMProvider):
         self, prompt: PromptInput, schema: dict[str, Any], system: PromptInput = ""
     ) -> dict[str, Any]:
         schema_str = json.dumps(schema)
+        # Flatten prompt to plain text: the appended JSON schema suffix changes the
+        # user message on every call, making prefix caching inapplicable for the
+        # user turn.  The system parameter is forwarded as-is so system caching
+        # still applies.
         prompt_text = segments_to_text(normalize_prompt(prompt))
         json_prompt = (
             f"{prompt_text}\n\nRespond ONLY with valid JSON"
@@ -87,6 +91,9 @@ class AnthropicProvider(LLMProvider):
     async def generate_stream(
         self, prompt: PromptInput, system: PromptInput = ""
     ) -> AsyncIterator[str]:
+        # Flatten both prompt and system to plain text: streaming responses are
+        # not reused across requests, so structured cache_control markers would
+        # never produce cache hits and are intentionally omitted here.
         prompt_text = segments_to_text(normalize_prompt(prompt))
         kwargs: dict[str, Any] = {
             "model": self._model,
@@ -94,6 +101,7 @@ class AnthropicProvider(LLMProvider):
             "messages": [{"role": "user", "content": prompt_text}],
         }
         if system:
+            # Flatten for the same reason as prompt above.
             kwargs["system"] = segments_to_text(normalize_prompt(system))
         async with self._client.messages.stream(**kwargs) as stream:
             async for text in stream.text_stream:

@@ -144,3 +144,38 @@ async def test_logging_provider_forwards_string():
     result = await provider.generate("plain prompt", system="sys")
     inner.generate.assert_called_once_with("plain prompt", system="sys")
     assert result == "response"
+
+
+def test_anthropic_segments_to_content_max_breakpoints():
+    from worker.llm.anthropic_provider import _segments_to_anthropic_content
+
+    # 5 alternating cacheable runs separated by non-cacheable segments
+    segments = []
+    for i in range(5):
+        segments.append(PromptSegment(text=f"cached-{i}", cacheable=True))
+        if i < 4:
+            segments.append(PromptSegment(text=f"gap-{i}", cacheable=False))
+
+    result = _segments_to_anthropic_content(segments)
+    assert isinstance(result, list)
+    # Count blocks with cache_control
+    cached_blocks = [b for b in result if "cache_control" in b]
+    assert len(cached_blocks) == 4  # Only first 4 runs get cache_control
+
+
+def test_anthropic_segments_to_content_all_cacheable():
+    from worker.llm.anthropic_provider import _segments_to_anthropic_content
+
+    segments = [
+        PromptSegment(text="first", cacheable=True),
+        PromptSegment(text="second", cacheable=True),
+        PromptSegment(text="third", cacheable=True),
+    ]
+    result = _segments_to_anthropic_content(segments)
+    assert isinstance(result, list)
+    assert len(result) == 3
+    # Only last gets cache_control
+    assert "cache_control" not in result[0]
+    assert "cache_control" not in result[1]
+    assert "cache_control" in result[2]
+    assert result[2]["cache_control"]["type"] == "ephemeral"
