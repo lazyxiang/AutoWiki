@@ -51,3 +51,9 @@ def test_no_mermaid_blocks_returns_unchanged():
     md = "## Section\n\nJust text, no diagrams.\n"
     result = ensure_diagram_headers(md, default_source_files=["main.py"])
     assert result == md
+
+
+def test_missing_source_no_defaults_uses_unknown():
+    md = "```mermaid\nflowchart TD\n  A-->B\n```\n"
+    result = ensure_diagram_headers(md, default_source_files=None)
+    assert "*Source: unknown*" in result
