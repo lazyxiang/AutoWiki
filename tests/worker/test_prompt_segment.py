@@ -41,3 +41,30 @@ def test_segments_to_text():
 
 def test_segments_to_text_empty():
     assert segments_to_text([]) == ""
+
+
+async def test_logging_provider_forwards_segment_list():
+    from unittest.mock import AsyncMock
+
+    from worker.llm.base import LoggingLLMProvider
+
+    inner = AsyncMock()
+    inner.generate.return_value = "response"
+    provider = LoggingLLMProvider(inner)
+    segments = [PromptSegment(text="cached", cacheable=True)]
+    result = await provider.generate(segments, system="sys")
+    inner.generate.assert_called_once_with(segments, system="sys")
+    assert result == "response"
+
+
+async def test_logging_provider_forwards_string():
+    from unittest.mock import AsyncMock
+
+    from worker.llm.base import LoggingLLMProvider
+
+    inner = AsyncMock()
+    inner.generate.return_value = "response"
+    provider = LoggingLLMProvider(inner)
+    result = await provider.generate("plain prompt", system="sys")
+    inner.generate.assert_called_once_with("plain prompt", system="sys")
+    assert result == "response"
