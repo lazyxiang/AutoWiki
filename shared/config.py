@@ -14,8 +14,10 @@ class LLMConfig(BaseSettings):
         "anthropic", "google", "openai", "openai-compatible", "ollama"
     ] = "anthropic"
     model: str = "claude-sonnet-4-6"
+    fast_model: str = ""
     api_key: str = ""
     base_url: str = ""
+    cache_ttl: Literal["short", "long"] = "short"
 
 
 class EmbeddingConfig(BaseSettings):

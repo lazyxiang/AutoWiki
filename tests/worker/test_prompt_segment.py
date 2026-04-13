@@ -246,3 +246,56 @@ async def test_ollama_provider_concatenates_segments(monkeypatch):
 
     assert captured_payload["prompt"] == "cached tail"
     assert captured_payload["system"] == "sys"
+
+
+def test_llm_config_has_fast_model():
+    from shared.config import LLMConfig
+
+    cfg = LLMConfig(provider="anthropic", model="claude-sonnet-4-6")
+    # fast_model defaults to empty string (meaning same as model)
+    assert cfg.fast_model == ""
+
+
+def test_llm_config_has_cache_ttl():
+    from shared.config import LLMConfig
+
+    cfg = LLMConfig()
+    assert cfg.cache_ttl == "short"
+
+
+def test_llm_config_cache_ttl_long():
+    from shared.config import LLMConfig
+
+    cfg = LLMConfig(cache_ttl="long")
+    assert cfg.cache_ttl == "long"
+
+
+def test_make_fast_llm_provider_returns_same_when_no_fast_model(monkeypatch):
+    """When fast_model is empty, make_fast_llm_provider returns the same provider."""
+    from shared.config import Config
+    from worker.llm import make_fast_llm_provider, make_llm_provider
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    cfg = Config()
+    main = make_llm_provider(cfg)
+    fast = make_fast_llm_provider(cfg, main)
+    assert fast is main
+
+
+def test_make_fast_llm_provider_returns_different_when_fast_model_set(monkeypatch):
+    """When fast_model is set, make_fast_llm_provider creates a new provider."""
+    from shared.config import Config, LLMConfig
+    from worker.llm import make_fast_llm_provider, make_llm_provider
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    cfg = Config(
+        llm=LLMConfig(
+            provider="anthropic",
+            model="claude-sonnet-4-6",
+            fast_model="claude-haiku-4-5",
+            api_key="test-key",
+        )
+    )
+    main = make_llm_provider(cfg)
+    fast = make_fast_llm_provider(cfg, main)
+    assert fast is not main
