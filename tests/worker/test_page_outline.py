@@ -181,6 +181,11 @@ async def test_generate_page_outline_with_mock_llm():
     assert outline.sections[1].diagram.type == "flowchart"
     assert len(outline.key_claims) == 3
 
+    # Verify the context segment is cacheable for prompt caching
+    call_args = mock_fast_llm.generate_structured.call_args
+    segments_passed = call_args.args[0]
+    assert segments_passed[0].cacheable is True
+
 
 async def test_generate_page_outline_retries_on_validation_error():
     from worker.pipeline.page_outline import generate_page_outline
