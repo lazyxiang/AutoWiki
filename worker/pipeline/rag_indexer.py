@@ -35,6 +35,14 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
 
+_DOC_EXTENSIONS = frozenset({".md", ".rst", ".txt", ".adoc"})
+
+
+def _is_doc_chunk(meta: dict[str, Any]) -> bool:
+    """Return True if this chunk comes from a documentation file."""
+    file_path = meta.get("file", "")
+    return Path(file_path).suffix.lower() in _DOC_EXTENSIONS
+
 
 def chunk_file_with_lines(
     path: Path,
@@ -339,7 +347,9 @@ class FAISSStore:
         self._index.add(matrix)
         self._metas.extend(metas)
 
-    def search(self, query: np.ndarray, k: int = 5) -> list[dict[str, Any]]:
+    def search(
+        self, query: np.ndarray, k: int = 5, doc_k: int | None = None
+    ) -> list[dict[str, Any]]:
         """Return the *k* most similar chunks to *query*.
 
         The query vector is L2-normalised before the inner-product search so
@@ -350,6 +360,12 @@ class FAISSStore:
                 representing the embedded query.
             k: Number of nearest neighbours to return.  Clamped to
                 ``min(k, index.ntotal)`` automatically.  Defaults to ``5``.
+            doc_k: Maximum number of documentation chunks (files with
+                extensions ``.md``, ``.rst``, ``.txt``, ``.adoc``) to include
+                in the results.  The remaining ``k - doc_k`` slots are filled
+                with code chunks.  Pass ``0`` to exclude all documentation
+                chunks.  Defaults to ``None`` (no partitioning — all results
+                are returned unfiltered).
 
         Returns:
             list[dict[str, Any]]: Up to *k* metadata dicts, ordered by
@@ -369,12 +385,31 @@ class FAISSStore:
             return []
         q = query.astype(np.float32).reshape(1, -1)
         faiss.normalize_L2(q)
-        k = min(k, self._index.ntotal)
-        _, indices = self._index.search(q, k)
-        return [self._metas[i] for i in indices[0] if i >= 0]
+        # Retrieve extra candidates to fill both buckets after partitioning
+        fetch_k = min(k * 2 if doc_k is not None else k, self._index.ntotal)
+        _, indices = self._index.search(q, fetch_k)
+        all_results = [self._metas[i] for i in indices[0] if i >= 0]
+
+        if doc_k is None:
+            return all_results[:k]
+
+        code_k = k - doc_k
+        code_chunks: list[dict[str, Any]] = []
+        doc_chunks: list[dict[str, Any]] = []
+        for meta in all_results:
+            if _is_doc_chunk(meta):
+                if len(doc_chunks) < doc_k:
+                    doc_chunks.append(meta)
+            else:
+                if len(code_chunks) < code_k:
+                    code_chunks.append(meta)
+            if len(code_chunks) >= code_k and len(doc_chunks) >= doc_k:
+                break
+
+        return code_chunks + doc_chunks
 
     def multi_search(
-        self, queries: list[np.ndarray], k: int = 5
+        self, queries: list[np.ndarray], k: int = 5, doc_k: int | None = None
     ) -> list[dict[str, Any]]:
         """Search with multiple query vectors and return deduplicated results.
 
@@ -389,6 +424,9 @@ class FAISSStore:
                 element is a :class:`numpy.ndarray` of shape ``(dimension,)``.
             k: Number of nearest neighbours to retrieve *per query* before
                 deduplication.  Defaults to ``5``.
+            doc_k: Maximum number of documentation chunks to include in the
+                final deduplicated results.  Uses the same extension set as
+                :meth:`search`.  Defaults to ``None`` (no partitioning).
 
         Returns:
             list[dict[str, Any]]: Deduplicated metadata dicts from all queries,
@@ -428,7 +466,21 @@ class FAISSStore:
                     seen_keys.add(dedup_key)
                     results.append(meta)
 
-        return results
+        if doc_k is None:
+            return results
+
+        code_k = k - doc_k
+        code_chunks: list[dict[str, Any]] = []
+        doc_chunks: list[dict[str, Any]] = []
+        for meta in results:
+            if _is_doc_chunk(meta):
+                if len(doc_chunks) < doc_k:
+                    doc_chunks.append(meta)
+            else:
+                if len(code_chunks) < code_k:
+                    code_chunks.append(meta)
+
+        return code_chunks + doc_chunks
 
     def save(self) -> None:
         """Persist the FAISS index and metadata list to disk.
