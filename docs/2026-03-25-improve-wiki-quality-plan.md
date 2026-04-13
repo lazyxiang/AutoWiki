@@ -64,8 +64,8 @@ Entity dict becomes:
 }
 ```
 
-### 2b. Enhanced module tree
-New function `build_enhanced_module_tree()` that returns:
+### 2b. Enhanced module tree (OUTDATED: Replaced by analyze_all_files)
+New function `build_enhanced_module_tree()` (OUTDATED) that returns:
 ```python
 {
     "path": "src/auth",
@@ -113,23 +113,23 @@ New function `chunk_file_with_entities()` that uses AST entity boundaries:
 
 **File: `worker/pipeline/wiki_planner.py`**
 
-### 4a. Add `description` field to PageSpec
+### 4a. Add `description` field to PageSpec (OUTDATED: Renamed to WikiPageSpec.purpose)
 ```python
 @dataclass
-class PageSpec:
+class PageSpec: (OUTDATED)
     title: str
     slug: str
     modules: list[str]
     parent_slug: str | None = None
-    description: str | None = None    # NEW
+    description: str | None = None    # NEW (OUTDATED: purpose)
 ```
 
-Update `_PLAN_SCHEMA` to include `description` as a required string field.
+Update `_PLAN_SCHEMA` (OUTDATED) to include `description` (OUTDATED: purpose) as a required string field.
 
 ### 4b. Enriched planner prompt
 The new `_build_prompt()` receives and includes:
 - **README excerpt** (first 2000 chars) — gives the LLM repo-level context
-- **Enhanced module tree** with entity summaries (class/function names per module)
+- **Enhanced module tree** (OUTDATED: file summaries) with entity summaries (class/function names per module)
 - **Dependency graph summary** — which modules depend on which
 - **Dependency clusters** — suggested groupings based on import analysis
 
@@ -159,7 +159,7 @@ README (excerpt):
 {readme_content}
 
 Module tree with entities:
-{enhanced_module_tree_json}
+{enhanced_module_tree_json} (OUTDATED: file summaries)
 
 Dependency graph:
 {dependency_summary}
@@ -169,7 +169,7 @@ Suggested clusters (based on import analysis):
 
 Create a hierarchical wiki plan. Guidelines:
 - 5–15 pages depending on repository complexity
-- Each page needs: title, slug, modules, parent_slug (for nesting), description (1-2 sentences explaining the page's purpose)
+- Each page needs: title, slug, modules, parent_slug (for nesting), description (1-2 sentences explaining the page's purpose) (OUTDATED: title, purpose, parent, files)
 - MUST include an "Overview" page as root (parent_slug: null) covering architecture and project purpose
 - Group related modules using the dependency clusters as a guide
 - Create 2-3 levels of hierarchy: Overview → subsystem → detail pages
@@ -188,7 +188,7 @@ Output JSON matching this schema:
 
 ### 5a. Richer generation prompt
 Updated `_build_page_prompt()` receives:
-- `spec.description` — focuses the LLM on what this page should cover
+- `spec.description` (OUTDATED: spec.purpose) — focuses the LLM on what this page should cover
 - Dependency context — what this module depends on and what depends on it
 - Entity details — class/function signatures and docstrings for modules on this page
 
@@ -211,8 +211,8 @@ Rules:
 ```
 Repository: {repo_name}
 Page: {spec.title}
-Purpose: {spec.description}
-Modules: {modules_list}
+Purpose: {spec.description} (OUTDATED: spec.purpose)
+Modules: {modules_list} (OUTDATED: files_list)
 
 Dependencies:
 - This module depends on: {deps_out}
@@ -291,10 +291,10 @@ Update `run_full_index()` to pass new data between stages:
 
 ```
 Stage 1: Ingestion (5-20%) — also extract README content
-Stage 2: AST Analysis (20-30%) — build_enhanced_module_tree with entities
+Stage 2: AST Analysis (20-30%) — build_enhanced_module_tree with entities (OUTDATED: analyze_all_files)
 Stage 2b: Dependency Graph (30-40%) — extract imports, build graph, compute clusters (NEW)
 Stage 3: RAG Indexer (40-55%) — entity-aware chunking with line numbers
-Stage 4: Wiki Planner (55-65%) — receives: enhanced_module_tree + dep_graph + README
+Stage 4: Wiki Planner (55-65%) — receives: enhanced_module_tree + dep_graph + README (OUTDATED: file summaries)
 Stage 5: Page Generator (65-100%) — receives: page spec with description + dep context + entities
 ```
 
@@ -344,13 +344,11 @@ description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 ---
 
-## Verification
+## Status: Outdated (Phase 2)
 
-1. **Unit tests**: `pytest tests/ --ignore=tests/e2e` — all existing + new tests pass
-2. **Integration test**: `pytest tests/test_integration.py` — full pipeline with fixtures
-3. **Manual check**: Run against the fixture repo and verify:
-   - Page plan has descriptions and hierarchy
-   - Generated pages include Mermaid diagrams (Mermaid code blocks)
-   - Source annotations present (e.g., *Source: models.py:5-20*)
-   - Dependency information included in pages
-4. **Frontend**: Verify Mermaid renders in the web UI (requires `npm run dev`)
+Most components of this plan were successfully implemented during Phase 1, but several technical details were superseded by the **Pipeline Refactoring Plan** (2026-03-28) in Phase 2:
+
+- **AST Analysis**: The `build_enhanced_module_tree()` function was replaced by a more unified `analyze_all_files()` approach which returns a `FileAnalysis` object containing all entities.
+- **Wiki Planner**: The `PageSpec` and `PagePlan` data structures were replaced by `WikiPageSpec` and `WikiPlan`.
+- **Field Naming**: The `description` field on pages was renamed to `purpose` for better semantic clarity.
+- **File Assignment**: The planner now assigns individual files to pages instead of directory-based modules.

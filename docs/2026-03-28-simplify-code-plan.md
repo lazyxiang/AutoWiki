@@ -8,25 +8,19 @@ The codebase accumulated duplication across Phase 1 and Phase 2. The biggest pro
 
 ## 1. Decompose `worker/jobs.py` into stage helpers
 
-Extract 7 private helper functions at module level. Both orchestrators call them — each function becomes a readable ~120-line flow instead of a 400-line monolith.
+Extract private helper functions at module level. Both orchestrators call them — each function becomes a readable ~120-line flow instead of a 400-line monolith.
 
-### Helpers extracted
+### Helpers extracted (OUTDATED: Some removed/changed in Refactoring Plan)
 
-| Helper | Replaces |
-|---|---|
-| `_make_on_retry(db_path, job_id)` | Duplicate `_on_retry` closure in both job functions |
-| `_build_file_entities(files, clone_root)` | Per-file AST entity loop duplicated in stages 2 |
-| `_build_module_files(module_tree, clone_root)` | Module→file path dict-building loop duplicated in stages 2b |
-| `_build_module_entity_map(enhanced_tree, file_entities)` | Entity map building loop (full-index version is canonical, includes file/line enrichment) |
-| `_collect_page_context(page_spec, module_entity_map, dep_summary)` | Page entity + dep-info collection loop duplicated in stage 5 |
-| `_prepend_architecture_diagram(content, diagram)` | Regex-based mermaid diagram prepend duplicated in stage 6 |
-| `_make_faiss_store(repo_data_dir, embedding)` | 4-line FAISSStore construction duplicated in stage 3 |
-
-### Result
-
-`run_full_index`: ~383 lines → ~150 lines
-`run_refresh_index`: ~462 lines → ~160 lines
-Total file: ~880 lines → ~660 lines
+| Helper | Replaces | Status |
+|---|---|---|
+| `_make_on_retry(db_path, job_id)` | Duplicate `_on_retry` closure | **Implemented** |
+| `_build_file_entities(files, clone_root)` | Per-file AST entity loop | **Removed** (see Refactoring Plan) |
+| `_build_module_files(module_tree, clone_root)` | Module→file path dict-building | **Removed** (see Refactoring Plan) |
+| `_build_module_entity_map(enhanced_tree, file_entities)` | Entity map building loop | **Removed** (see Refactoring Plan) |
+| `_collect_page_context(page_spec, module_entity_map, dep_summary)` | Page entity + dep-info collection | **Changed** to `_collect_page_entities` |
+| `_prepend_architecture_diagram(content, diagram)` | Regex-based mermaid diagram prepend | **Removed** (see Refactoring Plan) |
+| `_make_faiss_store(repo_data_dir, embedding)` | FAISSStore construction | **Implemented** |
 
 ---
 
@@ -65,29 +59,6 @@ Used a YAML extension field (`x-common-env: &common-env`) to DRY the 13 identica
 
 ---
 
-## Files Modified
+## Status: Implemented (Phase 2)
 
-- `worker/jobs.py`
-- `worker/llm/base.py`
-- `worker/llm/anthropic_provider.py`
-- `worker/llm/openai_provider.py`
-- `worker/llm/ollama_provider.py`
-- `api/queue.py`
-- `web/lib/utils.ts`
-- `web/app/[owner]/[repo]/layout.tsx`
-- `web/app/[owner]/[repo]/page.tsx`
-- `web/app/[owner]/[repo]/chat/page.tsx`
-- `web/app/[owner]/[repo]/graph/page.tsx`
-- `web/app/[owner]/[repo]/[slug]/page.tsx`
-- `docker-compose.yml`
-
----
-
-## Verification
-
-```bash
-uv run ruff check . && uv run ruff format --check .
-pytest tests/ --ignore=tests/e2e   # 127 passed
-cd web && npm run lint
-docker compose config               # valid YAML
-```
+This plan is fully implemented. Note that several helpers planned for `worker/jobs.py` were ultimately rendered unnecessary or were superseded by the **Pipeline Refactoring Plan** which moved the logic into more granular pipeline modules (like `ast_analysis.py`).

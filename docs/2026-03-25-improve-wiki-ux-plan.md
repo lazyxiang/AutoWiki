@@ -6,7 +6,7 @@
 
 **Architecture:** 
 - Extend the `Job` model with `status_description` and propagate it through the worker and API.
-- Update the frontend sidebar to recursively render pages based on `parent_slug`.
+- Update the frontend sidebar to recursively render pages based on `parent_slug`. (OUTDATED: Derived from `parent` title)
 - Add a CSS utility layer for Markdown content to restore formatting lost to Tailwind resets.
 
 **Tech Stack:** Python (FastAPI, SQLAlchemy), Next.js (React 19, Tailwind 4), PostgreSQL/SQLite.
@@ -21,17 +21,17 @@
 - Modify: `shared/models.py`
 - Modify: `shared/database.py` (if needed for migration/init)
 
-- [ ] **Step 1: Add field to `Job` model**
+- [x] **Step 1: Add field to `Job` model**
 ```python
 class Job(Base):
     # ... existing fields
     status_description: Mapped[str | None] = mapped_column(Text, nullable=True)
 ```
 
-- [ ] **Step 2: Update database initialization if necessary**
+- [x] **Step 2: Update database initialization if necessary**
 The `init_db` function in `shared/database.py` uses `Base.metadata.create_all`, which might not handle adding columns to existing tables in development. Since we are in development, we can just drop and recreate or manually update.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 ```bash
 git add shared/models.py
 git commit -m "feat: add status_description field to Job model"
@@ -42,7 +42,7 @@ git commit -m "feat: add status_description field to Job model"
 **Files:**
 - Modify: `worker/jobs.py`
 
-- [ ] **Step 1: Update `_update_job` calls in `run_full_index`**
+- [x] **Step 1: Update `_update_job` calls in `run_full_index`**
 Pass `status_description` to each `_update_job` call.
 Examples:
 - "Cloning repository and fetching files..."
@@ -52,10 +52,10 @@ Examples:
 - "Planning wiki structure..."
 - "Generating page: {title}..."
 
-- [ ] **Step 2: Verify worker updates**
+- [x] **Step 2: Verify worker updates**
 Run a local test if possible or mock the DB session.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 ```bash
 git add worker/jobs.py
 git commit -m "feat: report detailed status descriptions during wiki generation"
@@ -67,13 +67,13 @@ git commit -m "feat: report detailed status descriptions during wiki generation"
 - Modify: `api/routers/jobs.py`
 - Modify: `api/ws/jobs.py`
 
-- [ ] **Step 1: Update Job response schemas**
+- [x] **Step 1: Update Job response schemas**
 Ensure `status_description` is included in the Pydantic models for Job responses.
 
-- [ ] **Step 2: Update WebSocket message format**
+- [x] **Step 2: Update WebSocket message format**
 Include `status_description` in the progress update messages.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 ```bash
 git add api/routers/jobs.py api/ws/jobs.py
 git commit -m "feat: expose status_description in API and WebSocket"
@@ -84,13 +84,13 @@ git commit -m "feat: expose status_description in API and WebSocket"
 **Files:**
 - Modify: `web/components/JobProgressBar.tsx`
 
-- [ ] **Step 1: Update `useJobProgress` hook or direct state**
+- [x] **Step 1: Update `useJobProgress` hook or direct state**
 Ensure the frontend receives and displays the `status_description`.
 
-- [ ] **Step 2: Update UI layout**
+- [x] **Step 2: Update UI layout**
 Replace or augment the generic "running..." text with the specific description.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 ```bash
 git add web/components/JobProgressBar.tsx
 git commit -m "feat: display detailed job status in progress bar"
@@ -101,10 +101,10 @@ git commit -m "feat: display detailed job status in progress bar"
 **Files:**
 - Modify: `web/app/[owner]/[repo]/page.tsx`
 
-- [ ] **Step 1: Implement "Overview" redirection logic**
+- [x] **Step 1: Implement "Overview" redirection logic**
 Look for a page with slug `overview` or containing "Overview" in the title. Redirect there if found; otherwise, redirect to the first available page.
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 ```bash
 git add web/app/[owner]/[repo]/page.tsx
 git commit -m "fix: redirect to overview page by default"
@@ -115,13 +115,13 @@ git commit -m "fix: redirect to overview page by default"
 **Files:**
 - Modify: `web/components/WikiSidebar.tsx`
 
-- [ ] **Step 1: Transform flat pages list into a tree structure**
-Write a utility to build a tree from the pages list using `parent_slug`.
+- [x] **Step 1: Transform flat pages list into a tree structure**
+Write a utility to build a tree from the pages list using `parent_slug`. (OUTDATED: Now uses `parent` title mapping)
 
-- [ ] **Step 2: Implement recursive rendering in `WikiSidebar`**
+- [x] **Step 2: Implement recursive rendering in `WikiSidebar`**
 Render nested `<ul>` elements for children. Add indentation or toggle icons.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 ```bash
 git add web/components/WikiSidebar.tsx
 git commit -m "feat: implement hierarchical sidebar navigation"
@@ -133,7 +133,7 @@ git commit -m "feat: implement hierarchical sidebar navigation"
 - Modify: `web/app/globals.css`
 - Modify: `web/components/WikiPage.tsx`
 
-- [ ] **Step 1: Add `.wiki-content` styles to `globals.css`**
+- [x] **Step 1: Add `.wiki-content` styles to `globals.css`**
 Add styles for `h1`, `h2`, `h3`, `p`, `ul`, `ol`, `li`, `blockquote`, `table`, etc., inside the `.wiki-content` container. Use Tailwind's `@apply` or standard CSS.
 
 ```css
@@ -147,11 +147,17 @@ Add styles for `h1`, `h2`, `h3`, `p`, `ul`, `ol`, `li`, `blockquote`, `table`, e
 /* ... and so on */
 ```
 
-- [ ] **Step 2: Verify rendering**
+- [x] **Step 2: Verify rendering**
 Manually check the wiki page display.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 ```bash
 git add web/app/globals.css
 git commit -m "fix: add base styles for Markdown content rendering"
 ```
+
+---
+
+## Status: Implemented (Phase 2)
+
+This plan has been fully implemented as part of Phase 1 and 2. Note that the hierarchical sidebar now uses `parent` title references in the `WikiPlan` (internal) which are translated to `parent_slug` for the API and frontend, following the **Pipeline Refactoring Plan**.
