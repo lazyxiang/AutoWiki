@@ -449,7 +449,7 @@ class FAISSStore:
         for query in queries:
             q = query.astype(np.float32).reshape(1, -1)
             faiss.normalize_L2(q)
-            actual_k = min(k, self._index.ntotal)
+            actual_k = min(k * 2 if doc_k is not None else k, self._index.ntotal)
             _, indices = self._index.search(q, actual_k)
             for i in indices[0]:
                 if i < 0:
