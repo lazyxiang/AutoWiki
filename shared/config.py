@@ -17,6 +17,9 @@ class LLMConfig(BaseSettings):
     fast_model: str = ""
     api_key: str = ""
     base_url: str = ""
+    # Reserved for future use: controls Anthropic cache TTL
+    # (5-min "short" vs 1-hour "long"). Currently not wired to any provider;
+    # scaffolded here for forward compatibility.
     cache_ttl: Literal["short", "long"] = "short"
 
 
