@@ -1,25 +1,25 @@
-import tempfile
-from pathlib import Path
 from unittest.mock import AsyncMock
 
 import numpy as np
+import pytest
 
 from worker.pipeline.page_generator import (
     PageResult,
     compute_generation_order,
     generate_page,
+    generate_page_batch,
 )
 from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan
 
 
-def _make_store():
+@pytest.fixture
+def page_store(tmp_path):
     from worker.pipeline.rag_indexer import FAISSStore
 
-    tmpdir = tempfile.mkdtemp()
     store = FAISSStore(
         dimension=1536,
-        index_path=Path(tmpdir) / "idx",
-        meta_path=Path(tmpdir) / "meta.pkl",
+        index_path=tmp_path / "idx",
+        meta_path=tmp_path / "meta.pkl",
     )
     store.add(
         [np.zeros(1536, dtype=np.float32)],
@@ -71,8 +71,7 @@ def _make_mock_fast_llm():
     return m
 
 
-async def test_generate_page_multi_pass(mock_embedding):
-    store = _make_store()
+async def test_generate_page_multi_pass(page_store, mock_embedding):
     llm = AsyncMock()
     llm.generate.return_value = (
         "## Overview\n\nThe models module defines data classes.\n\n"
@@ -88,7 +87,7 @@ async def test_generate_page_multi_pass(mock_embedding):
     )
     result = await generate_page(
         spec,
-        store,
+        page_store,
         llm,
         fast_llm,
         mock_embedding,
@@ -102,8 +101,9 @@ async def test_generate_page_multi_pass(mock_embedding):
     assert llm.generate.call_count == 1  # draft only
 
 
-async def test_generate_page_with_fact_check_fail_triggers_revision(mock_embedding):
-    store = _make_store()
+async def test_generate_page_with_fact_check_fail_triggers_revision(
+    page_store, mock_embedding
+):
     llm = AsyncMock()
     fast_llm = AsyncMock()
 
@@ -148,13 +148,138 @@ async def test_generate_page_with_fact_check_fail_triggers_revision(mock_embeddi
     spec = WikiPageSpec(title="Models", purpose="Test.", files=["models.py"])
     await generate_page(
         spec,
-        store,
+        page_store,
         llm,
         fast_llm,
         mock_embedding,
         repo_name="test",
     )
     assert llm.generate.call_count == 2  # draft + revision
+
+
+async def test_generate_page_revision_failure_falls_back_to_strip(
+    page_store, mock_embedding
+):
+    """When revision raises, deterministic fallback strips the flagged claim."""
+    llm = AsyncMock()
+    fast_llm = AsyncMock()
+
+    fast_llm.generate_structured.side_effect = [
+        # Outline — must have ≥1 diagram and 3-8 claims
+        {
+            "sections": [
+                {
+                    "heading": "Overview",
+                    "kind": "prose+diagram",
+                    "focus": "f",
+                    "diagram": {
+                        "type": "flowchart",
+                        "purpose": "Flow",
+                        "source_files": ["models.py"],
+                    },
+                }
+            ],
+            "key_claims": ["bad claim", "claim b", "claim c"],
+        },
+        # Fact-check: fail
+        {
+            "verdict": "fail",
+            "issues": [
+                {
+                    "kind": "claim",
+                    "claim": "bad claim",
+                    "section": "## Overview",
+                    "reason": "Unsupported",
+                    "suggested_fix": "Remove",
+                }
+            ],
+        },
+    ]
+
+    draft_text = (
+        "## Overview\n\nbad claim appears here.\n\n"
+        "```mermaid\nflowchart TD\n  A-->B\n```\n\n*Source: models.py:1-10*"
+    )
+    llm.generate.side_effect = [
+        draft_text,  # draft
+        RuntimeError("LLM unavailable"),  # revision fails
+    ]
+
+    spec = WikiPageSpec(title="Models", purpose="Test.", files=["models.py"])
+    result = await generate_page(
+        spec,
+        page_store,
+        llm,
+        fast_llm,
+        mock_embedding,
+        repo_name="test",
+    )
+    # Fallback strips the claim text from content
+    assert "bad claim" not in result.content
+
+
+async def test_generate_page_batch_returns_all_results(page_store, mock_embedding):
+    """generate_page_batch produces one PageResult per spec."""
+    fast_llm = AsyncMock()
+    # Each page calls outline + fact-check (2 structured calls each)
+    _three_claims = ["claim 1", "claim 2", "claim 3"]
+    _diagram_section = {
+        "heading": "Overview",
+        "kind": "prose+diagram",
+        "focus": "f",
+        "diagram": {"type": "flowchart", "purpose": "Flow", "source_files": []},
+    }
+    fast_llm.generate_structured.side_effect = [
+        {"sections": [_diagram_section], "key_claims": _three_claims},
+        {"verdict": "pass", "issues": []},
+        {
+            "sections": [
+                {
+                    "heading": "Summary",
+                    "kind": "prose+diagram",
+                    "focus": "g",
+                    "diagram": {
+                        "type": "flowchart",
+                        "purpose": "Flow",
+                        "source_files": [],
+                    },
+                }
+            ],
+            "key_claims": _three_claims,
+        },
+        {"verdict": "pass", "issues": []},
+    ]
+
+    llm = AsyncMock()
+    _mermaid = "```mermaid\nflowchart TD\n  A-->B\n```\n\n*Source: a.py:1-5*"
+    llm.generate.side_effect = [
+        f"## Overview\n\nContent for page A.\n\n{_mermaid}",
+        f"## Summary\n\nContent for page B.\n\n{_mermaid}",
+    ]
+
+    from worker.pipeline.ast_analysis import FileAnalysis
+    from worker.pipeline.dependency_graph import DependencyGraph
+
+    spec_a = WikiPageSpec(title="Module A", purpose="A module.", files=["a.py"])
+    spec_b = WikiPageSpec(title="Module B", purpose="B module.", files=["b.py"])
+
+    results = await generate_page_batch(
+        specs_with_children=[(spec_a, None), (spec_b, None)],
+        store=page_store,
+        llm=llm,
+        fast_llm=fast_llm,
+        embedding=mock_embedding,
+        repo_name="testrepo",
+        file_analysis=FileAnalysis(files={}),
+        dep_graph=DependencyGraph(),
+    )
+
+    assert len(results) == 2
+    slugs = {r.slug for r in results}
+    assert slugs == {"module-a", "module-b"}
+    for r in results:
+        assert isinstance(r, PageResult)
+        assert len(r.content) > 0
 
 
 def test_compute_generation_order_unchanged():

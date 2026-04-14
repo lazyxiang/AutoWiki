@@ -310,23 +310,24 @@ async def generate_page(
         )
         cache_segs = [s for s in context_segments if s.cacheable]
 
-        draft = await run_targeted_revision(
-            draft=draft,
-            issues=fc_result.issues,
-            context_segments=cache_segs,
-            llm=llm,
-            on_retry=on_retry,
-            wiki_language=wiki_language,
-        )
-
-        # Deterministic fallback: strip any still-flagged issues
-        for issue in fc_result.issues:
-            if issue.kind == "claim" and issue.claim:
-                draft = strip_failed_claim(draft, issue.claim, issue.reason)
-            elif issue.kind == "diagram" and issue.diagram_index is not None:
-                draft = strip_failed_diagram(
-                    draft, issue.section, issue.diagram_index, issue.reason
-                )
+        try:
+            draft = await run_targeted_revision(
+                draft=draft,
+                issues=fc_result.issues,
+                context_segments=cache_segs,
+                llm=llm,
+                on_retry=on_retry,
+                wiki_language=wiki_language,
+            )
+        except Exception:
+            # Revision failed — deterministic fallback: strip all flagged issues
+            for issue in fc_result.issues:
+                if issue.kind == "claim" and issue.claim:
+                    draft = strip_failed_claim(draft, issue.claim, issue.reason)
+                elif issue.kind == "diagram" and issue.diagram_index is not None:
+                    draft = strip_failed_diagram(
+                        draft, issue.section, issue.diagram_index, issue.reason
+                    )
 
     # ── Post-processing ──
     draft = ensure_diagram_headers(draft, default_source_files=spec.files)
