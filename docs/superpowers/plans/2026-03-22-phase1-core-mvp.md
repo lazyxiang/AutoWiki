@@ -1,10 +1,18 @@
 # AutoWiki Phase 1 — Core MVP Implementation Plan
 
+> **[COMPLETE — STALE IN SEVERAL AREAS]** Implemented and merged (tagged `v0.1.0-phase1`). The following have been superseded by later work:
+>
+> - **5-stage pipeline**: the pipeline grew to 6 stages (Stage 6: Page Generator; the short-lived Stage 7 diagram synthesis was removed). Stage numbering references in this plan are historical.
+> - **`build_module_tree()` / `build_enhanced_module_tree()`**: replaced by `analyze_all_files()` returning a `FileAnalysis` object (pipeline-refactoring work). All code references in this plan to these functions are obsolete.
+> - **`generate_page_plan()`**: renamed to `generate_wiki_plan()` and redesigned as a two-phase LLM planner returning a `WikiPlan`.
+> - **`module_tree.json`**: replaced by `wiki_plan.json` as the internal state file.
+> - **Next.js 15 / Tailwind v3**: the project uses Next.js 16.2.1 with Tailwind v4 (CSS-only config, no `tailwind.config.ts`).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Stand up a working AutoWiki instance that clones a GitHub repo, runs the 5-stage generation pipeline (ingestion → AST → RAG → planning → page generation), serves the wiki via REST API, and displays it in a Next.js web UI — all orchestrated via Docker Compose.
+**Goal:** Stand up a working AutoWiki instance that clones a GitHub repo, runs the ~~5-stage~~ pipeline (ingestion → AST → RAG → planning → page generation), serves the wiki via REST API, and displays it in a Next.js web UI — all orchestrated via Docker Compose.
 
-**Architecture:** Worker + API Gateway split. The FastAPI API Gateway enqueues jobs to Redis; the ARQ Worker executes the 5-stage pipeline asynchronously. Both share a SQLite database and a FAISS vector store on a shared Docker volume. The Next.js frontend talks only to the API Gateway.
+**Architecture:** Worker + API Gateway split. The FastAPI API Gateway enqueues jobs to Redis; the ARQ Worker executes the ~~5-stage~~ pipeline asynchronously. Both share a SQLite database and a FAISS vector store on a shared Docker volume. The Next.js frontend talks only to the API Gateway.
 
 **Tech Stack:** Python 3.12, FastAPI, ARQ (Redis job queue), Tree-Sitter, LangChain text splitter, FAISS, SQLite, Next.js 15, Tailwind CSS, shadcn/ui, Docker Compose, pytest, Playwright.
 

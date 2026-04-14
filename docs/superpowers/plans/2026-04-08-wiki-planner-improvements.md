@@ -1220,7 +1220,7 @@ def mock_llm():
 
 However, `side_effect` as a list is consumed and then raises `StopIteration`. For tests that re-use `mock_llm` across multiple test functions, each test function gets a fresh fixture (pytest creates new fixtures per test). So this is safe.
 
-But tests like `test_full_index_job_updates_status` call `run_full_index` which calls `generate_wiki_plan` (consumes 2 items) then `generate_page` (calls `generate` not `generate_structured`) then `synthesize_diagrams` (calls `generate_structured` once more — but `side_effect` list is exhausted). We need to handle this.
+But tests like `test_full_index_job_updates_status` call `run_full_index` which calls `generate_wiki_plan` (consumes 2 items) then `generate_page` (calls `generate` not `generate_structured`) ~~then `synthesize_diagrams` (calls `generate_structured` once more — but `side_effect` list is exhausted)~~. **Note: `synthesize_diagrams` no longer exists — Stage 7 was removed.**
 
 Change the fixture to use a callable `side_effect` instead:
 

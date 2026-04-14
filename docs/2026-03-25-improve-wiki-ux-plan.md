@@ -1,5 +1,7 @@
 # Wiki Quality and Navigation Improvements Implementation Plan
 
+> **[COMPLETE]** Implemented and merged. `status_description` on `Job`, hierarchical sidebar with parent-slug navigation, and Markdown CSS prose styles are all in place.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Enhance the wiki generation UX by providing detailed progress descriptions, implementing a hierarchical sidebar with smart "overview" redirection, and fixing Markdown rendering styles.

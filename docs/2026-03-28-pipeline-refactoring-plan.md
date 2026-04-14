@@ -1,5 +1,7 @@
 # Pipeline Refactoring Plan
 
+> **[COMPLETE — PARTIALLY STALE]** Implemented and merged. Key deviations: (1) **Stage 7 (`diagram_synthesis.py`)** was subsequently removed in the wiki-planner-improvements work — the section "Stage 7: Architecture Diagram" in this doc is obsolete. (2) **`module_tree.json`** was replaced by `wiki_plan.json` as designed. (3) The helper functions extracted from `jobs.py` (`_build_file_entities`, `_build_module_files`, etc.) were superseded by the `FileAnalysis` single-pass refactoring described here; the specific function names in the helpers table no longer exist. (4) `synthesize_diagrams()` accepted `WikiPlan` briefly but was then removed entirely.
+
 ## Context
 
 The current 6-stage pipeline groups files into "modules" by top-level directory, which prevents identifying granular logical sub-modules. AST analysis runs redundantly (twice on every file). The wiki planner receives coarse directory-based groupings and must infer structure. This refactoring makes the LLM the source of logical structure, eliminates redundancy, and adopts a new wiki.json format that prepares for Phase 4 user steering.

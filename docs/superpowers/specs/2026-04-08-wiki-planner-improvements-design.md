@@ -1,7 +1,7 @@
 # Wiki Planner & Generation Pipeline Improvements
 
 **Date**: 2026-04-08
-**Status**: Implemented (branch `feature/wiki-planner-improvements`)
+**Status**: Implemented and merged to `main` (was branch `feature/wiki-planner-improvements`)
 **Scope**: worker/llm, worker/pipeline, worker/jobs
 
 ## Implementation notes (deviations from spec)
@@ -12,6 +12,8 @@
 - **`--reuse-index` / `reuse_index`**: new bool param threaded from CLI → `IndexRequest` → `enqueue_full_index` → `run_full_index`. When true, existing FAISS files are preserved and Stage 4 is skipped.
 - **Per-phase validation added**: `_validate_outline_structure()` fires immediately after Phase 1; `_validate_assignments()` fires immediately after Phase 2. This replaces the deferred Phase 3 retry loop and error-type classification helpers that were added mid-implementation but then superseded.
 - **Importance-ranked file selection**: when the file count exceeds `max_files`, `_rank_files_by_importance()` selects the most architecturally significant files (scored by entity count, in-degree, entry-point name bonus, shallowness) rather than falling back to alphabetical order.
+- **`_split_large_cluster()` not implemented** (Section 3): the BFS-seed sub-clustering function was designed but never added to `dependency_graph.py`. Large connected components are passed to the planner as-is. The `_build_outline_prompt()` function handles them at the prompt level instead: clusters ≤ 20 files are listed in full; clusters > 20 files receive a summary message ("Large cluster (N files) — see dependency relationships above for internal structure"). The 30-cluster safety cap applies to raw clusters, not sub-clusters.
+- **Section 7 `generate_page_batch` superseded**: the original design had `generate_page_batch` collect flat prompts and call `llm.generate_batch(prompts)`. The 2026-04-10 wiki-page-quality redesign replaced single-pass generation with a 4-pass pipeline (outline → draft → fact-check → revision); `generate_page_batch` now runs individual `generate_page()` calls concurrently via `asyncio.gather`. The `llm.generate_batch()` method still exists on `LLMProvider` and is available for future use.
 
 ## Problem
 
@@ -115,7 +117,7 @@ api/main.py: 0 classes, 1 functions [lifespan]
   "FastAPI application lifecycle and startup configuration."
 worker/jobs.py: 0 classes, 12 functions [_update_job, _update_repo, ...]
   imports: shared.config, shared.database, worker.pipeline.ast_analysis, ... | external: sqlalchemy
-  "ARQ job functions that orchestrate the 7-stage wiki generation pipeline."
+  "ARQ job functions that orchestrate the 6-stage wiki generation pipeline."
 tests/conftest.py: 0 classes, 3 functions [fixture_repo_path, mock_llm, mock_embedding]
   (no dependencies)
 ```
@@ -128,11 +130,15 @@ Update `_build_prompt()` in `wiki_planner.py` and `run_full_index`/`run_refresh_
 
 ## 3. Dependency-Aware Grouping
 
+> **[PARTIALLY IMPLEMENTED]** `format_for_llm_prompt()` change was implemented. `_split_large_cluster()` and the related `_compute_clusters()` modification were **not implemented** — see implementation notes above.
+
 ### File: `worker/pipeline/dependency_graph.py`
 
-Add function:
+~~Add function:~~
 
 ```python
+# NOT IMPLEMENTED — _split_large_cluster() was never added.
+# Large clusters are handled at the prompt builder level instead (see below).
 def _split_large_cluster(
     cluster: list[str],
     edges: dict[str, list[str]],
@@ -150,18 +156,20 @@ def _split_large_cluster(
     """
 ```
 
-Modify `_compute_clusters()` to call `_split_large_cluster()` on any component exceeding `max_size=15`.
+~~Modify `_compute_clusters()` to call `_split_large_cluster()` on any component exceeding `max_size=15`.~~
 
 ### File: `worker/pipeline/dependency_graph.py` — `format_for_llm_prompt()`
 
-- Remove `max_edges=150` default. New signature: `max_edges: int = 500`.
+- ~~Remove `max_edges=150` default.~~ New signature: `max_edges: int = 500`. ✅ **Implemented.**
 - All edges shown unless exceeding 500 (safety cap for extreme repos).
 
 ### Cluster presentation in planner prompts
 
-When building Phase 1 and Phase 2 prompts (Section 5), sub-clusters replace the old cluster hints:
-- No truncation of clusters or files within clusters.
-- Safety cap at 30 sub-clusters. Beyond that, show first 30 + "... and N more clusters".
+> **[DIFFERS FROM SPEC]** Actual implementation in `_build_outline_prompt()`: clusters ≤ 20 files are listed explicitly; clusters > 20 files emit a summary line ("Large cluster (N files) — see dependency relationships above for internal structure"). Cap is 30 raw clusters (not sub-clusters). "No truncation" and "sub-clusters replace cluster hints" were not implemented.
+
+~~When building Phase 1 and Phase 2 prompts (Section 5), sub-clusters replace the old cluster hints:~~
+~~- No truncation of clusters or files within clusters.~~
+~~- Safety cap at 30 sub-clusters. Beyond that, show first 30 + "... and N more clusters".~~
 
 ---
 
@@ -330,6 +338,8 @@ Validation order: structural checks first (existing), then semantic checks (new)
 
 ## 7. Multi-Agent Bottom-Up Generation
 
+> **[PARTIALLY SUPERSEDED by 2026-04-10 redesign]** `compute_generation_order()` and the bottom-up `jobs.py` orchestration loop were implemented as designed. `generate_page()` and `generate_page_batch()` were superseded: the 4-pass page quality redesign (see `docs/superpowers/specs/2026-04-10-wiki-page-quality-redesign.md`) replaced single-pass generation entirely. `generate_page()` now accepts `fast_llm` and runs outline → draft → fact-check → revision. `generate_page_batch()` now runs individual `generate_page()` calls concurrently via `asyncio.gather` — it does **not** collect flat prompts and call `llm.generate_batch()`. The parent instruction template in this section was also replaced by the 4-pass parent flow described in §6 of the 2026-04-10 spec.
+
 ### File: `worker/pipeline/page_generator.py`
 
 #### `compute_generation_order()`
@@ -390,9 +400,12 @@ Output Markdown only.
 
 #### Batch generation helper
 
-New function:
+> **[SUPERSEDED]** The implementation below was replaced by the 4-pass page quality redesign. The actual `generate_page_batch()` signature includes `fast_llm` and runs `generate_page()` (4-pass) concurrently, not a single `llm.generate_batch()` call.
+
+~~New function:~~
 
 ```python
+# SUPERSEDED — actual implementation uses asyncio.gather over 4-pass generate_page() calls.
 async def generate_page_batch(
     specs: list[tuple[WikiPageSpec, list[PageResult] | None]],
     store: FAISSStore,
@@ -411,11 +424,11 @@ async def generate_page_batch(
     """
 ```
 
-This function:
-1. For each spec, constructs the full prompt (RAG retrieval + entity details + dep info + child contents)
-2. Collects all prompts
-3. Calls `llm.generate_batch(prompts, system=system)`
-4. Wraps results into `PageResult` objects
+~~This function:~~
+~~1. For each spec, constructs the full prompt (RAG retrieval + entity details + dep info + child contents)~~
+~~2. Collects all prompts~~
+~~3. Calls `llm.generate_batch(prompts, system=system)`~~
+~~4. Wraps results into `PageResult` objects~~
 
 ### File: `worker/jobs.py`
 
@@ -471,7 +484,7 @@ Each improvement gets its own test additions:
 
 1. **generate_batch**: Test default gather impl, test max_concurrency limits, test LoggingLLMProvider wrapping
 2. **Richer summaries**: Test `to_llm_summary()` with dep_graph param, verify import/docstring lines
-3. **Sub-clustering**: Test `_split_large_cluster()` with clusters of various sizes, verify max_size respected
+3. ~~**Sub-clustering**: Test `_split_large_cluster()` with clusters of various sizes, verify max_size respected~~ — not implemented; no tests needed
 4. **Page range**: Test `_suggest_page_range()` at each boundary
 5. **Two-phase planning**: Test `_generate_outline()` and `_assign_files()` independently, test orchestrator fallbacks
 6. **Validation**: Test each new rule triggers ValueError with correct message

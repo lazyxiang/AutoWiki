@@ -1,10 +1,19 @@
 # Phase 2 — Chat, Diagrams & Refresh Implementation Plan
 
+> **[COMPLETE — STALE IN SEVERAL AREAS]** Implemented and merged (PR #4). Several areas are now superseded:
+>
+> - **`diagram_synthesis.py` / `test_diagram_synthesis.py`**: created in this plan as Stage 6, subsequently removed in the wiki-planner-improvements work (PR #17). Both files no longer exist. Any task steps, test code, or file-structure entries referencing these files are obsolete.
+> - **`architecture.mmd`**: was stored alongside diagram synthesis output; no longer generated.
+> - **`module_tree.json`**: replaced by `wiki_plan.json` in the pipeline-refactoring work. References throughout this plan to `ast/module_tree.json` are obsolete.
+> - **`get_affected_modules(changed_files, module_tree)`**: superseded by `get_affected_pages(changed_files, WikiPlan)` in the pipeline-refactoring work.
+> - **Stage numbering**: this plan refers to "Stage 6 (diagram synthesis)". After removal of diagram synthesis, the pipeline is 6 stages total with Stage 6 being page generation.
+> - **Next.js version**: plan says Next.js 15; the project uses Next.js 16.2.1.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add multi-turn chat, Mermaid diagram synthesis, incremental refresh, `.autowikiignore` filtering, and matching CLI/UI surfaces to AutoWiki.
 
-**Architecture:** Six independently testable subsystems sharing the existing FastAPI + ARQ + SQLite stack; `ChatSession`/`ChatMessage` DB models are the only new shared data layer. The pipeline's Stage 6 (diagram synthesis) and the refresh job slot into the existing `worker/jobs.py` pattern without touching Stage 1–5 logic. The chat WebSocket follows the same pattern as the existing job-progress WebSocket.
+**Architecture:** Six independently testable subsystems sharing the existing FastAPI + ARQ + SQLite stack; `ChatSession`/`ChatMessage` DB models are the only new shared data layer. The pipeline's ~~Stage 6 (diagram synthesis)~~ and the refresh job slot into the existing `worker/jobs.py` pattern without touching Stage 1–5 logic. The chat WebSocket follows the same pattern as the existing job-progress WebSocket.
 
 **Tech Stack:** Python 3.12, FastAPI (WebSocket), ARQ, SQLAlchemy 2.0 async, FAISS, `pathspec` (new), Next.js 16.2.1 / TypeScript, `reactflow` (new frontend dep), `mermaid` (new frontend dep).
 

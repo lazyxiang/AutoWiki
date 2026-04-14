@@ -1,8 +1,15 @@
 # AutoWiki — Product Requirements Document
 
 **Date:** 2026-03-22
-**Status:** Approved
+**Status:** Approved — Phases 1, 2, and 2.5 implemented. Phases 3–5 pending.
 **Project:** AutoWiki
+
+> **[STALE IN SEVERAL AREAS]** This is the original PRD. Key deviations in the implemented system:
+>
+> - **Storage layout** (§5.2): `ast/module_tree.json` was replaced by `ast/wiki_plan.json` (internal plan) and `wiki/wiki.json` (user-facing structure). `ast/architecture.mmd` was never generated — Stage 7 (diagram synthesis) was removed before any release.
+> - **LLM provider config** (§5.3): `gemini-1.5-pro` is now deprecated; use `google-genai` SDK with `gemini-2.5-pro` or similar. The `google-generativeai` SDK is also deprecated.
+> - **Phase 3 MCP tools** (`read_wiki_structure`, `read_wiki_page`, `search_wiki`, `ask_question`, `deep_research`) are not yet implemented.
+> - **Phase 4 GitHub webhooks** and **user steering via `.autowiki/wiki.json`** are not yet implemented.
 
 ---
 
@@ -199,8 +206,8 @@ chat_messages (
         index.md
         {slug}.md         ← one file per wiki page
       ast/
-        dep_graph.json    ← unified dependency graph
-        module_tree.json  ← hierarchical module structure
+        dep_graph.json    ← unified dependency graph (note: stored in DependencyGraph, not persisted as JSON)
+        wiki_plan.json    ← internal wiki plan with file mappings (replaces module_tree.json)
   autowiki.db             ← SQLite database
   logs/
     worker.log

@@ -1,5 +1,7 @@
 # AutoWiki Frontend Redesign Implementation Plan
 
+> **[COMPLETE]** Implemented and merged. Tech note: the plan says Next.js 16 / React 19 / Tailwind v4; the shipped versions are Next.js 16.2.1, React 19, Tailwind v4 (CSS-only config). `@base-ui/react` is used instead of `@radix-ui/react`. ReactFlow v12 (`@xyflow/react`) and Mermaid.js are in place.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replicate the clean, modern, light-mode-first visual style of `deepwiki.com` and `zread.ai` across the AutoWiki Home Page and Wiki Page, integrating search, repository metadata, and a three-column navigation layout.

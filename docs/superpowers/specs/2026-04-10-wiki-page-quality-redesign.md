@@ -1,8 +1,13 @@
 # Wiki Page Quality Redesign
 
 **Date:** 2026-04-10
-**Status:** Design
+**Status:** Implemented and merged to `main` (PRs #15 and #17)
 **Scope:** Stage 5 (Wiki Planner) and Stage 6 (Page Generator), plus a cross-cutting extension to the LLM provider abstraction.
+
+## Implementation notes (deviations from spec)
+
+- **`cache_ttl: long` not wired**: The config field `LLMConfig.cache_ttl` accepts `"short" | "long"` and defaults to `"short"`, but the Anthropic provider always emits `"ephemeral"` cache control regardless of this setting. The 1-hour TTL path described in §8.3 is not implemented — `cache_ttl` is a placeholder for future work.
+- **`llm.fact_check_model` escape hatch not added**: §12 open question 1 proposed a `llm.fact_check_model: fast | main` config knob. Not implemented; fact-check always uses `fast_llm`.
 
 ## 1. Goals
 
