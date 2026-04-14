@@ -124,6 +124,15 @@ autowiki config set <key> <value>
 - **Planning** (architecture, design, writing plans): use `claude-opus-4-6`
 - **Executing** (implementation, refactoring, code changes): use `claude-sonnet-4-6`
 
+## PR Review Workflow
+
+After fixing issues raised in a pull request review:
+
+1. Reply to each review comment thread (inline or top-level) describing what was fixed and in which commit — use `gh api repos/{owner}/{repo}/pulls/comments/{id}/replies`.
+2. Mark each thread as resolved via the GitHub UI or API once the fix is confirmed.
+
+Do this for **every** addressed comment before considering the review cycle complete.
+
 ## Pre-Commit Checks (Required)
 
 Before every commit, run and resolve all issues from:

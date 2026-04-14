@@ -121,8 +121,17 @@ autowiki config set <key> <value>
 
 ## Model Selection
 
-- **Planning** (architecture, design, writing plans): use `gemini-2.5-pro-preview-05-06`
-- **Executing** (implementation, refactoring, code changes): use `gemini-2.5-pro-preview-05-06`
+- **Planning** (architecture, design, writing plans): use `gemini-3.1-pro-preview`
+- **Executing** (implementation, refactoring, code changes): use `gemini-3-flash-preview`
+
+## PR Review Workflow
+
+After fixing issues raised in a pull request review:
+
+1. Reply to each review comment thread (inline or top-level) describing what was fixed and in which commit — use `gh api repos/{owner}/{repo}/pulls/comments/{id}/replies`.
+2. Mark each thread as resolved via the GitHub UI or API once the fix is confirmed.
+
+Do this for **every** addressed comment before considering the review cycle complete.
 
 ## Pre-Commit Checks (Required)
 
