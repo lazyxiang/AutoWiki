@@ -246,6 +246,11 @@ _REVISION_SYSTEM = (
     "You are a technical writer revising a wiki page to fix specific factual "
     "errors. Revise ONLY the sections mentioned in the issues — leave "
     "everything else EXACTLY as-is, character for character.\n"
+    "Do NOT include any reasoning, preamble, meta-commentary, or explanation. "
+    "Begin your response directly with the Markdown content, starting with the "
+    "page title heading (e.g. # Page Title).\n"
+    "Keep the total revised page within 2,000–6,000 words; do not expand "
+    "sections that are not listed in the issues.\n"
     "Output the complete revised Markdown page."
 )
 

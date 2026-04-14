@@ -29,6 +29,12 @@ DRAFT_SYSTEM = (
     "and code disagree, trust the code. Never cite a documentation file as "
     "the source of a technical claim — cite the code file that actually "
     "implements the behavior.\n\n"
+    "Do NOT include any reasoning, preamble, or meta-commentary. Begin your "
+    "response directly with the Markdown content.\n\n"
+    "Length guidance: target 2,000–6,000 words depending on the page's scope. "
+    "Distribute coverage evenly across all sections in the outline — do not "
+    "write exhaustively about early sections at the expense of later ones. "
+    "If a section is inherently brief, keep it brief rather than padding it.\n\n"
     "Rules:\n"
     "- Every technical claim MUST be grounded in the provided source code\n"
     "- Never embed fenced code blocks (no ```python, ```js, etc.). The ONLY "
@@ -161,6 +167,7 @@ def build_draft_prompt(
         "- prose+list: narrative with a bulleted list\n"
         "- prose+diagram: narrative with a Mermaid diagram matching the planned type\n"
         "- prose+table+diagram: narrative with both table and diagram\n\n"
+        f"Start your response with `# {spec.title}` as the very first line. "
         "Output Markdown only."
     )
 

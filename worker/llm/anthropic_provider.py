@@ -64,7 +64,7 @@ class AnthropicProvider(LLMProvider):
         content = _segments_to_anthropic_content(prompt)
         kwargs: dict[str, Any] = {
             "model": self._model,
-            "max_tokens": 8192,
+            "max_tokens": 16000,
             "messages": [{"role": "user", "content": content}],
         }
         if system:

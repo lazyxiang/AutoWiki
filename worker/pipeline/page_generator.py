@@ -20,6 +20,7 @@ final draft.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -36,6 +37,41 @@ from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retr
 if TYPE_CHECKING:
     from worker.pipeline.ast_analysis import FileAnalysis
     from worker.pipeline.dependency_graph import DependencyGraph
+
+
+_HEADING_RE = re.compile(r"^#{1,6}\s", re.MULTILINE)
+
+
+def _append_source_files_table(content: str, files: list[str]) -> str:
+    """Append a Source Files table at the end of the page.
+
+    Skipped when *files* is empty. The table lists every source file assigned
+    to the page spec so readers can navigate directly to the implementation.
+    """
+    if not files:
+        return content
+
+    rows = "\n".join(f"| `{f}` |" for f in files)
+    table = f"\n\n## Source Files\n\n| File |\n|------|\n{rows}"
+    return content.rstrip() + table
+
+
+def _strip_preamble_and_ensure_header(content: str, title: str) -> str:
+    """Strip reasoning preamble and ensure the page starts with # title.
+
+    Models sometimes output chain-of-thought before the actual Markdown.
+    This function:
+    1. Strips any text that appears before the first Markdown heading.
+    2. Ensures the first heading is the level-1 page title; prepends it if absent.
+    """
+    m = _HEADING_RE.search(content)
+    if m:
+        content = content[m.start():]
+
+    if not content.startswith("# "):
+        content = f"# {title}\n\n{content}"
+
+    return content
 
 
 def compute_generation_order(plan: WikiPlan) -> list[list[WikiPageSpec]]:
@@ -235,8 +271,10 @@ async def generate_page(
                     )
 
     # ── Post-processing ──
+    draft = _strip_preamble_and_ensure_header(draft, spec.title)
     draft = ensure_diagram_headers(draft, default_source_files=spec.files)
     draft = sanitize_mermaid_blocks(draft)
+    draft = _append_source_files_table(draft, spec.files or [])
 
     return PageResult(slug=spec.slug, title=spec.title, content=draft)
 

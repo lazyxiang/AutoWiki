@@ -5,6 +5,8 @@ import pytest
 
 from worker.pipeline.page_generator import (
     PageResult,
+    _append_source_files_table,
+    _strip_preamble_and_ensure_header,
     compute_generation_order,
     generate_page,
     generate_page_batch,
@@ -273,6 +275,58 @@ async def test_generate_page_batch_returns_all_results(page_store, mock_embeddin
     for r in results:
         assert isinstance(r, PageResult)
         assert len(r.content) > 0
+
+
+def test_append_source_files_table_adds_table():
+    content = "# My Page\n\n## Overview\n\nSome content."
+    result = _append_source_files_table(content, ["src/foo.py", "src/bar.py"])
+    assert "## Source Files" in result
+    assert "| `src/foo.py` |" in result
+    assert "| `src/bar.py` |" in result
+    assert result.index("## Source Files") > result.index("## Overview")
+
+
+def test_append_source_files_table_empty_files_unchanged():
+    content = "# My Page\n\nContent."
+    assert _append_source_files_table(content, []) == content
+
+
+def test_append_source_files_table_at_end():
+    content = "# My Page\n\nContent."
+    result = _append_source_files_table(content, ["a.py"])
+    assert result.endswith("| `a.py` |")
+
+
+def test_strip_preamble_removes_reasoning_before_first_heading():
+    content = (
+        "Let's think about this. I need to revise only the flagged sections.\n\n"
+        "Wait, let me check the issue again.\n\n"
+        "# My Page\n\n"
+        "## Overview\n\nActual content here.\n"
+    )
+    result = _strip_preamble_and_ensure_header(content, "My Page")
+    assert result.startswith("# My Page")
+    assert "Let's think" not in result
+    assert "Actual content here" in result
+
+
+def test_strip_preamble_keeps_content_when_no_preamble():
+    content = "# My Page\n\n## Overview\n\nContent.\n"
+    result = _strip_preamble_and_ensure_header(content, "My Page")
+    assert result == content
+
+
+def test_strip_preamble_adds_title_when_missing():
+    content = "## Overview\n\nSome content.\n"
+    result = _strip_preamble_and_ensure_header(content, "My Page")
+    assert result.startswith("# My Page\n\n## Overview")
+
+
+def test_strip_preamble_adds_title_after_stripping_preamble():
+    content = "Some reasoning text.\n\n## Overview\n\nContent.\n"
+    result = _strip_preamble_and_ensure_header(content, "My Page")
+    assert result.startswith("# My Page\n\n## Overview")
+    assert "reasoning" not in result
 
 
 def test_compute_generation_order_unchanged():

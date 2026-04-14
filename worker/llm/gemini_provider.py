@@ -33,7 +33,7 @@ class GeminiProvider(LLMProvider):
         system_text = segments_to_text(normalize_prompt(system))
         config = types.GenerateContentConfig(
             system_instruction=system_text if system_text else None,
-            max_output_tokens=8192,
+            max_output_tokens=65536,
         )
         response = await asyncio.to_thread(
             self._client.models.generate_content,
@@ -56,7 +56,7 @@ class GeminiProvider(LLMProvider):
         config = types.GenerateContentConfig(
             system_instruction=system_text if system_text else None,
             response_mime_type="application/json",
-            max_output_tokens=8192,
+            max_output_tokens=16000,
         )
         response = await asyncio.to_thread(
             self._client.models.generate_content,
@@ -73,7 +73,7 @@ class GeminiProvider(LLMProvider):
         system_text = segments_to_text(normalize_prompt(system))
         config = types.GenerateContentConfig(
             system_instruction=system_text if system_text else None,
-            max_output_tokens=8192,
+            max_output_tokens=65536,
         )
 
         # Note: google-genai stream is a generator. We iterate
