@@ -118,11 +118,17 @@ def validate_outline(
     Raises:
         ValueError: On any validation failure with a descriptive message.
     """
+    if not isinstance(raw, dict):
+        raise ValueError(f"Outline must be a dict, got {type(raw).__name__}")
     sections_raw = raw.get("sections", [])
+    if not isinstance(sections_raw, list):
+        raise ValueError(f"sections must be a list, got {type(sections_raw).__name__}")
     if not sections_raw:
         raise ValueError("Outline must have at least one section")
 
     claims = raw.get("key_claims", [])
+    if not isinstance(claims, list):
+        raise ValueError(f"key_claims must be a list, got {type(claims).__name__}")
     if len(claims) < 3 or len(claims) > 8:
         raise ValueError(f"key_claims must contain 3-8 items, got {len(claims)}")
 
@@ -131,6 +137,8 @@ def validate_outline(
     diagram_count = 0
 
     for s in sections_raw:
+        if not isinstance(s, dict):
+            raise ValueError(f"Each section must be a dict, got {type(s).__name__}")
         heading = s.get("heading", "")
         kind = s.get("kind", "")
         focus = s.get("focus", "")
@@ -146,6 +154,11 @@ def validate_outline(
         diagram = None
         diagram_raw = s.get("diagram")
         if diagram_raw:
+            if not isinstance(diagram_raw, dict):
+                raise ValueError(
+                    f"diagram in section '{heading}' must be a dict, "
+                    f"got {type(diagram_raw).__name__}"
+                )
             diag_type = diagram_raw.get("type", "")
             if diag_type not in VALID_DIAGRAM_TYPES:
                 raise ValueError(

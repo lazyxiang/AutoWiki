@@ -1,5 +1,3 @@
-from unittest.mock import AsyncMock
-
 from worker.llm.prompt_segment import PromptSegment
 from worker.pipeline.fact_check import (
     FactCheckIssue,
@@ -91,8 +89,8 @@ def test_strip_failed_diagram_removes_mermaid_block():
     assert "Some text after." in result
 
 
-async def test_run_fact_check_returns_pass():
-    mock_fast_llm = AsyncMock()
+async def test_run_fact_check_returns_pass(mock_fast_llm):
+    mock_fast_llm.generate_structured.side_effect = None
     mock_fast_llm.generate_structured.return_value = {
         "verdict": "pass",
         "issues": [],
@@ -123,8 +121,8 @@ async def test_run_fact_check_returns_pass():
     assert result.issues == []
 
 
-async def test_run_fact_check_returns_fail():
-    mock_fast_llm = AsyncMock()
+async def test_run_fact_check_returns_fail(mock_fast_llm):
+    mock_fast_llm.generate_structured.side_effect = None
     mock_fast_llm.generate_structured.return_value = {
         "verdict": "fail",
         "issues": [
@@ -163,8 +161,7 @@ async def test_run_fact_check_returns_fail():
     assert len(result.issues) == 1
 
 
-async def test_run_fact_check_fails_open_on_error():
-    mock_fast_llm = AsyncMock()
+async def test_run_fact_check_fails_open_on_error(mock_fast_llm):
     mock_fast_llm.generate_structured.side_effect = RuntimeError("LLM error")
 
     outline = PageOutline(
@@ -189,8 +186,7 @@ async def test_run_fact_check_fails_open_on_error():
     assert result.verdict == "pass"
 
 
-async def test_run_targeted_revision_fixes_claims():
-    mock_llm = AsyncMock()
+async def test_run_targeted_revision_fixes_claims(mock_llm):
     mock_llm.generate.return_value = "## Overview\n\nRevised content here."
 
     issues = [
@@ -214,10 +210,9 @@ async def test_run_targeted_revision_fixes_claims():
     mock_llm.generate.assert_called_once()
 
 
-async def test_run_targeted_revision_fixes_diagram():
+async def test_run_targeted_revision_fixes_diagram(mock_llm):
     from worker.pipeline.fact_check import FactCheckIssue, run_targeted_revision
 
-    mock_llm = AsyncMock()
     mock_llm.generate.return_value = "```mermaid\nflowchart TD\n  A-->C\n```"
 
     draft = (

@@ -8,8 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from worker.llm.base import LLMProvider
 from worker.llm.prompt_segment import PromptSegment
-from worker.pipeline.page_generator import (
-    PageResult,
+from worker.pipeline.page_formatters import (
     _format_context_chunks,
     _format_entity_details,
 )
@@ -18,6 +17,7 @@ from worker.utils.mermaid import sanitize_mermaid_blocks
 from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
 
 if TYPE_CHECKING:
+    from worker.pipeline.page_generator import PageResult
     from worker.pipeline.wiki_planner import WikiPageSpec
 
 DRAFT_SYSTEM = (
@@ -98,7 +98,12 @@ def build_draft_prompt(
     if child_contents:
         child_sections = []
         for child in child_contents:
-            child_sections.append(f'### Child: "{child.title}"\n{child.content}')
+            # Truncate child content to avoid unbounded parent prompts
+            _max_child = 1000
+            excerpt = child.content[:_max_child]
+            if len(child.content) > _max_child:
+                excerpt += "\n... (truncated)"
+            child_sections.append(f'### Child: "{child.title}"\n{excerpt}')
         cached_parts.append(
             "## Child Pages (already generated)\n"
             "The following child pages have been written. Your role is to "

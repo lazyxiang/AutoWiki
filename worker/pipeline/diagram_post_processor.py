@@ -7,7 +7,8 @@ import re
 
 _MERMAID_BLOCK = re.compile(r"```mermaid\n.*?```", re.DOTALL)
 _HEADER_PATTERN = re.compile(r"\*\*Diagram:[^\n]*\*\*")
-_SOURCE_PATTERN = re.compile(r"\*Source:[^\n]*\*")
+# Match both "*Source: file*" and "*Source:* file" forms to avoid duplicate insertion
+_SOURCE_PATTERN = re.compile(r"\*Source:")
 
 
 def ensure_diagram_headers(

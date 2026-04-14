@@ -17,6 +17,12 @@ PromptInput = str | list[PromptSegment]
 def normalize_prompt(prompt: PromptInput) -> list[PromptSegment]:
     """Plain string → [PromptSegment(text=..., cacheable=False)]. List → unchanged."""
     if isinstance(prompt, list):
+        for i, seg in enumerate(prompt):
+            if not isinstance(seg, PromptSegment):
+                raise TypeError(
+                    f"normalize_prompt expects List[PromptSegment], "
+                    f"got {type(seg).__name__} at index {i}"
+                )
         return prompt
     return [PromptSegment(text=prompt, cacheable=False)]
 

@@ -75,8 +75,11 @@ def mock_llm():
 def mock_fast_llm():
     """Returns a mock LLMProvider for the fast model (outline + fact-check passes).
 
-    Alternates between returning a valid page outline and a passing fact-check
-    so it works for any number of pages without exhausting a fixed side_effect list.
+    Returns schema-appropriate payloads based on the 'schema' kwarg:
+    - assignment schema (has "assignments" property) → empty assignments
+    - outline schema (has "sections" property) → valid page outline
+    - fact-check schema (has "verdict" property) → passing fact-check
+    Falls back to alternating outline/fact-check for unrecognised schemas.
     """
     m = AsyncMock()
 
@@ -96,11 +99,20 @@ def mock_fast_llm():
         "key_claims": ["Claim one", "Claim two", "Claim three"],
     }
     _fact_check_pass = {"verdict": "pass", "issues": []}
+    _assignment_pass = {"assignments": []}
 
-    # Alternate: outline, fact-check, outline, fact-check, ...
     _call_counter = [0]
 
     async def _structured_side_effect(*args, **kwargs):
+        schema = kwargs.get("schema", {})
+        props = schema.get("properties", {})
+        if "assignments" in props:
+            return _assignment_pass
+        if "verdict" in props:
+            return _fact_check_pass
+        if "sections" in props:
+            return _outline
+        # Fallback: alternate outline / fact-check for unrecognised schemas
         idx = _call_counter[0]
         _call_counter[0] += 1
         return _outline if idx % 2 == 0 else _fact_check_pass

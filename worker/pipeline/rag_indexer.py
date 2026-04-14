@@ -385,6 +385,11 @@ class FAISSStore:
             return []
         q = query.astype(np.float32).reshape(1, -1)
         faiss.normalize_L2(q)
+
+        if doc_k is not None:
+            # Clamp to valid range so code_k is always non-negative
+            doc_k = max(0, min(doc_k, k))
+
         # Retrieve extra candidates to fill both buckets after partitioning
         fetch_k = min(k * 2 if doc_k is not None else k, self._index.ntotal)
         _, indices = self._index.search(q, fetch_k)
@@ -442,6 +447,10 @@ class FAISSStore:
         self._ensure_index()
         if self._index.ntotal == 0:
             return []
+
+        if doc_k is not None:
+            # Clamp to valid range so code_k is always non-negative
+            doc_k = max(0, min(doc_k, k))
 
         seen_keys: set[tuple] = set()
         results: list[dict[str, Any]] = []

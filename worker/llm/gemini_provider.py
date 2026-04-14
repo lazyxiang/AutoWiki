@@ -47,6 +47,11 @@ class GeminiProvider(LLMProvider):
         self, prompt: PromptInput, schema: dict[str, Any], system: PromptInput = ""
     ) -> dict[str, Any]:
         prompt_text = segments_to_text(normalize_prompt(prompt))
+        schema_str = json.dumps(schema)
+        prompt_with_schema = (
+            f"{prompt_text}\n\nRespond ONLY with valid JSON"
+            f" matching this schema:\n{schema_str}"
+        )
         system_text = segments_to_text(normalize_prompt(system))
         config = types.GenerateContentConfig(
             system_instruction=system_text if system_text else None,
@@ -56,7 +61,7 @@ class GeminiProvider(LLMProvider):
         response = await asyncio.to_thread(
             self._client.models.generate_content,
             model=self._model,
-            contents=prompt_text,
+            contents=prompt_with_schema,
             config=config,
         )
         return json.loads(response.text)

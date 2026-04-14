@@ -598,12 +598,19 @@ async def _assign_files(
     valid_titles = {p["title"] for p in outline}
     first_title = outline[0]["title"]
 
-    _assign_llm = fast_llm if fast_llm is not None else llm
+    # Build provider pool: fast_llm first (if provided), then main llm.
+    # Attempts escalate through the pool before falling back to round-robin.
+    _llm_pool = []
+    if fast_llm is not None:
+        _llm_pool.append(fast_llm)
+    if llm not in _llm_pool:
+        _llm_pool.append(llm)
 
     for attempt in range(max_retries):
+        _current_llm = _llm_pool[min(attempt, len(_llm_pool) - 1)]
         try:
             raw = await async_retry(
-                _assign_llm.generate_structured,
+                _current_llm.generate_structured,
                 prompt,
                 schema=_ASSIGNMENT_SCHEMA,
                 system=system,

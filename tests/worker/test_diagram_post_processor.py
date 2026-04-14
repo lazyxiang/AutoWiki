@@ -57,3 +57,6 @@ def test_missing_source_no_defaults_uses_unknown():
     md = "```mermaid\nflowchart TD\n  A-->B\n```\n"
     result = ensure_diagram_headers(md, default_source_files=None)
     assert "*Source: unknown*" in result
+    # Idempotency: running again must not add a duplicate source line
+    result2 = ensure_diagram_headers(result, default_source_files=None)
+    assert result2.count("*Source:") == 1

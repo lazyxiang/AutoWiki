@@ -34,6 +34,14 @@ _FACT_CHECK_SCHEMA = {
                     "suggested_fix": {"type": "string"},
                 },
                 "required": ["kind", "section", "reason", "suggested_fix"],
+                # kind-specific required fields: "claim" issues must have "claim",
+                # "diagram" issues must have "diagram_index"
+                "if": {
+                    "properties": {"kind": {"const": "claim"}},
+                    "required": ["kind"],
+                },
+                "then": {"required": ["claim"]},
+                "else": {"required": ["diagram_index"]},
             },
         },
     },
@@ -97,11 +105,15 @@ def _build_fact_check_prompt(
     claims_json = json.dumps(outline.key_claims, indent=2)
 
     diagrams = []
-    for i, s in enumerate(outline.sections):
+    for s in outline.sections:
         if s.diagram:
             diagrams.append(
                 {
-                    "index": i,
+                    # index is the per-section mermaid block ordinal (0-based).
+                    # Each section has at most one planned diagram, so this is
+                    # always 0.  The revision/strip logic uses this value to
+                    # locate the correct block within the section.
+                    "index": 0,
                     "section": s.heading,
                     "type": s.diagram.type,
                     "purpose": s.diagram.purpose,

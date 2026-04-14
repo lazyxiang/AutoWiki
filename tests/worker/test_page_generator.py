@@ -221,7 +221,6 @@ async def test_generate_page_revision_failure_falls_back_to_strip(
 async def test_generate_page_batch_returns_all_results(page_store, mock_embedding):
     """generate_page_batch produces one PageResult per spec."""
     fast_llm = AsyncMock()
-    # Each page calls outline + fact-check (2 structured calls each)
     _three_claims = ["claim 1", "claim 2", "claim 3"]
     _diagram_section = {
         "heading": "Overview",
@@ -229,33 +228,27 @@ async def test_generate_page_batch_returns_all_results(page_store, mock_embeddin
         "focus": "f",
         "diagram": {"type": "flowchart", "purpose": "Flow", "source_files": []},
     }
-    fast_llm.generate_structured.side_effect = [
-        {"sections": [_diagram_section], "key_claims": _three_claims},
-        {"verdict": "pass", "issues": []},
-        {
-            "sections": [
-                {
-                    "heading": "Summary",
-                    "kind": "prose+diagram",
-                    "focus": "g",
-                    "diagram": {
-                        "type": "flowchart",
-                        "purpose": "Flow",
-                        "source_files": [],
-                    },
-                }
-            ],
-            "key_claims": _three_claims,
-        },
-        {"verdict": "pass", "issues": []},
-    ]
+    _outline = {"sections": [_diagram_section], "key_claims": _three_claims}
+    _fact_check_pass = {"verdict": "pass", "issues": []}
+
+    # Schema-inspecting callable so concurrent generation is order-independent
+    async def _fast_structured(*args, **kwargs):
+        schema = kwargs.get("schema", {})
+        props = schema.get("properties", {})
+        if "verdict" in props:
+            return _fact_check_pass
+        return _outline
+
+    fast_llm.generate_structured.side_effect = _fast_structured
 
     llm = AsyncMock()
     _mermaid = "```mermaid\nflowchart TD\n  A-->B\n```\n\n*Source: a.py:1-5*"
-    llm.generate.side_effect = [
-        f"## Overview\n\nContent for page A.\n\n{_mermaid}",
-        f"## Summary\n\nContent for page B.\n\n{_mermaid}",
-    ]
+
+    # Return a valid draft regardless of call order
+    async def _llm_generate(*args, **kwargs):
+        return f"## Overview\n\nContent.\n\n{_mermaid}"
+
+    llm.generate.side_effect = _llm_generate
 
     from worker.pipeline.ast_analysis import FileAnalysis
     from worker.pipeline.dependency_graph import DependencyGraph

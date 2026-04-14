@@ -27,7 +27,7 @@ A fourth, implicit goal surfaced during brainstorming: **improve grounding again
 
 ### 3.1 Generation flow per page (replaces single-pass)
 
-```
+```text
 Outline (fast model)
   → Draft (main model)
     → Fact-check (fast model)
@@ -154,7 +154,7 @@ Validation failures self-retry up to 2 times within the outline pass, mirroring 
 
 Diagram header/source format:
 
-```
+````markdown
 **Diagram: Query flow through multi-query RAG**
 
 ```mermaid
@@ -163,7 +163,7 @@ sequenceDiagram
 ```
 
 *Source: worker/pipeline/page_generator.py:403-517*
-```
+````
 
 ### 5.3 Pass 3 — Fact-check (fast model)
 
@@ -242,7 +242,7 @@ The prompt instructs the model to choose diagrams that *add information the pros
 
 Every diagram block in generated pages must follow this exact structure, checked by a lightweight post-processor:
 
-```
+````markdown
 **Diagram: <one-line header>**
 
 ```mermaid
@@ -250,7 +250,7 @@ Every diagram block in generated pages must follow this exact structure, checked
 ```
 
 *Source: <file_path>:<start_line>-<end_line>*
-```
+````
 
 If the post-processor finds a mermaid block without a preceding header line or following source line, it inserts a placeholder header ("Diagram") and a best-effort source reference derived from the outline's `source_files`. (This is a safety net — the prompt is the primary mechanism.)
 
