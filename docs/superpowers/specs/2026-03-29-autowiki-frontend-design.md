@@ -1,5 +1,7 @@
 # AutoWiki Frontend Design Specification
 
+> **[COMPLETE]** Implemented and merged (PR #4 + frontend-redesign branch). Current tech stack: Next.js 16.2.1, React 19, Tailwind v4 (CSS-only, no `tailwind.config.ts`), `@base-ui/react` (replaced `@radix-ui/react`). The color palette and layout described here are accurate to the shipped UI.
+
 ## Overview
 This document outlines the visual design and layout structure for the AutoWiki frontend, heavily inspired by the clean, modern aesthetics of platforms like `deepwiki.com` and `zread.ai`. The goal is to provide a highly readable, intuitive interface for browsing AI-generated repository documentation.
 

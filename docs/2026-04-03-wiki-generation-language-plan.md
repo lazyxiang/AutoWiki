@@ -1,5 +1,7 @@
 # Plan: Wiki Generation Language Feature (EN/ZH)
 
+> **[COMPLETE — PARTIALLY STALE]** Implemented and merged. However, **Step 4 and Step 5** reference `synthesize_diagrams()` (Stage 7) and `diagram_synthesis.py`, which were removed in the wiki-planner-improvements work (PR #17). The language instruction for the diagram stage no longer applies; `diagram_synthesis.py` no longer exists. All other steps (DB column, `language.py` helper, API forwarding, planner/page-generator threading, frontend) were implemented correctly.
+
 ## Context
 
 AutoWiki currently generates all wiki content in English with no language configuration. The user wants:

@@ -1,5 +1,7 @@
 # Plan: Improve Wiki Generation Quality
 
+> **[COMPLETE — SUPERSEDED]** The improvements in this plan were implemented (dependency graph, enhanced AST analysis, architecture diagrams, RAG indexing, planner improvements). However, the specific APIs described (`build_enhanced_module_tree()`, the enhanced module tree JSON format, `DependencyGraph` clustering) were later redesigned in the pipeline-refactoring work and further refined in the wiki-planner-improvements work (2026-04-08). The current implementation uses `FileAnalysis` / `analyze_all_files()` instead of `build_enhanced_module_tree()`, and `WikiPlan` instead of a module-tree-based planner. Architecture diagram generation (Stage 7) was also removed in PR #17.
+
 ## Context
 
 AutoWiki currently generates basic wiki pages with minimal structure. Compared to DeepWiki/CodeWiki, the generated content lacks:

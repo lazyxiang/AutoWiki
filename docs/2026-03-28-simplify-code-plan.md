@@ -1,5 +1,7 @@
 # Plan: Simplify Code & Remove Redundancy
 
+> **[COMPLETE — PARTIALLY STALE]** Implemented and merged. The helper-extraction table references pre-refactoring function names (`_build_file_entities`, `_build_module_files`, `_build_module_entity_map`, `_collect_page_context`, `_prepend_architecture_diagram`) that were subsequently replaced by the `FileAnalysis` single-pass refactoring and the removal of Stage 7. These specific helper names no longer exist in the codebase.
+
 ## Context
 
 The codebase accumulated duplication across Phase 1 and Phase 2. The biggest problem was `worker/jobs.py` — two 400-line orchestrator functions (`run_full_index`, `run_refresh_index`) sharing almost identical pipeline stages. This plan extracts stage-level helpers, deduplicates LLM provider logic, simplifies the API queue, extracts a frontend utility, and DRYs the Docker config.

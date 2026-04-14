@@ -1,5 +1,7 @@
 # Plan: Enhanced Logging for AutoWiki
 
+> **[COMPLETE]** Implemented and merged. `LoggingLLMProvider`, `--debug` flag, and structured log files are all in place.
+
 This plan outlines the implementation of enhanced logging capabilities for AutoWiki, including separate log files for errors, task status (with critical I/O), and LLM interactions, as well as a debug mode for the worker and API.
 
 ## Objectives

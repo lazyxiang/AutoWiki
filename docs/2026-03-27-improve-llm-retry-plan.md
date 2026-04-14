@@ -1,8 +1,10 @@
 # Plan: LLM Retry, Force/Resume Mode, Frontend Retry Display
 
+> **[COMPLETE]** Implemented and merged. The "5-stage pipeline" reference in the context is historical; the pipeline is now 6 stages. The `--force` flag was replaced by `--reuse-index` semantics in later work.
+
 ## Context
 
-AutoWiki's 5-stage wiki generation pipeline makes LLM and embedding API calls with no transient error handling. The CLI `--force` flag exists but is not wired to the API or worker. The frontend shows progress but cannot visually distinguish a "waiting for retry" state from normal operation.
+AutoWiki's ~~5-stage~~ wiki generation pipeline makes LLM and embedding API calls with no transient error handling. The CLI `--force` flag exists but is not wired to the API or worker. The frontend shows progress but cannot visually distinguish a "waiting for retry" state from normal operation.
 
 This plan adds:
 1. **Async retry with exponential backoff** for all LLM/embedding calls
