@@ -329,6 +329,13 @@ def test_strip_preamble_adds_title_after_stripping_preamble():
     assert "reasoning" not in result
 
 
+def test_strip_preamble_replaces_wrong_h1():
+    content = "# Some Other Title\n\n## Overview\n\nContent.\n"
+    result = _strip_preamble_and_ensure_header(content, "My Page")
+    assert result.startswith("# My Page\n\n## Overview")
+    assert "Some Other Title" not in result
+
+
 def test_compute_generation_order_unchanged():
     """Verify compute_generation_order still works."""
     plan = WikiPlan(

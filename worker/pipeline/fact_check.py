@@ -97,7 +97,14 @@ def _build_fact_check_prompt(
     entity_summaries: str,
     dep_info: str | None,
     targeted_chunks: str,
-) -> list[PromptSegment]:
+) -> tuple[list[PromptSegment], PromptSegment]:
+    """Return ``(system_segments, user_segment)`` for the fact-check call.
+
+    The reusable entity/dependency prefix is returned as a cacheable *system*
+    segment so Anthropic's ``generate_structured`` can apply ``cache_control``
+    on the system turn.  (The user turn is intentionally flattened to plain
+    text for structured calls, so cacheable markers there have no effect.)
+    """
     cached_parts = [f"Entity summaries:\n{entity_summaries}\n"]
     if dep_info:
         cached_parts.append(f"Dependencies:\n{dep_info}\n")
@@ -134,10 +141,8 @@ def _build_fact_check_prompt(
         f"Output JSON matching this schema:\n{schema_json}"
     )
 
-    return [
-        PromptSegment(text="\n".join(cached_parts), cacheable=True),
-        PromptSegment(text=tail),
-    ]
+    system_segments = [PromptSegment(text="\n".join(cached_parts), cacheable=True)]
+    return system_segments, PromptSegment(text=tail)
 
 
 async def run_fact_check(
@@ -153,17 +158,24 @@ async def run_fact_check(
     """Run fact-check on a draft using the fast model. Fails open on error."""
     from worker.pipeline.language import get_language_instruction
 
-    segments = _build_fact_check_prompt(
+    context_segments, user_segment = _build_fact_check_prompt(
         draft, outline, entity_summaries, dep_info, targeted_chunks
     )
-    system = _FACT_CHECK_SYSTEM + get_language_instruction(wiki_language)
+    # Place the static instruction first, then the cacheable entity/dep context.
+    # Keeping both in the system turn ensures Anthropic's generate_structured
+    # can apply cache_control (the user turn is flattened for structured calls).
+    lang = get_language_instruction(wiki_language)
+    system_segments: list[PromptSegment] = [
+        PromptSegment(text=_FACT_CHECK_SYSTEM + lang),
+        *context_segments,
+    ]
 
     try:
         raw = await async_retry(
             fast_llm.generate_structured,
-            segments,
+            user_segment,
             schema=_FACT_CHECK_SCHEMA,
-            system=system,
+            system=system_segments,
             transient_exceptions=TRANSIENT_EXCEPTIONS,
             on_retry=on_retry,
         )

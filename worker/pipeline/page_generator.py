@@ -71,8 +71,13 @@ def _strip_preamble_and_ensure_header(content: str, title: str) -> str:
     if m:
         content = content[m.start() :]
 
-    if not content.startswith("# "):
-        content = f"# {title}\n\n{content}"
+    expected_h1 = f"# {title}"
+    first_line, sep, rest = content.partition("\n")
+    if first_line.startswith("# "):
+        if first_line != expected_h1:
+            content = expected_h1 + (sep + rest if sep else "")
+    else:
+        content = f"{expected_h1}\n\n{content}"
 
     return content
 

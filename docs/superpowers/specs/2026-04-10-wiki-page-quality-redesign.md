@@ -56,13 +56,12 @@ The RAG indexer currently treats `.md`, `.rst`, `.txt`, and `.adoc` files the sa
 store.multi_search(
     query_vecs,
     k=12,
-    code_k=11,       # up to 11 code chunks
-    doc_k=1,         # up to 1 documentation chunk
+    doc_k=1,         # up to 1 documentation chunk; code gets k - doc_k slots
 )
 ```
 
 - `doc_k` defaults to 1 for the page generator.
-- `code_k` defaults to `k - doc_k`.
+- Code chunk count is derived as `k - doc_k` (not a separate parameter).
 - README excerpts are *not* retrieved via the RAG path — the planner already consumes the README directly, and the page generator does not need it.
 - Classification uses file extension: `{".md", ".rst", ".txt", ".adoc"}` → doc; everything else → code. (Consistent with `rag_indexer.is_code_file()`.)
 
@@ -425,7 +424,7 @@ Incremental refresh flow is unaffected except that refreshed pages go through th
 - `PromptSegment` translation per provider (Anthropic, OpenAI, Gemini, Ollama) — verify correct ordering and correct cache marker placement (Anthropic only).
 - Outline schema validation — duplicate sections, missing diagrams for multi-section pages, invalid diagram types.
 - Fact-check issue parsing and diagram-block splicing — given a draft and a structured issue list, the splicer produces the expected revised draft.
-- Documentation downweighting in `FAISSStore.multi_search` — mixed code/doc corpus, verify `code_k` / `doc_k` caps are respected.
+- Documentation downweighting in `FAISSStore.multi_search` — mixed code/doc corpus, verify `doc_k` cap is respected and code chunk count equals `k - doc_k`.
 - Header/source reference post-processor — verify it inserts placeholders only when missing and leaves compliant blocks untouched.
 
 ### 11.2 Integration tests
