@@ -146,8 +146,8 @@ Validation failures self-retry up to 2 times within the outline pass, mirroring 
 - **Variable tail**: the outline JSON, draft instructions, prose/diagram requirements
 
 **Prose rules in the prompt**:
-- Never embed fenced code blocks (neither ```python nor ```js). The only fenced blocks allowed are ```mermaid.
-- Short inline identifiers like `` `ClassName.method()` `` or `` `MAX_RETRIES = 3` `` are permitted — these describe the API surface, they are not code excerpts.
+- Never embed fenced code blocks (neither ` ```python` nor ` ```js`). The only fenced blocks allowed are ` ```mermaid`.
+- Short inline identifiers like `ClassName.method()` or `MAX_RETRIES = 3` are permitted — these describe the API surface, they are not code excerpts.
 - Every major claim is followed by a source citation in the existing italic format: `*Source: worker/pipeline/rag_indexer.py:120-145*`
 - Tables and bulleted lists are preferred for enumerating options, fields, parameters, or comparisons. Prose is preferred for narrative and design rationale.
 - Every diagram emitted must match the corresponding entry from the outline. It must be preceded by a bolded one-line header and followed by a source reference line.

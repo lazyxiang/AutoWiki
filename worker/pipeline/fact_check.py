@@ -28,7 +28,7 @@ _FACT_CHECK_SCHEMA = {
                 "properties": {
                     "kind": {"type": "string", "enum": ["claim", "diagram"]},
                     "claim": {"type": "string"},
-                    "diagram_index": {"type": "integer"},
+                    "diagram_index": {"type": "integer", "minimum": 0},
                     "section": {"type": "string"},
                     "reason": {"type": "string"},
                     "suggested_fix": {"type": "string"},
@@ -167,59 +167,98 @@ async def run_fact_check(
             transient_exceptions=TRANSIENT_EXCEPTIONS,
             on_retry=on_retry,
         )
-        return parse_fact_check_result(raw)
     except Exception:
         logger.warning("Fact-check LLM call failed, treating as pass", exc_info=True)
         return FactCheckResult(verdict="pass")
 
+    return parse_fact_check_result(raw)
 
-def strip_failed_claim(draft: str, claim: str, reason: str) -> str:
+
+def _find_section_start(draft: str, section_header: str) -> int:
+    """Return the position of an anchored Markdown heading for *section_header*.
+
+    Accepts *section_header* with or without a leading ``##`` prefix (e.g.
+    both ``"## Flow"`` and ``"Flow"`` match ``## Flow`` in the draft).
+    Occurrences of the heading text inside prose or code fences are ignored.
+    Returns -1 when no heading is found.
+    """
+    heading_text = re.sub(r"^#+\s*", "", section_header).strip()
+    pattern = re.compile(rf"^#+\s+{re.escape(heading_text)}\s*$", re.MULTILINE)
+    match = pattern.search(draft)
+    return match.start() if match else -1
+
+
+def _section_bounds(draft: str, section_header: str) -> tuple[int, int]:
+    """Return ``(section_start, section_end)`` for *section_header*.
+
+    Uses an anchored heading match so prose occurrences of the same words are
+    ignored.  *section_start* is the position of the ``##`` character;
+    *section_end* is the start of the next ``##``-level heading (or end of
+    string).  Returns ``(-1, -1)`` when the section is not found.
+    """
+    section_start = _find_section_start(draft, section_header)
+    if section_start == -1:
+        return -1, -1
+    heading_end = draft.find("\n", section_start)
+    heading_end = heading_end + 1 if heading_end != -1 else len(draft)
+    next_section = re.search(r"^## ", draft[heading_end:], re.MULTILINE)
+    section_end = heading_end + next_section.start() if next_section else len(draft)
+    return section_start, section_end
+
+
+def strip_failed_claim(
+    draft: str, claim: str, reason: str, section: str | None = None
+) -> str:
     """Remove sentences containing the claim text.
 
-    Returns draft unchanged if not found.
+    If *section* is provided, removal is scoped to that section only so that
+    identical phrases in other sections are left untouched.
+    Returns draft unchanged if the claim or section is not found.
     """
     claim_lower = claim.lower()
-    lines = draft.split("\n")
-    result_lines = []
-    for line in lines:
-        if claim_lower in line.lower():
-            sentences = re.split(r"(?<=[.!?])\s+", line)
-            kept = []
-            removed = False
-            for sentence in sentences:
-                if claim_lower in sentence.lower():
-                    removed = True
+
+    def _strip_lines(text: str) -> str:
+        lines = text.split("\n")
+        result_lines = []
+        for line in lines:
+            if claim_lower in line.lower():
+                sentences = re.split(r"(?<=[.!?])\s+", line)
+                kept = []
+                removed = False
+                for sentence in sentences:
+                    if claim_lower in sentence.lower():
+                        removed = True
+                    else:
+                        kept.append(sentence)
+                if removed:
+                    replacement = " ".join(kept)
+                    if replacement:
+                        result_lines.append(replacement)
+                    result_lines.append(f"<!-- removed: {reason} -->")
                 else:
-                    kept.append(sentence)
-            if removed:
-                replacement = " ".join(kept)
-                if replacement:
-                    result_lines.append(replacement)
-                result_lines.append(f"<!-- removed: {reason} -->")
+                    result_lines.append(line)
             else:
                 result_lines.append(line)
-        else:
-            result_lines.append(line)
-    return "\n".join(result_lines)
+        return "\n".join(result_lines)
+
+    if section:
+        sec_start, sec_end = _section_bounds(draft, section.strip())
+        if sec_start == -1:
+            return draft
+        return (
+            draft[:sec_start] + _strip_lines(draft[sec_start:sec_end]) + draft[sec_end:]
+        )
+
+    return _strip_lines(draft)
 
 
 def strip_failed_diagram(
     draft: str, section: str, diagram_index: int, reason: str
 ) -> str:
     """Remove a specific mermaid block and its header/source from the draft."""
-    section_header = section.strip()
-    section_start = draft.find(section_header)
+    section_start, section_end = _section_bounds(draft, section.strip())
     if section_start == -1:
         return draft
-
-    next_section = re.search(
-        r"^## ", draft[section_start + len(section_header) :], re.MULTILINE
-    )
-    section_end = (
-        section_start + len(section_header) + next_section.start()
-        if next_section
-        else len(draft)
-    )
 
     section_text = draft[section_start:section_end]
 
@@ -311,11 +350,11 @@ async def run_targeted_revision(
     for diag_issue in diagram_issues:
         mermaid_pattern = re.compile(r"```mermaid\n(.*?)```", re.DOTALL)
         section_header = diag_issue.section.strip()
-        section_start = revised.find(section_header)
-        if section_start == -1:
+        sec_start, sec_end = _section_bounds(revised, section_header)
+        if sec_start == -1:
             continue
 
-        section_text = revised[section_start:]
+        section_text = revised[sec_start:sec_end]
         matches = list(mermaid_pattern.finditer(section_text))
         idx = diag_issue.diagram_index if diag_issue.diagram_index is not None else 0
         if idx >= len(matches):
@@ -344,8 +383,8 @@ async def run_targeted_revision(
         if "```mermaid" not in corrected:
             corrected = f"```mermaid\n{corrected}\n```"
 
-        abs_start = section_start + matches[idx].start()
-        abs_end = section_start + matches[idx].end()
+        abs_start = sec_start + matches[idx].start()
+        abs_end = sec_start + matches[idx].end()
         revised = revised[:abs_start] + corrected + revised[abs_end:]
 
     return revised

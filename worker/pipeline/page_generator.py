@@ -20,6 +20,7 @@ final draft.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -38,6 +39,8 @@ if TYPE_CHECKING:
     from worker.pipeline.ast_analysis import FileAnalysis
     from worker.pipeline.dependency_graph import DependencyGraph
 
+
+logger = logging.getLogger("worker.page_generator")
 
 _HEADING_RE = re.compile(r"^#{1,6}\s", re.MULTILINE)
 
@@ -66,7 +69,7 @@ def _strip_preamble_and_ensure_header(content: str, title: str) -> str:
     """
     m = _HEADING_RE.search(content)
     if m:
-        content = content[m.start():]
+        content = content[m.start() :]
 
     if not content.startswith("# "):
         content = f"# {title}\n\n{content}"
@@ -262,9 +265,16 @@ async def generate_page(
             )
         except Exception:
             # Revision failed — deterministic fallback: strip all flagged issues
+            logger.warning(
+                "Targeted revision failed for page %r, applying deterministic fallback",
+                spec.title,
+                exc_info=True,
+            )
             for issue in fc_result.issues:
                 if issue.kind == "claim" and issue.claim:
-                    draft = strip_failed_claim(draft, issue.claim, issue.reason)
+                    draft = strip_failed_claim(
+                        draft, issue.claim, issue.reason, issue.section
+                    )
                 elif issue.kind == "diagram" and issue.diagram_index is not None:
                     draft = strip_failed_diagram(
                         draft, issue.section, issue.diagram_index, issue.reason
