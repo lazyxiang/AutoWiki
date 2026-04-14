@@ -9,7 +9,7 @@ Self-hosted, open-source AI-powered wiki generator for GitHub repositories. Poin
 3. Builds a file-level dependency graph from imports
 4. Chunks and embeds code into a FAISS vector index
 5. Asks an LLM to generate a logical page hierarchy with file assignments (two-phase: outline then file assignment)
-6. Generates wiki pages bottom-up using batch LLM calls — leaf pages first, parent pages synthesize child content
+6. Generates wiki pages bottom-up through a 4-pass pipeline — outline, draft, fact-check, and targeted revision — using a fast model for cheap passes and the main model for quality passes
 
 The result is served via a REST API and displayed in a Next.js web UI with sidebar navigation, interactive dependency diagrams, and a conversational Q&A chat interface.
 
@@ -126,6 +126,7 @@ AutoWiki resolves config in this order (highest wins):
 | `AUTOWIKI_EMBEDDING_PROVIDER` | `openai` | `openai` · `ollama` · `google` |
 | `AUTOWIKI_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model name |
 | `AUTOWIKI_EMBEDDING_API_KEY` | — | API key override. Required if provider-specific key (e.g. `OPENAI_API_KEY`) is not set or if using a custom base URL. |
+| `AUTOWIKI_LLM_FAST_MODEL` | *(same as LLM model)* | Faster/cheaper model for outline and fact-check passes (e.g. `claude-haiku-4-5`) |
 | `REDIS_URL` | `redis://localhost:6379` | Redis connection string |
 | `DATABASE_PATH` | `~/.autowiki/autowiki.db` | SQLite database path |
 | `AUTOWIKI_DATA_DIR` | `~/.autowiki` | Root directory for clones, indexes, and wiki files |
@@ -311,7 +312,13 @@ Source files are split into overlapping chunks with LangChain's `RecursiveCharac
 A two-phase LLM process: Phase 1 generates the page hierarchy (titles, purposes, parent relationships); Phase 2 assigns every source file to a page. Each phase validates its own output and self-retries before proceeding. The output is saved as `wiki.json` (user-facing) and `wiki_plan.json` (internal, with file mappings for incremental refresh).
 
 **Stage 6 — Page generation** (`worker/pipeline/page_generator.py`)
-Pages are generated bottom-up (leaf pages first, parent pages last) using batched LLM calls. For each page, RAG retrieval fetches the most relevant code chunks from the FAISS index. Parent pages receive their children's rendered Markdown and synthesize an overview rather than duplicating content.
+Pages are generated bottom-up (leaf pages first, parent pages last) through a 4-pass pipeline per page:
+- **Pass 1 — Outline** (fast model): produces a structured outline with planned sections, diagrams, and key claims to verify.
+- **Pass 2 — Draft** (main model): generates full Markdown from the outline using multi-query RAG context.
+- **Pass 3 — Fact-check** (fast model): verifies key claims and diagrams against source code.
+- **Pass 4 — Revision** (main model, conditional): applies targeted fixes when fact-check fails; deterministic fallback strips any still-flagged issues.
+
+Parent pages receive their children's rendered Markdown and synthesize an overview rather than duplicating content. Prompt caching reduces cost on repeated system prompts, and a configurable fast model (`AUTOWIKI_LLM_FAST_MODEL`) handles the cheap passes.
 
 ### Data flow (single indexing request)
 
@@ -344,6 +351,7 @@ WS /ws/jobs/{job_id}                 → streams {progress, status} every second
 
 - **Phase 1** ✅ — Core pipeline (index + static wiki + REST API + web UI + CLI)
 - **Phase 2** ✅ — Incremental refresh, Q&A chat, dependency diagrams
+- **Phase 2.5** ✅ — Wiki quality enhancements: two-phase planner, 4-pass page generation, prompt caching, fast model support, RAG tuning, diagram post-processing
 - **Phase 3** — Deep Research mode, MCP server
 - **Phase 4** — GitHub webhooks, user-steered wiki structure (`.autowiki/wiki.json`)
 - **Phase 5** — GitLab/Bitbucket, hybrid search

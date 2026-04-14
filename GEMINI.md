@@ -4,7 +4,7 @@ This file provides guidance to GEMINI when working with code in this repository.
 
 ## Project Status
 
-AutoWiki **Phase 1 and Phase 2 are complete**. Phase 1 tagged `v0.1.0-phase1`; Phase 2 (chat, diagrams, incremental refresh) merged via PR #4.
+AutoWiki **Phase 1, Phase 2, and Phase 2.5 are complete**. Phase 1 tagged `v0.1.0-phase1`; Phase 2 (chat, diagrams, incremental refresh) merged via PR #4; Phase 2.5 (wiki quality enhancements) merged across PRs #15 and #17.
 
 ## What AutoWiki Is
 
@@ -33,9 +33,9 @@ Storage (SQLite + FAISS + Markdown files at ~/.autowiki/)
 1. **Repo Ingestion** (`worker/pipeline/ingestion.py`) — shallow clone, file filtering, commit SHA
 2. **AST Analysis** (`worker/pipeline/ast_analysis.py`) — single-pass Tree-Sitter entity extraction → `FileAnalysis`
 3. **Dependency Graph** (`worker/pipeline/dependency_graph.py`) — file-level import graph + BFS-split clusters
-4. **RAG Indexer** (`worker/pipeline/rag_indexer.py`) — LangChain chunking, FAISS IndexFlatIP (skippable with `reuse_index=True`)
+4. **RAG Indexer** (`worker/pipeline/rag_indexer.py`) — LangChain chunking, FAISS IndexFlatIP (skippable with `reuse_index=True`); `doc_k` param downweights pure documentation files
 5. **Wiki Planner** (`worker/pipeline/wiki_planner.py`) — two-phase LLM plan: Phase 1 outline (hierarchy/titles/purposes) + Phase 2 file assignment; each phase validates and self-retries → `WikiPlan`
-6. **Page Generator** (`worker/pipeline/page_generator.py`) — bottom-up batched generation: leaf pages first, parents synthesize child Markdown via `generate_page_batch()`
+6. **Page Generator** (`worker/pipeline/page_generator.py`) — bottom-up 4-pass orchestrator: Pass 1 outline (fast model), Pass 2 draft (main model), Pass 3 fact-check (fast model), Pass 4 targeted revision (main model, conditional); post-processing applies diagram headers and Mermaid sanitization
 
 Supported AST languages: Python, JavaScript/JSX, TypeScript/TSX, Java, Go, Rust, C, C++, C#
 
@@ -84,18 +84,27 @@ Default LLM: `claude-sonnet-4-6`. Supported providers: `anthropic`, `openai`, `o
 - **`to_llm_summary(max_files=200)`**: default 200 keeps prompts bounded; pass 0 to opt in to the 800-file safety cap; when capped, `_rank_files_by_importance()` selects the most architecturally significant files (entity count, in-degree, entry-point bonus, shallowness)
 - **`reuse_index`**: `IndexRequest.reuse_index` (API) / `--reuse-index` (CLI) skips Stage 4 (FAISS rebuild) and loads the existing index instead; threaded through `enqueue_full_index` → `run_full_index`
 - **`generate_batch` + bottom-up generation**: `LLMProvider.generate_batch()` runs prompts concurrently (semaphore-controlled); `compute_generation_order()` returns pages deepest-first so parents always receive finished child Markdown
+- **Multi-pass page generation**: each page goes through 4 passes — Pass 1 outline (`fast_llm`), Pass 2 full draft (`llm`), Pass 3 fact-check (`fast_llm`), Pass 4 targeted revision (`llm`, only when fact-check verdict is `"fail"`); deterministic fallback strips still-flagged claims/diagrams
+- **`PromptSegment`**: typed dataclass wrapping prompt parts with optional `cache_control`; all LLM providers translate `list[PromptSegment]` → provider-native format; enables Anthropic prompt caching for long system prompts
+- **`fast_model` / `fast_llm`**: `LLMConfig.fast_model` configured via `AUTOWIKI_LLM_FAST_MODEL` (defaults to main model when empty); `make_fast_llm_provider()` returns main provider unchanged when models match; used for Pass 1 outline and Pass 3 fact-check to cut latency and cost; threaded through jobs → planner Phase 2 → page generator
+- **`cache_ttl`**: `LLMConfig.cache_ttl` hints cache lifetime for providers that support it; Anthropic uses `"ephemeral"` cache control on system segments
 
 ## API Surface
 
-### REST/WebSocket (Phase 1)
+### REST/WebSocket (Phase 1 + Phase 2)
 ```http
 POST  /api/repos                              # Submit repo for indexing
 GET   /api/repos                             # List all repos
 GET   /api/repos/{repo_id}                   # Status + metadata
+POST  /api/repos/{repo_id}/refresh           # Trigger incremental refresh
+GET   /api/repos/{repo_id}/graph             # Dependency graph (nodes + edges)
 GET   /api/repos/{repo_id}/wiki              # List wiki pages
 GET   /api/repos/{repo_id}/wiki/{slug}       # Get page Markdown
+POST  /api/repos/{repo_id}/chat              # Create a new chat session
+GET   /api/repos/{repo_id}/chat/{session_id} # Get chat history
 GET   /api/jobs/{job_id}                     # Job status + progress
 WS    /ws/jobs/{job_id}                      # Stream job progress
+WS    /ws/repos/{repo_id}/chat/{session_id}  # Stream chat responses
 ```
 
 ### CLI (Phase 1)
@@ -112,8 +121,8 @@ autowiki config set <key> <value>
 
 ## Model Selection
 
-- **Planning** (architecture, design, writing plans): use `gemini-3.1-pro-preview`
-- **Executing** (implementation, refactoring, code changes): use `gemini-3.1-pro-preview`
+- **Planning** (architecture, design, writing plans): use `gemini-2.5-pro-preview-05-06`
+- **Executing** (implementation, refactoring, code changes): use `gemini-2.5-pro-preview-05-06`
 
 ## Pre-Commit Checks (Required)
 
@@ -146,6 +155,7 @@ Non-Docker: `autowiki serve` spawns API + worker + Next.js as subprocesses.
 
 - **Phase 1** ✅ — Core pipeline (index + static wiki + REST API + web UI + CLI)
 - **Phase 2** ✅ — Incremental refresh + Q&A chat + dependency diagrams (merged PR #4)
+- **Phase 2.5** ✅ — Wiki quality enhancements: two-phase planner with per-phase validation, bottom-up child-synthesis generation, 4-pass page orchestrator, prompt caching, fast model, RAG doc_k tuning, diagram post-processing (PRs #15 and #17)
 - **Phase 3** — Deep Research mode + MCP server
 - **Phase 4** — GitHub webhooks + user steering (`.autowiki/wiki.json`)
 - **Phase 5** — GitLab/Bitbucket + hybrid search
