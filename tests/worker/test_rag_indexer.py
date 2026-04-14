@@ -177,3 +177,102 @@ async def test_build_rag_index_with_entities(tmp_path):
     # Entity-aware chunks should have entity metadata
     entities_found = [r.get("entity") for r in results if r.get("entity")]
     assert "hello" in entities_found or "goodbye" in entities_found
+
+
+def _make_store_with_docs_and_code(tmp_path):
+    """Create a store with 3 code chunks and 2 doc chunks."""
+    store = FAISSStore(
+        dimension=4,
+        index_path=tmp_path / "idx",
+        meta_path=tmp_path / "meta.pkl",
+    )
+    # Use orthogonal-ish vectors so we can control ranking
+    vecs = [
+        np.array([1, 0, 0, 0], dtype=np.float32),  # code chunk 1
+        np.array([0, 1, 0, 0], dtype=np.float32),  # code chunk 2
+        np.array([0, 0, 1, 0], dtype=np.float32),  # code chunk 3
+        np.array([0.9, 0.1, 0, 0], dtype=np.float32),  # doc chunk 1 (similar to code 1)
+        np.array([0, 0, 0, 1], dtype=np.float32),  # doc chunk 2
+    ]
+    metas = [
+        {"file": "src/main.py", "start_line": 1, "end_line": 10, "text": "code1"},
+        {"file": "src/utils.py", "start_line": 1, "end_line": 10, "text": "code2"},
+        {"file": "src/models.py", "start_line": 1, "end_line": 10, "text": "code3"},
+        {"file": "docs/DESIGN.md", "start_line": 1, "end_line": 10, "text": "doc1"},
+        {"file": "README.md", "start_line": 1, "end_line": 10, "text": "doc2"},
+    ]
+    store.add(vecs, metas)
+    return store
+
+
+_DOC_EXTS = (".md", ".rst", ".txt", ".adoc")
+
+
+def test_search_with_doc_k_caps_docs(tmp_path):
+    store = _make_store_with_docs_and_code(tmp_path)
+    # Query similar to code chunk 1 and doc chunk 1
+    query = np.array([0.95, 0.05, 0, 0], dtype=np.float32)
+    results = store.search(query, k=5, doc_k=1)
+
+    doc_results = [r for r in results if r["file"].endswith(_DOC_EXTS)]
+    code_results = [r for r in results if not r["file"].endswith(_DOC_EXTS)]
+
+    assert len(doc_results) <= 1
+    assert len(code_results) <= 4  # k - doc_k = 4
+
+
+def test_search_with_doc_k_zero_excludes_all_docs(tmp_path):
+    store = _make_store_with_docs_and_code(tmp_path)
+    query = np.array([0.95, 0.05, 0, 0], dtype=np.float32)
+    results = store.search(query, k=5, doc_k=0)
+
+    for r in results:
+        assert not r["file"].endswith(_DOC_EXTS)
+
+
+def test_search_without_doc_k_returns_all(tmp_path):
+    """Default behavior (doc_k=None) should return all results unpartitioned."""
+    store = _make_store_with_docs_and_code(tmp_path)
+    query = np.array([0.95, 0.05, 0, 0], dtype=np.float32)
+    results = store.search(query, k=5)
+    # Should return up to 5 results without partitioning
+    assert len(results) == 5
+
+
+def test_multi_search_with_doc_k(tmp_path):
+    store = _make_store_with_docs_and_code(tmp_path)
+    q1 = np.array([0.95, 0.05, 0, 0], dtype=np.float32)
+    q2 = np.array([0, 0, 0.9, 0.1], dtype=np.float32)
+    results = store.multi_search([q1, q2], k=5, doc_k=1)
+
+    doc_results = [r for r in results if r["file"].endswith(_DOC_EXTS)]
+    assert len(doc_results) <= 1
+
+
+def test_search_doc_k_with_no_doc_chunks_in_index(tmp_path):
+    """When doc_k > 0 but index has no doc chunks, should return code chunks."""
+    store = FAISSStore(
+        dimension=4,
+        index_path=tmp_path / "idx",
+        meta_path=tmp_path / "meta.pkl",
+    )
+    vecs = [
+        np.array([1, 0, 0, 0], dtype=np.float32),
+        np.array([0, 1, 0, 0], dtype=np.float32),
+        np.array([0, 0, 1, 0], dtype=np.float32),
+    ]
+    metas = [
+        {"file": "src/a.py", "start_line": 1, "end_line": 5, "text": "a"},
+        {"file": "src/b.py", "start_line": 1, "end_line": 5, "text": "b"},
+        {"file": "src/c.py", "start_line": 1, "end_line": 5, "text": "c"},
+    ]
+    store.add(vecs, metas)
+
+    query = np.array([1, 0, 0, 0], dtype=np.float32)
+    results = store.search(query, k=3, doc_k=1)
+
+    # No doc chunks exist; all results should be code chunks
+    for r in results:
+        assert not r["file"].endswith((".md", ".rst", ".txt", ".adoc"))
+    # Should return code chunks despite doc_k=1 (fills unused doc slot with code)
+    assert len(results) > 0

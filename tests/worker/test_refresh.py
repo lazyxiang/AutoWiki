@@ -51,7 +51,9 @@ async def test_run_refresh_index_no_changes(tmp_path, mock_llm, mock_embedding):
     await dispose_db(db_path)
 
 
-async def test_run_refresh_index_with_changes(tmp_path, mock_llm, mock_embedding):
+async def test_run_refresh_index_with_changes(
+    tmp_path, mock_llm, mock_fast_llm, mock_embedding
+):
     """Changed files trigger re-indexing of affected modules."""
     from shared.database import dispose_db, get_session, init_db
     from shared.models import Job, Repository, WikiPage
@@ -120,6 +122,7 @@ async def test_run_refresh_index_with_changes(tmp_path, mock_llm, mock_embedding
             return_value=["main.py"],
         ),
         patch("worker.jobs.make_llm_provider", return_value=mock_llm),
+        patch("worker.jobs.make_fast_llm_provider", return_value=mock_fast_llm),
         patch("worker.jobs.make_embedding_provider", return_value=mock_embedding),
     ):
         cfg = mock_cfg.return_value

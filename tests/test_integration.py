@@ -9,7 +9,9 @@ from unittest.mock import patch
 FIXTURE_REPO = Path("tests/fixtures/simple-repo")
 
 
-async def test_full_pipeline_produces_pages(tmp_path, mock_llm, mock_embedding):
+async def test_full_pipeline_produces_pages(
+    tmp_path, mock_llm, mock_fast_llm, mock_embedding
+):
     import os
 
     os.environ["DATABASE_PATH"] = str(tmp_path / "autowiki.db")
@@ -52,6 +54,7 @@ async def test_full_pipeline_produces_pages(tmp_path, mock_llm, mock_embedding):
     with (
         patch("worker.jobs.clone_or_fetch", return_value=("deadbeef", "main")),
         patch("worker.jobs.make_llm_provider", return_value=mock_llm),
+        patch("worker.jobs.make_fast_llm_provider", return_value=mock_fast_llm),
         patch("worker.jobs.make_embedding_provider", return_value=mock_embedding),
     ):
         from worker.jobs import run_full_index

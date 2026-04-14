@@ -15,7 +15,10 @@ def fixture_repo_path():
 def mock_llm():
     """Returns a mock LLMProvider that returns predictable content."""
     m = AsyncMock()
-    m.generate.return_value = "Mocked wiki page content."
+    m.generate.return_value = (
+        "## Overview\n\nMocked wiki page content.\n\n"
+        "```mermaid\nflowchart TD\n  A-->B\n```\n\n*Source: main.py:1-5*"
+    )
 
     _structured_responses = iter(
         [
@@ -65,6 +68,56 @@ def mock_llm():
     m.generate_batch.side_effect = lambda prompts, **kwargs: [
         "Mocked wiki page content." for _ in prompts
     ]
+    return m
+
+
+@pytest.fixture
+def mock_fast_llm():
+    """Returns a mock LLMProvider for the fast model (outline + fact-check passes).
+
+    Returns schema-appropriate payloads based on the 'schema' kwarg:
+    - assignment schema (has "assignments" property) → empty assignments
+    - outline schema (has "sections" property) → valid page outline
+    - fact-check schema (has "verdict" property) → passing fact-check
+    Falls back to alternating outline/fact-check for unrecognised schemas.
+    """
+    m = AsyncMock()
+
+    _outline = {
+        "sections": [
+            {
+                "heading": "Overview",
+                "kind": "prose+diagram",
+                "focus": "What it does",
+                "diagram": {
+                    "type": "flowchart",
+                    "purpose": "Component flow",
+                    "source_files": [],
+                },
+            }
+        ],
+        "key_claims": ["Claim one", "Claim two", "Claim three"],
+    }
+    _fact_check_pass = {"verdict": "pass", "issues": []}
+    _assignment_pass = {"assignments": []}
+
+    _call_counter = [0]
+
+    async def _structured_side_effect(*args, **kwargs):
+        schema = kwargs.get("schema", {})
+        props = schema.get("properties", {})
+        if "assignments" in props:
+            return _assignment_pass
+        if "verdict" in props:
+            return _fact_check_pass
+        if "sections" in props:
+            return _outline
+        # Fallback: alternate outline / fact-check for unrecognised schemas
+        idx = _call_counter[0]
+        _call_counter[0] += 1
+        return _outline if idx % 2 == 0 else _fact_check_pass
+
+    m.generate_structured.side_effect = _structured_side_effect
     return m
 
 

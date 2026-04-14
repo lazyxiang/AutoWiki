@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from worker.llm.base import LLMProvider
+from worker.llm.prompt_segment import PromptInput, normalize_prompt, segments_to_text
 
 try:
     from google import genai
@@ -27,41 +28,52 @@ class GeminiProvider(LLMProvider):
         )
         self._model = model
 
-    async def generate(self, prompt: str, system: str = "") -> str:
+    async def generate(self, prompt: PromptInput, system: PromptInput = "") -> str:
+        prompt_text = segments_to_text(normalize_prompt(prompt))
+        system_text = segments_to_text(normalize_prompt(system))
         config = types.GenerateContentConfig(
-            system_instruction=system if system else None,
-            max_output_tokens=8192,
+            system_instruction=system_text if system_text else None,
+            max_output_tokens=65536,
         )
         response = await asyncio.to_thread(
             self._client.models.generate_content,
             model=self._model,
-            contents=prompt,
+            contents=prompt_text,
             config=config,
         )
         return response.text
 
     async def generate_structured(
-        self, prompt: str, schema: dict[str, Any], system: str = ""
+        self, prompt: PromptInput, schema: dict[str, Any], system: PromptInput = ""
     ) -> dict[str, Any]:
+        prompt_text = segments_to_text(normalize_prompt(prompt))
+        schema_str = json.dumps(schema)
+        prompt_with_schema = (
+            f"{prompt_text}\n\nRespond ONLY with valid JSON"
+            f" matching this schema:\n{schema_str}"
+        )
+        system_text = segments_to_text(normalize_prompt(system))
         config = types.GenerateContentConfig(
-            system_instruction=system if system else None,
+            system_instruction=system_text if system_text else None,
             response_mime_type="application/json",
-            max_output_tokens=8192,
+            max_output_tokens=16000,
         )
         response = await asyncio.to_thread(
             self._client.models.generate_content,
             model=self._model,
-            contents=prompt,
+            contents=prompt_with_schema,
             config=config,
         )
         return json.loads(response.text)
 
     async def generate_stream(
-        self, prompt: str, system: str = ""
+        self, prompt: PromptInput, system: PromptInput = ""
     ) -> AsyncIterator[str]:
+        prompt_text = segments_to_text(normalize_prompt(prompt))
+        system_text = segments_to_text(normalize_prompt(system))
         config = types.GenerateContentConfig(
-            system_instruction=system if system else None,
-            max_output_tokens=8192,
+            system_instruction=system_text if system_text else None,
+            max_output_tokens=65536,
         )
 
         # Note: google-genai stream is a generator. We iterate
@@ -70,7 +82,7 @@ class GeminiProvider(LLMProvider):
         def sync_stream():
             return self._client.models.generate_content_stream(
                 model=self._model,
-                contents=prompt,
+                contents=prompt_text,
                 config=config,
             )
 

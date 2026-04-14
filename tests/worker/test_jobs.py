@@ -2,7 +2,9 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 
-async def test_full_index_job_updates_status(tmp_path, mock_llm, mock_embedding):
+async def test_full_index_job_updates_status(
+    tmp_path, mock_llm, mock_fast_llm, mock_embedding
+):
     """Full pipeline runs against fixture repo and sets status=ready."""
     import os
 
@@ -39,6 +41,7 @@ async def test_full_index_job_updates_status(tmp_path, mock_llm, mock_embedding)
     with (
         patch("worker.jobs.clone_or_fetch", return_value=("abc123def456", "main")),
         patch("worker.jobs.make_llm_provider", return_value=mock_llm),
+        patch("worker.jobs.make_fast_llm_provider", return_value=mock_fast_llm),
         patch("worker.jobs.make_embedding_provider", return_value=mock_embedding),
     ):
         from worker.jobs import run_full_index
@@ -59,7 +62,9 @@ async def test_full_index_job_updates_status(tmp_path, mock_llm, mock_embedding)
         assert repo.status == "ready"
 
 
-async def test_run_full_index_persists_wiki_plan(tmp_path, mock_llm, mock_embedding):
+async def test_run_full_index_persists_wiki_plan(
+    tmp_path, mock_llm, mock_fast_llm, mock_embedding
+):
     import json
 
     from shared.database import dispose_db, get_session, init_db
@@ -79,6 +84,7 @@ async def test_run_full_index_persists_wiki_plan(tmp_path, mock_llm, mock_embedd
             return_value=("abc123", "main"),
         ),
         patch("worker.jobs.make_llm_provider", return_value=mock_llm),
+        patch("worker.jobs.make_fast_llm_provider", return_value=mock_fast_llm),
         patch("worker.jobs.make_embedding_provider", return_value=mock_embedding),
     ):
         cfg = mock_cfg.return_value
@@ -169,7 +175,9 @@ async def _setup_db(tmp_path):
     return str(tmp_path / "test.db")
 
 
-async def test_always_clears_existing_artifacts(tmp_path, mock_llm, mock_embedding):
+async def test_always_clears_existing_artifacts(
+    tmp_path, mock_llm, mock_fast_llm, mock_embedding
+):
     """run_full_index always clears existing FAISS files and WikiPage records."""
     from shared.database import dispose_db
 
@@ -212,6 +220,7 @@ async def test_always_clears_existing_artifacts(tmp_path, mock_llm, mock_embeddi
     with (
         patch("worker.jobs.clone_or_fetch", return_value=("newsha", "main")),
         patch("worker.jobs.make_llm_provider", return_value=mock_llm),
+        patch("worker.jobs.make_fast_llm_provider", return_value=mock_fast_llm),
         patch("worker.jobs.make_embedding_provider", return_value=mock_embedding),
     ):
         from worker.jobs import run_full_index

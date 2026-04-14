@@ -32,7 +32,7 @@ from shared.config import get_config
 from shared.database import get_session, init_db
 from shared.models import Job, Repository, WikiPage
 from worker.embedding import make_embedding_provider
-from worker.llm import make_llm_provider
+from worker.llm import make_fast_llm_provider, make_llm_provider
 from worker.pipeline.ast_analysis import FileAnalysis, analyze_all_files
 from worker.pipeline.dependency_graph import build_dependency_graph
 from worker.pipeline.ingestion import (
@@ -451,6 +451,7 @@ async def run_full_index(
         # Stage 4: RAG Indexer — entity-aware chunking + FAISS vector index
         logger.info("Stage 4: RAG Indexer starting")
         llm = make_llm_provider(cfg)
+        fast_llm = make_fast_llm_provider(cfg, llm)
         embedding = make_embedding_provider(cfg)
         logger.info(
             "Using embedding provider: %s, model: %s (dim=%d)",
@@ -498,6 +499,7 @@ async def run_full_index(
             readme=readme,
             on_retry=_on_retry,
             wiki_language=wiki_language,
+            fast_llm=fast_llm,
         )
         logger.info(
             "Wiki plan generated: %d pages planned for %s", len(plan.pages), name
@@ -536,6 +538,7 @@ async def run_full_index(
                 specs_with_children,
                 store,
                 llm,
+                fast_llm,
                 embedding,
                 repo_name=name,
                 file_analysis=file_analysis,
@@ -914,6 +917,7 @@ async def run_refresh_index(
         # Stage 4: Rebuild FAISS index
         logger.info("Stage 4: RAG Indexer starting")
         llm = make_llm_provider(cfg)
+        fast_llm = make_fast_llm_provider(cfg, llm)
         embedding = make_embedding_provider(cfg)
         logger.info(
             "Using embedding provider: %s, model: %s (dim=%d)",
@@ -977,6 +981,7 @@ async def run_refresh_index(
             on_retry=_on_retry,
             existing_titles=unaffected_titles,
             wiki_language=wiki_language,
+            fast_llm=fast_llm,
         )
         logger.info(
             "Wiki plan generated: %d pages updated for %s", len(plan.pages), name
@@ -1053,6 +1058,7 @@ async def run_refresh_index(
                 specs_with_children,
                 store,
                 llm,
+                fast_llm,
                 embedding,
                 repo_name=name,
                 file_analysis=file_analysis,

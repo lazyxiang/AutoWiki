@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from worker.llm.base import LLMProvider, _parse_json_response
+from worker.llm.prompt_segment import PromptInput, normalize_prompt, segments_to_text
 
 
 class OllamaProvider(LLMProvider):
@@ -14,32 +15,37 @@ class OllamaProvider(LLMProvider):
         self._model = model
         self._base_url = base_url.rstrip("/")
 
-    async def generate(self, prompt: str, system: str = "") -> str:
-        payload = {"model": self._model, "prompt": prompt, "stream": False}
-        if system:
-            payload["system"] = system
+    async def generate(self, prompt: PromptInput, system: PromptInput = "") -> str:
+        prompt_text = segments_to_text(normalize_prompt(prompt))
+        system_text = segments_to_text(normalize_prompt(system))
+        payload = {"model": self._model, "prompt": prompt_text, "stream": False}
+        if system_text:
+            payload["system"] = system_text
         async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(f"{self._base_url}/api/generate", json=payload)
             resp.raise_for_status()
             return resp.json()["response"]
 
     async def generate_structured(
-        self, prompt: str, schema: dict[str, Any], system: str = ""
+        self, prompt: PromptInput, schema: dict[str, Any], system: PromptInput = ""
     ) -> dict[str, Any]:
+        prompt_text = segments_to_text(normalize_prompt(prompt))
         schema_str = json.dumps(schema)
         json_prompt = (
-            f"{prompt}\n\nRespond ONLY with valid JSON"
+            f"{prompt_text}\n\nRespond ONLY with valid JSON"
             f" matching this schema:\n{schema_str}"
         )
         raw = await self.generate(json_prompt, system=system)
         return _parse_json_response(raw)
 
     async def generate_stream(
-        self, prompt: str, system: str = ""
+        self, prompt: PromptInput, system: PromptInput = ""
     ) -> AsyncIterator[str]:
-        payload = {"model": self._model, "prompt": prompt, "stream": True}
-        if system:
-            payload["system"] = system
+        prompt_text = segments_to_text(normalize_prompt(prompt))
+        system_text = segments_to_text(normalize_prompt(system))
+        payload = {"model": self._model, "prompt": prompt_text, "stream": True}
+        if system_text:
+            payload["system"] = system_text
         async with httpx.AsyncClient(timeout=120) as client:
             async with client.stream(
                 "POST", f"{self._base_url}/api/generate", json=payload
