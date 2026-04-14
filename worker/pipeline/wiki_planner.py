@@ -576,6 +576,7 @@ async def _assign_files(
     on_retry: OnRetryCallback | None,
     max_retries: int = 3,
     _extra_context: str | None = None,
+    fast_llm: LLMProvider | None = None,
 ) -> dict[str, list[str]]:
     """Phase 2: Assign every file to a page and validate assignments.
 
@@ -597,10 +598,12 @@ async def _assign_files(
     valid_titles = {p["title"] for p in outline}
     first_title = outline[0]["title"]
 
+    _assign_llm = fast_llm if fast_llm is not None else llm
+
     for attempt in range(max_retries):
         try:
             raw = await async_retry(
-                llm.generate_structured,
+                _assign_llm.generate_structured,
                 prompt,
                 schema=_ASSIGNMENT_SCHEMA,
                 system=system,
@@ -841,6 +844,7 @@ async def generate_wiki_plan(
     on_retry: OnRetryCallback | None = None,
     existing_titles: set[str] | None = None,
     wiki_language: str = "en",
+    fast_llm: LLMProvider | None = None,
 ) -> WikiPlan:
     """Generate a hierarchical wiki plan using two-phase LLM planning.
 
@@ -895,7 +899,7 @@ async def generate_wiki_plan(
     except ValueError:
         return _fallback_plan(repo_name, all_files, clusters)
 
-    # Phase 2: Assign files + validate assignments
+    # Phase 2: Assign files + validate assignments (fast_llm for classification task)
     file_assignments = await _assign_files(
         outline=outline,
         file_summary=file_summary,
@@ -905,6 +909,7 @@ async def generate_wiki_plan(
         system=system,
         on_retry=on_retry,
         max_retries=max_retries,
+        fast_llm=fast_llm,
     )
 
     # Final: combine and normalise (handles orphan files, safety-net checks)

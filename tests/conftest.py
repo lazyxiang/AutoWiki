@@ -15,7 +15,10 @@ def fixture_repo_path():
 def mock_llm():
     """Returns a mock LLMProvider that returns predictable content."""
     m = AsyncMock()
-    m.generate.return_value = "Mocked wiki page content."
+    m.generate.return_value = (
+        "## Overview\n\nMocked wiki page content.\n\n"
+        "```mermaid\nflowchart TD\n  A-->B\n```\n\n*Source: main.py:1-5*"
+    )
 
     _structured_responses = iter(
         [
@@ -65,6 +68,44 @@ def mock_llm():
     m.generate_batch.side_effect = lambda prompts, **kwargs: [
         "Mocked wiki page content." for _ in prompts
     ]
+    return m
+
+
+@pytest.fixture
+def mock_fast_llm():
+    """Returns a mock LLMProvider for the fast model (outline + fact-check passes).
+
+    Alternates between returning a valid page outline and a passing fact-check
+    so it works for any number of pages without exhausting a fixed side_effect list.
+    """
+    m = AsyncMock()
+
+    _outline = {
+        "sections": [
+            {
+                "heading": "Overview",
+                "kind": "prose+diagram",
+                "focus": "What it does",
+                "diagram": {
+                    "type": "flowchart",
+                    "purpose": "Component flow",
+                    "source_files": [],
+                },
+            }
+        ],
+        "key_claims": ["Claim one", "Claim two", "Claim three"],
+    }
+    _fact_check_pass = {"verdict": "pass", "issues": []}
+
+    # Alternate: outline, fact-check, outline, fact-check, ...
+    _call_counter = [0]
+
+    async def _structured_side_effect(*args, **kwargs):
+        idx = _call_counter[0]
+        _call_counter[0] += 1
+        return _outline if idx % 2 == 0 else _fact_check_pass
+
+    m.generate_structured.side_effect = _structured_side_effect
     return m
 
 
