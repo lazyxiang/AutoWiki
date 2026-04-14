@@ -1,7 +1,7 @@
 # Wiki Page Quality Redesign — Implementation Plan
 
 > **[COMPLETE]** Implemented and merged (PRs #15 and #17). See `docs/superpowers/specs/2026-04-10-wiki-page-quality-redesign.md` for spec-level implementation notes, including the `cache_ttl: long` stub that was not wired.
-
+>
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the single-pass wiki page generator with a multi-pass pipeline (outline → draft → fact-check → revision) that produces better-grounded, hallucination-resistant wiki pages with richer Mermaid diagrams, while keeping cost flat via a fast/main model split and prompt caching.

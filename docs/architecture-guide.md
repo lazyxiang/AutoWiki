@@ -44,7 +44,7 @@ For implementation details of each phase, follow with the corresponding plan doc
 
 ## 3. System Architecture at a Glance
 
-```
+```text
 User (Browser / CLI / MCP)
     ↓
 API Gateway (FastAPI)  ←→  Redis
@@ -56,7 +56,7 @@ Storage (~/.autowiki/): SQLite + FAISS + Markdown files
 
 ### 6-Stage Generation Pipeline
 
-```
+```text
 Stage 1  Ingestion          shallow clone, file filtering, commit SHA
 Stage 2  AST Analysis       single-pass Tree-Sitter → FileAnalysis (entities, counts)
 Stage 3  Dependency Graph   file-level import edges → connected-component clusters

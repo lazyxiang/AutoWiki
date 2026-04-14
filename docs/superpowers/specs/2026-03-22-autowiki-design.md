@@ -206,8 +206,8 @@ chat_messages (
         index.md
         {slug}.md         ← one file per wiki page
       ast/
-        dep_graph.json    ← unified dependency graph (note: stored in DependencyGraph, not persisted as JSON)
         wiki_plan.json    ← internal wiki plan with file mappings (replaces module_tree.json)
+        # dependency graph is computed in-memory as DependencyGraph; not persisted to disk
   autowiki.db             ← SQLite database
   logs/
     worker.log

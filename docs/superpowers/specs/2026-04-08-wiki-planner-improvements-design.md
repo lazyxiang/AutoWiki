@@ -400,16 +400,16 @@ Output Markdown only.
 
 #### Batch generation helper
 
-> **[SUPERSEDED]** The implementation below was replaced by the 4-pass page quality redesign. The actual `generate_page_batch()` signature includes `fast_llm` and runs `generate_page()` (4-pass) concurrently, not a single `llm.generate_batch()` call.
+> **[SUPERSEDED]** The original design collected flat prompts and called `llm.generate_batch(prompts)`. Replaced by the 4-pass page quality redesign: each page now runs a full 4-pass `generate_page()` pipeline. `generate_page_batch()` orchestrates these concurrently via `asyncio.gather`.
 
-~~New function:~~
+Current signature (for reference):
 
 ```python
-# SUPERSEDED — actual implementation uses asyncio.gather over 4-pass generate_page() calls.
 async def generate_page_batch(
-    specs: list[tuple[WikiPageSpec, list[PageResult] | None]],
+    specs_with_children: list[tuple[WikiPageSpec, list[PageResult] | None]],
     store: FAISSStore,
     llm: LLMProvider,
+    fast_llm: LLMProvider,
     embedding: EmbeddingProvider,
     repo_name: str,
     file_analysis: FileAnalysis,
@@ -417,18 +417,12 @@ async def generate_page_batch(
     on_retry: OnRetryCallback | None = None,
     wiki_language: str = "en",
 ) -> list[PageResult]:
-    """Generate all pages in a batch using llm.generate_batch().
+    """Generate all pages in a batch using the multi-pass pipeline.
 
-    Constructs prompts for each page (including child contents for parents),
-    embeds RAG queries, then calls generate_batch with all prompts.
+    Runs generate_page() (4-pass: outline → draft → fact-check → revision)
+    concurrently for all specs via asyncio.gather with a semaphore (max 5).
     """
 ```
-
-~~This function:~~
-~~1. For each spec, constructs the full prompt (RAG retrieval + entity details + dep info + child contents)~~
-~~2. Collects all prompts~~
-~~3. Calls `llm.generate_batch(prompts, system=system)`~~
-~~4. Wraps results into `PageResult` objects~~
 
 ### File: `worker/jobs.py`
 

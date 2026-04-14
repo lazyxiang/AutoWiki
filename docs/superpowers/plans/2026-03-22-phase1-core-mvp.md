@@ -1,7 +1,6 @@
 # AutoWiki Phase 1 — Core MVP Implementation Plan
 
 > **[COMPLETE — STALE IN SEVERAL AREAS]** Implemented and merged (tagged `v0.1.0-phase1`). The following have been superseded by later work:
->
 > - **5-stage pipeline**: the pipeline grew to 6 stages (Stage 6: Page Generator; the short-lived Stage 7 diagram synthesis was removed). Stage numbering references in this plan are historical.
 > - **`build_module_tree()` / `build_enhanced_module_tree()`**: replaced by `analyze_all_files()` returning a `FileAnalysis` object (pipeline-refactoring work). All code references in this plan to these functions are obsolete.
 > - **`generate_page_plan()`**: renamed to `generate_wiki_plan()` and redesigned as a two-phase LLM planner returning a `WikiPlan`.
