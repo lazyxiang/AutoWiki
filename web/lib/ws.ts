@@ -71,3 +71,60 @@ export function useChatStream(
 
   return { sendMessage };
 }
+
+interface ResearchPlanStep {
+  query: string;
+  rationale: string;
+}
+interface ResearchFinding {
+  step_index: number;
+  answer: string;
+  sources: Array<{ file: string }>;
+}
+
+export function useResearchStream(
+  repoId: string,
+  jobId: string | null,
+  onPlan: (plan: ResearchPlanStep[]) => void,
+  onStep: (finding: ResearchFinding) => void,
+  onReport: (markdown: string) => void,
+  onDone: () => void,
+  onError: (msg: string) => void,
+) {
+  const wsRef = useRef<WebSocket | null>(null);
+
+  useEffect(() => {
+    if (!jobId) return;
+    const ws = new WebSocket(`${WS_URL}/ws/repos/${repoId}/research/${jobId}`);
+    wsRef.current = ws;
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data) as {
+        type: string;
+        plan?: ResearchPlanStep[];
+        step_index?: number;
+        answer?: string;
+        sources?: Array<{ file: string }>;
+        content?: string;
+      };
+      if (msg.type === "plan") onPlan(msg.plan ?? []);
+      else if (msg.type === "step_finding")
+        onStep({
+          step_index: msg.step_index ?? 0,
+          answer: msg.answer ?? "",
+          sources: msg.sources ?? [],
+        });
+      else if (msg.type === "report") onReport(msg.content ?? "");
+      else if (msg.type === "done") {
+        onDone();
+        ws.close();
+      } else if (msg.type === "error") {
+        onError(msg.content ?? "Unknown error");
+        ws.close();
+      }
+    };
+    ws.onerror = () => onError("WebSocket error");
+    return () => {
+      ws.close();
+    };
+  }, [repoId, jobId, onPlan, onStep, onReport, onDone, onError]);
+}
