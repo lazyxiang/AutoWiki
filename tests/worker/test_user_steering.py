@@ -177,17 +177,7 @@ async def test_planner_skips_phase1_when_user_provides_pages(mock_llm):
         ],
     )
 
-    # Phase 2 (file assignment) still runs - mock it
-    async def _structured(prompt, schema, system=""):
-        return {
-            "assignments": [
-                {"page_title": "Core", "files": ["src/core/main.py"]},
-                {"page_title": "API", "files": []},
-            ]
-        }
-
-    mock_llm.generate_structured.side_effect = _structured
-
+    # LLM is NOT called — assign_by_modules handles file assignment directly
     file_analysis = FileAnalysis(files={"src/core/main.py": MagicMock(entities=[])})
 
     plan = await generate_wiki_plan(
@@ -204,6 +194,7 @@ async def test_planner_skips_phase1_when_user_provides_pages(mock_llm):
     assert any(
         "Focus on the core module" in (n.get("content") or "") for n in plan.repo_notes
     )
+    mock_llm.generate_structured.assert_not_called()
 
 
 async def test_planner_injects_page_notes_from_user_steering(mock_llm):
@@ -219,15 +210,6 @@ async def test_planner_injects_page_notes_from_user_steering(mock_llm):
             ),
         ],
     )
-
-    async def _structured(prompt, schema, system=""):
-        return {
-            "assignments": [
-                {"page_title": "Core", "files": []},
-            ]
-        }
-
-    mock_llm.generate_structured.side_effect = _structured
 
     file_analysis = FileAnalysis(files={})
 

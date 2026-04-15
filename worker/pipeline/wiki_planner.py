@@ -36,6 +36,7 @@ from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retr
 if TYPE_CHECKING:
     from worker.pipeline.ast_analysis import FileAnalysis
     from worker.pipeline.dependency_graph import DependencyGraph
+    from worker.pipeline.user_steering import UserSteering
 
 logger = logging.getLogger("worker.planner")
 
@@ -852,6 +853,7 @@ async def generate_wiki_plan(
     existing_titles: set[str] | None = None,
     wiki_language: str = "en",
     fast_llm: LLMProvider | None = None,
+    user_steering: UserSteering | None = None,
 ) -> WikiPlan:
     """Generate a hierarchical wiki plan using two-phase LLM planning.
 
@@ -877,6 +879,7 @@ async def generate_wiki_plan(
       plan.
     """
     from worker.pipeline.dependency_graph import format_for_llm_prompt
+    from worker.pipeline.user_steering import assign_by_modules
 
     file_summary = file_analysis.to_llm_summary(dep_graph=dep_graph, max_files=200)
     all_files = list(file_analysis.files.keys())
@@ -887,6 +890,30 @@ async def generate_wiki_plan(
     page_range = _suggest_page_range(len(all_files), entity_count)
 
     system = _SYSTEM + get_planner_language_instruction(wiki_language)
+
+    # --- User steering: skip Phase 1 when user provides page list ---
+    if user_steering is not None and user_steering.pages:
+        repo_notes_dicts = [{"content": n} for n in (user_steering.repo_notes or [])]
+        module_assignments, _ = assign_by_modules(user_steering.pages, all_files)
+        pages = []
+        for upage in user_steering.pages:
+            assigned_files = module_assignments.get(upage.title, [])
+            page_notes_dicts = [{"content": n} for n in (upage.page_notes or [])]
+            pages.append(
+                WikiPageSpec(
+                    title=upage.title,
+                    purpose=upage.purpose or f"Documentation for {upage.title}.",
+                    parent=upage.parent,
+                    files=assigned_files,
+                    page_notes=(
+                        page_notes_dicts if page_notes_dicts else [{"content": ""}]
+                    ),
+                )
+            )
+        return WikiPlan(
+            repo_notes=repo_notes_dicts if repo_notes_dicts else [{"content": ""}],
+            pages=pages,
+        )
 
     # Phase 1: Generate outline + validate structure
     try:
