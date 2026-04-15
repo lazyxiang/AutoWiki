@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.routers import chat as chat_router
 from api.routers import jobs as jobs_router
 from api.routers import repos
+from api.routers import research as research_router
 from api.routers import wiki as wiki_router
 from api.ws import jobs as ws_jobs
 from shared.config import get_config
@@ -65,4 +66,5 @@ app.include_router(repos.router)
 app.include_router(jobs_router.router)
 app.include_router(wiki_router.router)
 app.include_router(chat_router.router)
+app.include_router(research_router.router)
 app.include_router(ws_jobs.router)
