@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-AutoWiki **Phase 1, Phase 2, and Phase 2.5 are complete**. Phase 1 tagged `v0.1.0-phase1`; Phase 2 (chat, diagrams, incremental refresh) merged via PR #4; Phase 2.5 (wiki quality enhancements) merged across PRs #15 and #17.
+AutoWiki **Phases 1, 2, 2.5, 3, and 4 are complete**. Phase 1 tagged `v0.1.0-phase1`; Phase 2 (chat, diagrams, incremental refresh) merged via PR #4; Phase 2.5 (wiki quality enhancements) merged across PRs #15 and #17; Phase 3 (Deep Research) and Phase 4 (User Steering) merged via PR #20.
 
 ## What AutoWiki Is
 
@@ -14,7 +14,7 @@ A self-hosted, open-source AI-powered wiki generator for software repositories. 
 
 ### Service Topology
 ```
-User (Browser / CLI / MCP)
+User (Browser / CLI)
     ↓
 API Gateway (FastAPI)  ←→  Redis
     ↓
@@ -91,7 +91,7 @@ Default LLM: `claude-sonnet-4-6`. Supported providers: `anthropic`, `openai`, `o
 
 ## API Surface
 
-### REST/WebSocket (Phase 1 + Phase 2)
+### REST/WebSocket (Phase 1 + Phase 2 + Phase 3)
 ```
 POST  /api/repos                              # Submit repo for indexing
 GET   /api/repos                             # List all repos
@@ -102,9 +102,12 @@ GET   /api/repos/{repo_id}/wiki              # List wiki pages
 GET   /api/repos/{repo_id}/wiki/{slug}       # Get page Markdown
 POST  /api/repos/{repo_id}/chat              # Create a new chat session
 GET   /api/repos/{repo_id}/chat/{session_id} # Get chat history
+POST  /api/repos/{repo_id}/research          # Start deep research → {job_id, report_id}
+GET   /api/repos/{repo_id}/research/{job_id} # Get research report (plan, findings, Markdown)
 GET   /api/jobs/{job_id}                     # Job status + progress
 WS    /ws/jobs/{job_id}                      # Stream job progress
 WS    /ws/repos/{repo_id}/chat/{session_id}  # Stream chat responses
+WS    /ws/repos/{repo_id}/research/{job_id}  # Stream research events
 ```
 
 ### CLI (Phase 1 + Phase 3)
