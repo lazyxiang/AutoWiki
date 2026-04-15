@@ -45,7 +45,7 @@ def test_validate_wiki_plan_basic():
             {
                 "title": "Overview",
                 "purpose": "High-level overview of the project.",
-                "files": ["main.py", "README.md"],
+                "primary_files": ["main.py", "README.md"],
             }
         ]
     }
@@ -63,13 +63,13 @@ def test_validate_wiki_plan_invalid_parent_dropped():
             {
                 "title": "Overview",
                 "purpose": "Top level page.",
-                "files": ["main.py"],
+                "primary_files": ["main.py"],
             },
             {
                 "title": "Details",
                 "purpose": "Detail page.",
                 "parent": "NonExistentParent",
-                "files": ["details.py"],
+                "primary_files": ["details.py"],
             },
         ]
     }
@@ -84,7 +84,7 @@ def test_validate_wiki_plan_orphan_files():
             {
                 "title": "Overview",
                 "purpose": "Top level page.",
-                "files": ["main.py"],
+                "primary_files": ["main.py"],
             }
         ]
     }
@@ -114,13 +114,13 @@ def test_wiki_plan_to_wiki_json():
             WikiPageSpec(
                 title="Overview",
                 purpose="High-level overview.",
-                files=["main.py"],
+                primary_files=["main.py"],
             ),
             WikiPageSpec(
                 title="API",
                 purpose="API endpoints.",
                 parent="Overview",
-                files=["api/main.py"],
+                primary_files=["api/main.py"],
             ),
         ]
     )
@@ -152,7 +152,7 @@ def test_wiki_plan_to_internal_json():
                 title="Engine",
                 purpose="Core engine.",
                 parent="Overview",
-                files=["engine/core.py"],
+                primary_files=["engine/core.py"],
             ),
         ]
     )
@@ -222,13 +222,13 @@ def test_wiki_plan_to_api_structure():
             WikiPageSpec(
                 title="Overview",
                 purpose="High-level overview.",
-                files=["main.py"],
+                primary_files=["main.py"],
             ),
             WikiPageSpec(
                 title="API Layer",
                 purpose="REST API handlers.",
                 parent="Overview",
-                files=["api/main.py"],
+                primary_files=["api/main.py"],
             ),
         ]
     )
@@ -390,7 +390,7 @@ def test_validate_rejects_empty_non_overview_page():
             {"title": "Empty Page", "purpose": "Nothing here.", "files": []},
         ]
     }
-    with pytest.raises(ValueError, match="no files assigned"):
+    with pytest.raises(ValueError, match="no primary files assigned"):
         validate_wiki_plan(raw)
 
 

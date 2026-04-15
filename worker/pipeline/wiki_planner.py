@@ -448,10 +448,14 @@ def _build_assignment_prompt(
     schema_json = json.dumps(_ASSIGNMENT_SCHEMA, indent=2)
     sections.append(
         f"Assign ALL {total} source files to pages. Guidelines:\n"
-        "- **Code Home Rule**: Every source file must have exactly one `primary_page`. This is where the code's documentation primarily lives.\n"
-        "- **Contextual Reuse Rule**: Files can be assigned to multiple `reference_pages`. Use this when a file provides important context for other pages (e.g., shared utilities, core data models).\n"
+        "- **Code Home Rule**: Every source file must have exactly one "
+        "`primary_page`. This is where the code's documentation primarily lives.\n"
+        "- **Contextual Reuse Rule**: Files can be assigned to multiple "
+        "`reference_pages`. Use this when a file provides important context "
+        "for other pages (e.g., shared utilities, core data models).\n"
         "- Hub pages should reference their children's primary files.\n"
-        "- Files that import each other should have the same `primary_page` when possible.\n"
+        "- Files that import each other should have the same `primary_page` "
+        "when possible.\n"
         "- Assign files based on semantic purpose, not directory structure.\n"
         "- Each assignment must reference existing page titles exactly.\n\n"
         "Output JSON matching this schema:\n"
@@ -529,8 +533,9 @@ def _validate_outline_structure(
 def _validate_assignments(
     result: dict[str, dict[str, list[str]]],
     outline: list[dict],
+    all_files: list[str],
 ) -> None:
-    """Validate per-page file assignment counts.
+    """Validate per-page file assignment counts and coverage.
 
     Called inside :func:`_assign_files` after each LLM response so that
     assignment-level errors are caught and retried in Phase 2.
@@ -538,24 +543,53 @@ def _validate_assignments(
     Checks:
     - No page has more than 25 primary files (over-stuffed pages make poor wiki pages).
     - No non-overview page has zero primary files (empty pages add noise).
+    - Primary Coverage: every file in all_files belongs to exactly one page.
+    - Valid reference files: all reference_files must exist in all_files.
 
     Raises:
         ValueError: Describing the first constraint that is violated.
     """
+    all_files_set = set(all_files)
+    assigned_primary: set[str] = set()
+
     for page in outline:
         title = page["title"]
         page_res = result.get(title, {"primary": [], "reference": []})
         primary_files = page_res.get("primary", [])
+        reference_files = page_res.get("reference", [])
+
         if len(primary_files) > 25:
             raise ValueError(
                 f"Page '{title}' has {len(primary_files)} primary files — "
                 "split into focused sub-pages of ≤25 files each"
             )
+
         if "overview" not in title.lower() and len(primary_files) == 0:
             raise ValueError(
                 f"Page '{title}' has no primary files assigned — "
                 "either assign files or remove it"
             )
+
+        # Track primary assignments for coverage check
+        for f in primary_files:
+            if f in assigned_primary:
+                raise ValueError(f"Primary Coverage violation: '{f}' assigned twice")
+            assigned_primary.add(f)
+
+        # Validate reference files
+        for f in reference_files:
+            if f not in all_files_set:
+                raise ValueError(
+                    f"Page '{title}' contains invalid reference files: {f}"
+                )
+
+    # Final coverage check
+    missing = all_files_set - assigned_primary
+    if missing:
+        raise ValueError(
+            f"Primary Coverage violation: {len(missing)} files not assigned "
+            f"to any page (e.g., {list(missing)[:3]})"
+        )
 
 
 async def _generate_outline(
@@ -678,7 +712,9 @@ async def _assign_files(
                 reference_titles = a.get("reference_pages", [])
 
                 if f in all_files and f not in assigned_primary_files:
-                    target = primary_title if primary_title in valid_titles else first_title
+                    target = (
+                        primary_title if primary_title in valid_titles else first_title
+                    )
                     result[target]["primary"].append(f)
                     assigned_primary_files.add(f)
 
@@ -693,7 +729,7 @@ async def _assign_files(
                 if f not in assigned_primary_files:
                     result[first_title]["primary"].append(f)
 
-            _validate_assignments(result, outline)
+            _validate_assignments(result, outline, all_files)
             return result
 
         except (ValueError, json.JSONDecodeError, KeyError) as e:
@@ -808,7 +844,7 @@ def validate_wiki_plan(
 
     # Fix orphaned files: any file not assigned to any page goes to Overview
     if all_files:
-        assigned = {f for page in pages for f in page.files}
+        assigned = {f for page in pages for f in page.primary_files}
         orphans = [f for f in all_files if f not in assigned]
         if orphans:
             # Find overview page or use first page
@@ -817,24 +853,24 @@ def validate_wiki_plan(
                 pages[0] if pages else None,
             )
             if overview:
-                overview.files = list(overview.files) + orphans
+                overview.primary_files = list(overview.primary_files) + orphans
 
     # ── Semantic validation ──────────────────────────────────────────────
 
     # Max files per page
     for p in pages:
-        if len(p.files) > 25:
+        if len(p.primary_files) > 25:
             raise ValueError(
-                f"Page '{p.title}' has {len(p.files)} files — "
+                f"Page '{p.title}' has {len(p.primary_files)} primary files — "
                 "split into focused sub-pages of ≤25 files each"
             )
 
     # No empty non-overview pages
     for p in pages:
         is_overview = "overview" in p.title.lower()
-        if not is_overview and len(p.files) == 0:
+        if not is_overview and len(p.primary_files) == 0:
             raise ValueError(
-                f"Page '{p.title}' has no files assigned — "
+                f"Page '{p.title}' has no primary files assigned — "
                 "either assign files or remove it"
             )
 
@@ -1019,7 +1055,7 @@ def _fallback_plan(
                 f"High-level overview of the {repo_name} project "
                 "architecture and components."
             ),
-            files=[],
+            primary_files=[],
         )
     ]
     if clusters:
@@ -1035,12 +1071,14 @@ def _fallback_plan(
                     WikiPageSpec(
                         title=f"Component {page_num}{suffix}",
                         purpose=f"Documentation for component {page_num}.",
-                        files=chunk,
+                        primary_files=chunk,
                     )
                 )
                 assigned.update(chunk)
             page_num += 1
-        fallback_pages[0].files = [f for f in (all_files or []) if f not in assigned]
+        fallback_pages[0].primary_files = [
+            f for f in (all_files or []) if f not in assigned
+        ]
     else:
-        fallback_pages[0].files = list(all_files or [])
+        fallback_pages[0].primary_files = list(all_files or [])
     return WikiPlan(pages=fallback_pages)
