@@ -79,7 +79,7 @@ export async function getRepo(repoId: string): Promise<Repository> {
 export async function getRepoWiki(repoId: string) {
   const res = await fetch(`${API_URL}/api/repos/${repoId}/wiki`);
   if (!res.ok) throw new Error(await res.text());
-  return res.json() as Promise<{ pages: { slug: string; title: string; parent_slug: string | null }[] }>;
+  return res.json() as Promise<{ pages: { slug: string; title: string; parent_slug: string | null; has_user_notes?: boolean }[] }>;
 }
 
 /**

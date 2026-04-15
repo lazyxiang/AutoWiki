@@ -228,17 +228,25 @@ class WikiPlan:
 
         Derives ``slug`` and ``parent_slug`` from titles and renames
         ``purpose`` to ``description`` to match the existing REST contract.
+        Also includes ``has_user_notes`` which is ``True`` when any
+        ``page_notes`` entry has a non-empty ``content`` value (indicating
+        the page was steered via ``.autowiki/wiki.json``).
 
         Returns:
             dict: A dictionary with key ``"pages"``, a list of dicts each
-            containing ``"title"``, ``"slug"``, ``"parent_slug"``, and
-            ``"description"``.
+            containing ``"title"``, ``"slug"``, ``"parent_slug"``,
+            ``"description"``, and ``"has_user_notes"``.
 
         Example:
             >>> plan.to_api_structure()
             {'pages': [{'title': 'Overview', 'slug': 'overview',
-                        'parent_slug': None, 'description': 'Project overview.'}]}
+                        'parent_slug': None, 'description': 'Project overview.',
+                        'has_user_notes': False}]}
         """
+
+        def _has_user_notes(page: WikiPageSpec) -> bool:
+            return any(n.get("content") for n in page.page_notes)
+
         return {
             "pages": [
                 {
@@ -246,6 +254,7 @@ class WikiPlan:
                     "slug": p.slug,
                     "parent_slug": p.parent_slug,
                     "description": p.purpose,
+                    "has_user_notes": _has_user_notes(p),
                 }
                 for p in self.pages
             ]

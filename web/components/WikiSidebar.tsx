@@ -14,6 +14,8 @@ interface Page {
   title: string;
   /** The slug of the parent page, if any. */
   parent_slug: string | null;
+  /** Whether the page was steered via .autowiki/wiki.json. */
+  has_user_notes?: boolean;
 }
 
 /**
@@ -94,6 +96,9 @@ export function WikiSidebar({ pages, owner, repo, repoId }: Props) {
               )}
             >
               {page.title}
+              {page.has_user_notes && (
+                <span className="ml-1 text-xs text-blue-500" title="Steered by .autowiki/wiki.json">●</span>
+              )}
             </Link>
           </li>
         ))}

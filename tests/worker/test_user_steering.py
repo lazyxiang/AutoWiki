@@ -223,3 +223,25 @@ async def test_planner_injects_page_notes_from_user_steering(mock_llm):
     core_page = next(p for p in plan.pages if p.title == "Core")
     note_contents = [n.get("content", "") for n in core_page.page_notes]
     assert any("Key invariant: X." in c for c in note_contents)
+
+
+def test_to_api_structure_includes_has_user_notes():
+    """WikiPageSpec with non-empty page_notes has has_user_notes=True in API."""
+    from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan
+
+    plan = WikiPlan(
+        pages=[
+            WikiPageSpec(
+                title="Core",
+                purpose="Core.",
+                page_notes=[{"content": "Key invariant: X."}],
+            ),
+            WikiPageSpec(title="Overview", purpose="Top."),
+        ]
+    )
+    structure = plan.to_api_structure()
+    pages = structure["pages"]
+    core = next(p for p in pages if p["title"] == "Core")
+    overview = next(p for p in pages if p["title"] == "Overview")
+    assert core["has_user_notes"] is True
+    assert overview["has_user_notes"] is False
