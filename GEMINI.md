@@ -119,31 +119,22 @@ autowiki config set <key> <value>
 ### MCP Tools (Phase 3, not yet implemented)
 `read_wiki_structure`, `read_wiki_page`, `search_wiki`, `ask_question`, `deep_research`
 
+## Workflow Rules
+
+- **New Conversations (Required)**: When starting a new task or conversation, suggest using git worktree to create an isolated environment for implementation. This keeps the main workspace clean and ensures changes are isolated until ready for integration.
+- **Pre-Commit Checks (Required)**: Before every commit, run and resolve all issues from:
+  ```bash
+  uv run ruff check .
+  uv run ruff format --check .
+  npm run lint          # run from web/
+  ```
+  All lint errors and format violations **must be fixed** before committing. Do not commit with outstanding `ruff` errors or `npm run lint` errors.
+- **PR Review Workflow (Required)**: After fixing issues raised in a pull request review, reply to each inline review comment thread describing what was fixed and in which commit. Mark each thread as resolved via the GraphQL API (since REST has no resolve endpoint). Use the node IDs from the review comments.
+
 ## Model Selection
 
 - **Planning** (architecture, design, writing plans): use `gemini-3.1-pro-preview`
 - **Executing** (implementation, refactoring, code changes): use `gemini-3-flash-preview`
-
-## PR Review Workflow
-
-After fixing issues raised in a pull request review:
-
-1. Reply to each review comment thread (inline or top-level) describing what was fixed and in which commit — use `gh api repos/{owner}/{repo}/pulls/comments/{id}/replies`.
-2. Mark each thread as resolved via the GitHub UI or API once the fix is confirmed.
-
-Do this for **every** addressed comment before considering the review cycle complete.
-
-## Pre-Commit Checks (Required)
-
-Before every commit, run and resolve all issues from:
-
-```bash
-uv run ruff check .
-uv run ruff format --check .
-npm run lint          # run from web/
-```
-
-All lint errors and format violations **must be fixed** before committing. Do not commit with outstanding `ruff` errors or `npm run lint` errors.
 
 ## Testing
 
