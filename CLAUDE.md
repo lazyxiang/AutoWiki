@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-AutoWiki **Phase 1, Phase 2, and Phase 2.5 are complete**. Phase 1 tagged `v0.1.0-phase1`; Phase 2 (chat, diagrams, incremental refresh) merged via PR #4; Phase 2.5 (wiki quality enhancements) merged across PRs #15 and #17.
+AutoWiki **Phases 1, 2, 2.5, 3, and 4 are complete**. Phase 1 tagged `v0.1.0-phase1`; Phase 2 (chat, diagrams, incremental refresh) merged via PR #4; Phase 2.5 (wiki quality enhancements) merged across PRs #15 and #17; Phase 3 (Deep Research) and Phase 4 (User Steering) merged via PR #20.
 
 ## What AutoWiki Is
 
@@ -14,7 +14,7 @@ A self-hosted, open-source AI-powered wiki generator for software repositories. 
 
 ### Service Topology
 ```
-User (Browser / CLI / MCP)
+User (Browser / CLI)
     ↓
 API Gateway (FastAPI)  ←→  Redis
     ↓
@@ -91,7 +91,7 @@ Default LLM: `claude-sonnet-4-6`. Supported providers: `anthropic`, `openai`, `o
 
 ## API Surface
 
-### REST/WebSocket (Phase 1 + Phase 2)
+### REST/WebSocket (Phase 1 + Phase 2 + Phase 3)
 ```
 POST  /api/repos                              # Submit repo for indexing
 GET   /api/repos                             # List all repos
@@ -102,22 +102,30 @@ GET   /api/repos/{repo_id}/wiki              # List wiki pages
 GET   /api/repos/{repo_id}/wiki/{slug}       # Get page Markdown
 POST  /api/repos/{repo_id}/chat              # Create a new chat session
 GET   /api/repos/{repo_id}/chat/{session_id} # Get chat history
+POST  /api/repos/{repo_id}/research          # Start deep research → {job_id, report_id}
+GET   /api/repos/{repo_id}/research/{job_id} # Get research report (plan, findings, Markdown)
 GET   /api/jobs/{job_id}                     # Job status + progress
 WS    /ws/jobs/{job_id}                      # Stream job progress
 WS    /ws/repos/{repo_id}/chat/{session_id}  # Stream chat responses
+WS    /ws/repos/{repo_id}/research/{job_id}  # Stream research events
 ```
 
-### CLI (Phase 1)
+### CLI (Phase 1 + Phase 3)
 ```
 autowiki index github.com/owner/repo [--reuse-index]
 autowiki list
 autowiki serve [--port 3000]
+autowiki research github.com/owner/repo "<question>"
 autowiki config show
 autowiki config set <key> <value>
 ```
 
-### MCP Tools (Phase 3, not yet implemented)
-`read_wiki_structure`, `read_wiki_page`, `search_wiki`, `ask_question`, `deep_research`
+### Research API (Phase 3)
+```
+POST  /api/repos/{repo_id}/research                   # Start deep research → {job_id, report_id}
+GET   /api/repos/{repo_id}/research/{job_id}          # Get report (plan, findings, Markdown)
+WS    /ws/repos/{repo_id}/research/{job_id}           # Stream research events
+```
 
 ## Workflow Rules
 
@@ -156,6 +164,6 @@ Non-Docker: `autowiki serve` spawns API + worker + Next.js as subprocesses.
 - **Phase 1** ✅ — Core pipeline (index + static wiki + REST API + web UI + CLI)
 - **Phase 2** ✅ — Incremental refresh + Q&A chat + dependency diagrams (merged PR #4)
 - **Phase 2.5** ✅ — Wiki quality enhancements: two-phase planner with per-phase validation, bottom-up child-synthesis generation, 4-pass page orchestrator, prompt caching, fast model, RAG doc_k tuning, diagram post-processing (PRs #15 and #17)
-- **Phase 3** — Deep Research mode + MCP server
-- **Phase 4** — GitHub webhooks + user steering (`.autowiki/wiki.json`)
-- **Phase 5** — GitLab/Bitbucket + hybrid search
+- **Phase 3** ✅ — Deep Research mode: multi-step RAG investigation, LLM planner, per-step AST context, synthesized report; `autowiki research` CLI; REST + WebSocket API (PR #20)
+- **Phase 4** ✅ — User-steered wiki structure via `.autowiki/wiki.json`: override page hierarchy, assign modules to pages, inject repo/page notes into generation (PR #20)
+- **Phase 5** — GitLab/Bitbucket + hybrid search + MCP server

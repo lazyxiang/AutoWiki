@@ -49,6 +49,7 @@ from worker.pipeline.page_generator import (
     generate_page_batch,
 )
 from worker.pipeline.rag_indexer import FAISSStore, build_rag_index
+from worker.pipeline.user_steering import load_user_steering
 from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan, generate_wiki_plan
 
 if TYPE_CHECKING:
@@ -239,6 +240,13 @@ def _collect_page_deps(page_spec: WikiPageSpec, dep_graph: DependencyGraph) -> d
     return summarize_page_deps(page_spec.files or [], dep_graph)
 
 
+def asdict_s(obj) -> dict:
+    """dataclasses.asdict proxy for the Deep Research ARQ job."""
+    from dataclasses import asdict as _asdict
+
+    return _asdict(obj)
+
+
 def _make_faiss_store(repo_data_dir: Path, embedding) -> FAISSStore:
     """Instantiate a FAISSStore pointed at the repository's index files.
 
@@ -260,6 +268,13 @@ def _make_faiss_store(repo_data_dir: Path, embedding) -> FAISSStore:
         index_path=repo_data_dir / "faiss.index",
         meta_path=repo_data_dir / "faiss.meta.pkl",
     )
+
+
+async def _load_faiss_for_research(repo_data_dir: Path, embedding) -> FAISSStore:
+    """Load the FAISS store for a repo, running the blocking IO in an executor."""
+    store = _make_faiss_store(repo_data_dir, embedding)
+    await asyncio.get_running_loop().run_in_executor(None, store.load)
+    return store
 
 
 # ---------------------------------------------------------------------------
@@ -406,6 +421,13 @@ async def run_full_index(
         logger.info(
             "README extracted: %d chars", len(readme)
         ) if readme else logger.info("No README found")
+        user_steering = await loop.run_in_executor(None, load_user_steering, clone_root)
+        if user_steering is not None:
+            logger.info(
+                "Loaded .autowiki/wiki.json: %d repo_notes, %d user pages",
+                len(user_steering.repo_notes),
+                len(user_steering.pages),
+            )
         await _update_job(
             db_path,
             job_id,
@@ -500,6 +522,7 @@ async def run_full_index(
             on_retry=_on_retry,
             wiki_language=wiki_language,
             fast_llm=fast_llm,
+            user_steering=user_steering,
         )
         logger.info(
             "Wiki plan generated: %d pages planned for %s", len(plan.pages), name
@@ -545,6 +568,7 @@ async def run_full_index(
                 dep_graph=dep_graph,
                 on_retry=_on_retry,
                 wiki_language=wiki_language,
+                repo_notes=plan.repo_notes or None,
             )
 
             for result, (page_spec, _) in zip(results, specs_with_children):
@@ -849,6 +873,13 @@ async def run_refresh_index(
         readme = await loop.run_in_executor(None, extract_readme, clone_root)
         if readme:
             logger.info("README extracted: %d chars", len(readme))
+        user_steering = await loop.run_in_executor(None, load_user_steering, clone_root)
+        if user_steering is not None:
+            logger.info(
+                "User steering loaded: %d repo_notes, %d page overrides",
+                len(user_steering.repo_notes),
+                len(user_steering.pages),
+            )
         file_analysis = await loop.run_in_executor(
             None, analyze_all_files, clone_root, files
         )
@@ -982,6 +1013,7 @@ async def run_refresh_index(
             existing_titles=unaffected_titles,
             wiki_language=wiki_language,
             fast_llm=fast_llm,
+            user_steering=user_steering,
         )
         logger.info(
             "Wiki plan generated: %d pages updated for %s", len(plan.pages), name
@@ -1065,6 +1097,7 @@ async def run_refresh_index(
                 dep_graph=dep_graph,
                 on_retry=_on_retry,
                 wiki_language=wiki_language,
+                repo_notes=plan.repo_notes or None,
             )
 
             for result, (page_spec, _) in zip(results, specs_with_children):
@@ -1157,4 +1190,118 @@ async def run_refresh_index(
             status_description=f"Error: {str(e)}",
         )
         await _update_repo(db_path, repo_id, status="error")
+        raise
+
+
+async def run_deep_research(
+    ctx: dict,
+    repo_id: str,
+    job_id: str,
+    report_id: str,
+    question: str,
+) -> None:
+    """ARQ job: run the Deep Research flow and persist the result."""
+    import json as _json
+
+    from shared.models import ResearchReport
+    from worker.deep_research import run_deep_research_flow
+
+    cfg = get_config()
+    db_path = str(cfg.database_path)
+    data_dir = cfg.data_dir
+    await init_db(db_path)
+
+    async def _update_report(**kwargs):
+        async with get_session(db_path) as s:
+            report = await s.get(ResearchReport, report_id)
+            if report is None:
+                raise RuntimeError(f"ResearchReport {report_id!r} not found")
+            for k, v in kwargs.items():
+                setattr(report, k, v)
+            await s.commit()
+
+    try:
+        await _update_job(db_path, job_id, status="running", progress=5)
+        await _update_report(status="running")
+
+        repo_data_dir = data_dir / "repos" / repo_id
+        clone_root = repo_data_dir / "clone"
+
+        loop = asyncio.get_running_loop()
+        readme = await loop.run_in_executor(None, extract_readme, clone_root)
+
+        embedding = make_embedding_provider(cfg)
+        llm = make_llm_provider(cfg)
+        store = await _load_faiss_for_research(repo_data_dir, embedding)
+
+        async with get_session(db_path) as s:
+            repo = await s.get(Repository, repo_id)
+            repo_name = repo.name if repo is not None else repo_id
+
+        async def _on_event(event: dict) -> None:
+            if event["type"] == "plan":
+                await _update_report(plan_json=_json.dumps(event["plan"]))
+                await _update_job(db_path, job_id, progress=20)
+            elif event["type"] == "step_start":
+                await _update_job(
+                    db_path,
+                    job_id,
+                    status_description=(
+                        f"Investigating step {event['step_index'] + 1}"
+                    ),
+                )
+            elif event["type"] == "step_finding":
+                async with get_session(db_path) as s:
+                    rep = await s.get(ResearchReport, report_id)
+                    findings = _json.loads(rep.findings_json or "[]")
+                    findings.append(
+                        {
+                            "step_index": event["step_index"],
+                            "answer": event["answer"],
+                            "sources": event["sources"],
+                        }
+                    )
+                    rep.findings_json = _json.dumps(findings)
+                    await s.commit()
+            elif event["type"] == "report":
+                await _update_report(report_markdown=event["content"])
+
+        result = await run_deep_research_flow(
+            question=question,
+            repo_name=repo_name,
+            readme=readme,
+            store=store,
+            llm=llm,
+            embedding=embedding,
+            on_event=_on_event,
+        )
+
+        now = datetime.now(UTC)
+        await _update_report(
+            status="done",
+            finished_at=now,
+            plan_json=_json.dumps([asdict_s(s) for s in result.plan]),
+            findings_json=_json.dumps([asdict_s(f) for f in result.findings]),
+            report_markdown=result.report,
+        )
+        await _update_job(
+            db_path,
+            job_id,
+            status="done",
+            progress=100,
+            finished_at=now,
+            status_description="Research complete",
+        )
+    except Exception as e:
+        logger.exception("Deep research job failed: %s", e)
+        now = datetime.now(UTC)
+        await _update_report(status="failed", error=str(e), finished_at=now)
+        await _update_job(
+            db_path,
+            job_id,
+            status="failed",
+            error=str(e),
+            finished_at=now,
+            status_description=f"Error: {e}",
+        )
         raise

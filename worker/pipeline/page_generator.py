@@ -152,6 +152,7 @@ async def generate_page(
     on_retry: OnRetryCallback | None = None,
     wiki_language: str = "en",
     child_contents: list[PageResult] | None = None,
+    repo_notes: list[dict] | None = None,
 ) -> PageResult:
     """Generate a wiki page using the 4-pass pipeline.
 
@@ -231,6 +232,7 @@ async def generate_page(
         child_contents=child_contents,
         on_retry=on_retry,
         wiki_language=wiki_language,
+        repo_notes=repo_notes,
     )
 
     # ── Pass 3: Fact-check (fast model) ──
@@ -256,6 +258,7 @@ async def generate_page(
             dep_info=dep_info,
             entity_details=entity_details,
             child_contents=child_contents,
+            repo_notes=repo_notes,
         )
         cache_segs = [s for s in context_segments if s.cacheable]
 
@@ -305,6 +308,7 @@ async def generate_page_batch(
     dep_graph: DependencyGraph,
     on_retry: OnRetryCallback | None = None,
     wiki_language: str = "en",
+    repo_notes: list[dict] | None = None,
 ) -> list[PageResult]:
     """Generate all pages in a batch using the multi-pass pipeline."""
     import asyncio
@@ -337,6 +341,7 @@ async def generate_page_batch(
             on_retry=on_retry,
             wiki_language=wiki_language,
             child_contents=children,
+            repo_notes=repo_notes,
         )
 
     sem = asyncio.Semaphore(5)

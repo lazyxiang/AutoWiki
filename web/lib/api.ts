@@ -79,7 +79,7 @@ export async function getRepo(repoId: string): Promise<Repository> {
 export async function getRepoWiki(repoId: string) {
   const res = await fetch(`${API_URL}/api/repos/${repoId}/wiki`);
   if (!res.ok) throw new Error(await res.text());
-  return res.json() as Promise<{ pages: { slug: string; title: string; parent_slug: string | null }[] }>;
+  return res.json() as Promise<{ pages: { slug: string; title: string; parent_slug: string | null; has_user_notes?: boolean }[] }>;
 }
 
 /**
@@ -204,8 +204,54 @@ interface RawReposResponse {
 }
 
 /**
+ * Starts a Deep Research job for a repository.
+ */
+export async function startResearch(
+  repoId: string,
+  question: string,
+): Promise<{ job_id: string; report_id: string; status: string }> {
+  const res = await fetch(`${API_URL}/api/repos/${repoId}/research`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export interface ResearchFinding {
+  step_index: number;
+  answer: string;
+  sources: Array<{ file: string; start_line?: number; end_line?: number }>;
+}
+
+export interface ResearchPlanStep {
+  query: string;
+  rationale: string;
+}
+
+/**
+ * Fetches a completed (or in-progress) Deep Research report.
+ */
+export async function getResearchReport(
+  repoId: string,
+  jobId: string,
+): Promise<{
+  question: string;
+  plan: ResearchPlanStep[];
+  findings: ResearchFinding[];
+  report: string;
+  status: string;
+  error: string | null;
+}> {
+  const res = await fetch(`${API_URL}/api/repos/${repoId}/research/${jobId}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+/**
  * Fetches a list of all indexed repositories.
- * 
+ *
  * @returns A promise resolving to an array of Repository objects.
  */
 export async function getRepositories(): Promise<Repository[]> {

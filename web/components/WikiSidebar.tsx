@@ -14,6 +14,8 @@ interface Page {
   title: string;
   /** The slug of the parent page, if any. */
   parent_slug: string | null;
+  /** Whether the page was steered via .autowiki/wiki.json. */
+  has_user_notes?: boolean;
 }
 
 /**
@@ -69,6 +71,17 @@ export function WikiSidebar({ pages, owner, repo, repoId }: Props) {
             Module Graph
           </Link>
         </li>
+        <li>
+          <Link
+            href={`${basePath}/research`}
+            className={cn(
+              "block text-sm px-2 py-1.5 rounded-lg hover:bg-slate-200/50 transition-colors",
+              pathname === `${basePath}/research` && "bg-slate-200/50 font-medium text-primary"
+            )}
+          >
+            Research
+          </Link>
+        </li>
       </ul>
       <div className="my-4 border-t border-slate-200" />
       <ul className="space-y-1">
@@ -83,6 +96,18 @@ export function WikiSidebar({ pages, owner, repo, repoId }: Props) {
               )}
             >
               {page.title}
+              {page.has_user_notes && (
+                <>
+                  <span
+                    aria-hidden="true"
+                    className="ml-1 text-xs text-blue-500"
+                    title="Steered by .autowiki/wiki.json"
+                  >
+                    ●
+                  </span>
+                  <span className="sr-only">Steered by .autowiki/wiki.json</span>
+                </>
+              )}
             </Link>
           </li>
         ))}

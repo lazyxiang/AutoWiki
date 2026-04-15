@@ -148,3 +148,20 @@ async def enqueue_refresh_index(
         wiki_language=wiki_language,
     )
     return job_id
+
+
+async def enqueue_deep_research(
+    repo_id: str,
+    job_id: str,
+    report_id: str,
+    question: str,
+) -> str:
+    """Enqueue a Deep Research job."""
+    await _enqueue(
+        "run_deep_research",
+        repo_id=repo_id,
+        job_id=job_id,
+        report_id=report_id,
+        question=question,
+    )
+    return job_id

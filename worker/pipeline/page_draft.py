@@ -67,6 +67,7 @@ def build_draft_prompt(
     dep_info: dict[str, Any] | None = None,
     entity_details: list[dict[str, Any]] | None = None,
     child_contents: list[PageResult] | None = None,
+    repo_notes: list[dict] | None = None,
 ) -> list[PromptSegment]:
     """Build the draft prompt as a list of PromptSegments with caching."""
     # ── Cacheable prefix: source context ──
@@ -74,6 +75,27 @@ def build_draft_prompt(
 
     if spec.purpose:
         cached_parts.append(f"Purpose: {spec.purpose}\n")
+
+    # Inject repo-level notes first (apply to every page)
+    if repo_notes:
+        note_texts = [n.get("content", "") for n in repo_notes if n.get("content")]
+        if note_texts:
+            cached_parts.append(
+                "Repository notes (from maintainer):\n"
+                + "\n".join(f"- {t}" for t in note_texts)
+                + "\n"
+            )
+
+    # Inject page-level notes
+    page_note_texts = [
+        n.get("content", "") for n in (spec.page_notes or []) if n.get("content")
+    ]
+    if page_note_texts:
+        cached_parts.append(
+            "Page notes (from maintainer):\n"
+            + "\n".join(f"- {t}" for t in page_note_texts)
+            + "\n"
+        )
 
     cached_parts.append(f"Source files: {', '.join(spec.files or [])}\n")
 
@@ -188,6 +210,7 @@ async def generate_draft(
     child_contents: list[PageResult] | None = None,
     on_retry: OnRetryCallback | None = None,
     wiki_language: str = "en",
+    repo_notes: list[dict] | None = None,
 ) -> str:
     """Generate the draft Markdown for a wiki page using the main model."""
     from worker.pipeline.language import get_language_instruction
@@ -200,6 +223,7 @@ async def generate_draft(
         dep_info=dep_info,
         entity_details=entity_details,
         child_contents=child_contents,
+        repo_notes=repo_notes,
     )
     system = DRAFT_SYSTEM + get_language_instruction(wiki_language)
 

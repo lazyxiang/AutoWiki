@@ -1,15 +1,15 @@
 # AutoWiki — Product Requirements Document
 
 **Date:** 2026-03-22
-**Status:** Approved — Phases 1, 2, and 2.5 implemented. Phases 3–5 pending.
+**Status:** Approved — Phases 1, 2, 2.5, 3, and 4 implemented. Phase 5 pending.
 **Project:** AutoWiki
 
 > **[STALE IN SEVERAL AREAS]** This is the original PRD. Key deviations in the implemented system:
 >
 > - **Storage layout** (§5.2): `ast/module_tree.json` was replaced by `ast/wiki_plan.json` (internal plan) and `wiki/wiki.json` (user-facing structure). `ast/architecture.mmd` was never generated — Stage 7 (diagram synthesis) was removed before any release.
 > - **LLM provider config** (§5.3): `gemini-1.5-pro` is now deprecated; use `google-genai` SDK with `gemini-2.5-pro` or similar. The `google-generativeai` SDK is also deprecated.
-> - **Phase 3 MCP tools** (`read_wiki_structure`, `read_wiki_page`, `search_wiki`, `ask_question`, `deep_research`) are not yet implemented.
-> - **Phase 4 GitHub webhooks** and **user steering via `.autowiki/wiki.json`** are not yet implemented.
+> - **Phase 3 scope change (2026-04-14):** MCP server tools (`read_wiki_structure`, `read_wiki_page`, `search_wiki`, `ask_question`) were deferred to Phase 5. Deep Research mode was implemented: multi-step RAG investigation with LLM planner, per-step AST context retrieval, and synthesized Markdown report. Exposed via `POST /api/repos/{repo_id}/research`, `WS /ws/repos/{repo_id}/research/{job_id}`, and `autowiki research` CLI command.
+> - **Phase 4 scope change (2026-04-14):** GitHub webhooks and push-triggered auto-refresh were deferred to Phase 5. User-steered wiki structure via `.autowiki/wiki.json` was implemented: override page hierarchy, assign source modules to pages, and inject repo/page-level notes into wiki generation.
 
 ---
 
@@ -550,16 +550,22 @@ volumes:
 - `autowiki refresh` CLI command (incremental re-index, commit-SHA-based; no webhook yet)
 - `.autowikiignore` support
 
-### Phase 3 — Research & MCP
-- Deep Research mode
-- ResearchPanel in UI
-- MCP server (all 5 tools)
+### Phase 3 ✅ — Deep Research (implemented PR #20, 2026-04-14)
+- Deep Research mode: LLM planner → multi-step RAG investigator → LLM synthesizer
+- `ResearchReport` model (`research_reports` table)
+- `run_deep_research` ARQ job
+- REST: `POST /api/repos/{repo_id}/research`, `GET /api/repos/{repo_id}/research/{job_id}`
+- WebSocket: `WS /ws/repos/{repo_id}/research/{job_id}`
+- ResearchPanel in web UI
 - `autowiki research` CLI command
+- *MCP server deferred to Phase 5*
 
-### Phase 4 — Webhook & Steerability
-- GitHub webhook endpoint (`POST /webhook/github`) with HMAC signature validation
-- `.autowiki/wiki.json` steerability
-- Auto-refresh on `push` events (no user action required)
+### Phase 4 ✅ — User Steering (implemented PR #20, 2026-04-14)
+- `.autowiki/wiki.json` steerability: override page hierarchy, assign source modules to pages
+- Repo-level and page-level notes injected into wiki generation prompts
+- `has_user_notes` indicator in wiki structure API (blue badge in UI)
+- `load_user_steering` + `assign_by_modules` utilities
+- *GitHub webhooks and push-triggered auto-refresh deferred to Phase 5*
 
 ### Phase 5 — Polish & Extensibility
 - Platform adapter interface (GitLab, Bitbucket stubs)
