@@ -26,7 +26,7 @@ import hashlib
 import json
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from typing import TYPE_CHECKING
 
 from worker.llm.base import LLMProvider
@@ -80,8 +80,11 @@ class WikiPageSpec:
       hierarchy survives slug-derivation changes.
     * **page_notes** — Freeform list of note dicts (default one empty note).
       Reserved for future Phase-4 user-steering support.
-    * **files** — List of repository-relative file paths assigned to this page
-      by the LLM.  Used for RAG retrieval and incremental refresh.
+    * **primary_files** — List of repository-relative file paths assigned to
+      this page by the LLM as its "home". Used for RAG retrieval and
+      incremental refresh.
+    * **reference_files** — List of repository-relative file paths assigned to
+      this page as context, but which have their "home" elsewhere.
 
     Note:
         ``slug`` and ``parent_slug`` are *derived* properties computed from
@@ -93,7 +96,24 @@ class WikiPageSpec:
     purpose: str  # replaces "description"
     parent: str | None = None  # parent page TITLE string (not slug)
     page_notes: list[dict] = field(default_factory=lambda: [{"content": ""}])
-    files: list[str] = field(default_factory=list)  # rel_paths assigned by LLM
+    primary_files: list[str] = field(default_factory=list)  # rel_paths assigned by LLM
+    reference_files: list[str] = field(default_factory=list)
+    files: InitVar[list[str] | None] = None
+
+    def __post_init__(self, files: list[str] | None):
+        """Backward compatibility: handle 'files' passed in constructor."""
+        if files is not None:
+            self.primary_files = files
+
+    @property
+    def files(self) -> list[str]:
+        """Backward compatibility: returns primary_files."""
+        return self.primary_files
+
+    @files.setter
+    def files(self, value: list[str]):
+        """Backward compatibility: sets primary_files."""
+        self.primary_files = value
 
     @property
     def slug(self) -> str:
@@ -160,8 +180,9 @@ class WikiPlan:
     def to_wiki_json(self) -> dict:
         """Serialise to the user-facing ``wiki.json`` format.
 
-        Omits ``slug``, ``parent_slug``, and ``files`` fields so the file
-        remains human-editable for future Phase-4 user-steering.
+        Omits ``slug``, ``parent_slug``, ``primary_files``, and
+        ``reference_files`` fields so the file remains human-editable for
+        future Phase-4 user-steering.
 
         Returns:
             dict: A dictionary with keys:
@@ -194,19 +215,20 @@ class WikiPlan:
     def to_internal_json(self) -> dict:
         """Serialise to the pipeline-internal ``ast/wiki_plan.json`` format.
 
-        Includes the ``files`` field for each page so that the incremental
-        refresh logic can determine which pages are affected by a given set
-        of changed files.
+        Includes the ``primary_files`` and ``reference_files`` fields for
+        each page so that the incremental refresh logic can determine which
+        pages are affected by a given set of changed files.
 
         Returns:
             dict: A dictionary with keys:
 
             * ``"repo_notes"`` (list[dict]): Repository-level notes.
             * ``"pages"`` (list[dict]): Each page dict has ``"title"``,
-              ``"purpose"``, ``"files"``, and optionally ``"parent"``.
+              ``"purpose"``, ``"primary_files"``, ``"reference_files"``,
+              and optionally ``"parent"``.
 
         Example:
-            >>> plan.to_internal_json()["pages"][0]["files"]
+            >>> plan.to_internal_json()["pages"][0]["primary_files"]
             ['api/routes.py', 'api/models.py']
         """
         return {
@@ -215,7 +237,8 @@ class WikiPlan:
                 {
                     "title": p.title,
                     "purpose": p.purpose,
-                    "files": p.files,
+                    "primary_files": p.primary_files,
+                    "reference_files": p.reference_files,
                     **({"parent": p.parent} if p.parent is not None else {}),
                 }
                 for p in self.pages

@@ -160,13 +160,16 @@ def test_wiki_plan_to_internal_json():
     assert "repo_notes" in internal
     assert "pages" in internal
     overview = next(p for p in internal["pages"] if p["title"] == "Overview")
-    assert overview["files"] == ["main.py", "README.md"]
+    assert overview["primary_files"] == ["main.py", "README.md"]
+    assert overview["reference_files"] == []
     engine = next(p for p in internal["pages"] if p["title"] == "Engine")
-    assert "engine/core.py" in engine["files"]
+    assert "engine/core.py" in engine["primary_files"]
+    assert engine["reference_files"] == []
     assert engine.get("parent") == "Overview"
-    # files must not be absent
+    # primary_files and reference_files must not be absent
     for page in internal["pages"]:
-        assert "files" in page
+        assert "primary_files" in page
+        assert "reference_files" in page
 
 
 def test_validate_wiki_plan_duplicate_slugs_rejected():
