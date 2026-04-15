@@ -2,10 +2,12 @@
 # Environment variables take precedence over this file.
 
 llm:
-  provider: anthropic          # anthropic | openai | openai-compatible | ollama
+  provider: anthropic          # anthropic | google | openai | openai-compatible | ollama
   model: claude-sonnet-4-6
+  fast_model: claude-haiku-4-5 # Faster/cheaper model for outline/fact-check passes
   api_key: ${ANTHROPIC_API_KEY}
   # base_url: http://localhost:11434/v1  # only for openai-compatible / ollama
+  # cache_ttl: short           # short | long (default: short)
 
 embedding:
   provider: google             # google | openai | ollama
