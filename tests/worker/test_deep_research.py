@@ -128,6 +128,8 @@ async def test_investigate_step_returns_finding_with_sources(mock_llm, mock_embe
     assert "worker/jobs.py" in finding.answer
     assert len(finding.sources) == 2
     assert finding.sources[0]["file"] == "worker/jobs.py"
+    assert "start_line" in finding.sources[0]
+    assert "end_line" in finding.sources[0]
 
 
 async def test_synthesize_report_joins_findings(mock_llm):

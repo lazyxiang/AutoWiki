@@ -73,8 +73,8 @@ _PLANNER_SCHEMA = {
 }
 
 _PLANNER_SYSTEM = (
-    "You are a senior software engineer running a deep investigation of a "
-    "code repository. Decompose the user's question into {min_steps}–{max_steps} "
+    f"You are a senior software engineer running a deep investigation of a "
+    f"code repository. Decompose the user's question into {MIN_STEPS}–{MAX_STEPS} "
     "focused investigation steps. Each step should be answerable by a single "
     "RAG search against the repository. Output ONLY valid JSON."
 )
@@ -87,7 +87,7 @@ async def plan_research(
     llm: LLMProvider,
 ) -> list[ResearchStep]:
     """Decompose a research question into an ordered list of investigation steps."""
-    system = _PLANNER_SYSTEM.format(min_steps=MIN_STEPS, max_steps=MAX_STEPS)
+    system = _PLANNER_SYSTEM
     prompt = (
         f"Repository: {repo_name}\n\n"
         f"README excerpt:\n{(readme or '')[:2000]}\n\n"
