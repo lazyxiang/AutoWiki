@@ -50,3 +50,40 @@ async def test_research_report_model_persists_roundtrip(tmp_path):
             assert loaded.created_at is not None
     finally:
         await dispose_db(db_path)
+
+
+async def test_plan_research_returns_investigation_steps(mock_llm):
+    """The planner extracts structured investigation steps from an LLM response."""
+    from worker.deep_research import ResearchStep, plan_research
+
+    async def _structured(*args, **kwargs):
+        return {
+            "plan": [
+                {
+                    "query": "Where does the pipeline start?",
+                    "rationale": "Locate the entry point.",
+                },
+                {
+                    "query": "How is incremental refresh detected?",
+                    "rationale": "Understand diff logic.",
+                },
+                {
+                    "query": "Which module owns embedding?",
+                    "rationale": "Find storage layer.",
+                },
+            ]
+        }
+
+    mock_llm.generate_structured.side_effect = _structured
+
+    steps = await plan_research(
+        question="How does the refresh pipeline work?",
+        repo_name="autowiki",
+        readme="AutoWiki generates wikis.",
+        llm=mock_llm,
+    )
+
+    assert len(steps) == 3
+    assert all(isinstance(s, ResearchStep) for s in steps)
+    assert steps[0].query == "Where does the pipeline start?"
+    assert steps[0].rationale == "Locate the entry point."
