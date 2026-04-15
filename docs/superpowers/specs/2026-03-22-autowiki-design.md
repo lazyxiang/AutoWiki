@@ -72,10 +72,10 @@ AutoWiki is designed to close the gaps left by existing tools (DeepWiki, Zread, 
 ### 4.1 System Overview
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        User Surfaces                         │
-│  Browser (Next.js)  │  CLI (autowiki CLI)  │  MCP Server    │
-└──────────┬──────────┴──────────┬───────────┴──────┬─────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                          User Surfaces                            │
+│  Browser (Next.js)  │  CLI (autowiki CLI)  │  MCP Server (Ph 5) │
+└──────────┬──────────┴──────────┬───────────┴──────┬──────────────┘
            │                     │                   │
            └─────────────────────▼───────────────────┘
                           ┌──────────────┐
@@ -86,10 +86,10 @@ AutoWiki is designed to close the gaps left by existing tools (DeepWiki, Zread, 
                     │      Worker Service      │
                     │  1. Repo Ingestion       │
                     │  2. AST Analysis         │
-                    │  3. RAG Indexer          │
-                    │  4. Wiki Planner         │
-                    │  5. Page Generator       │
-                    │  6. Diagram Synthesis    │
+                    │  3. Dependency Graph     │
+                    │  4. RAG Indexer          │
+                    │  5. Wiki Planner         │
+                    │  6. Page Generator       │
                     └─────────────────────────┘
                                  │
                     ┌────────────▼────────────┐
@@ -102,11 +102,11 @@ AutoWiki is designed to close the gaps left by existing tools (DeepWiki, Zread, 
 
 ### 4.2 Service Decomposition
 
-**API Gateway** (`api/`) — FastAPI application. Handles all inbound requests: REST endpoints, WebSocket streaming, MCP server, and GitHub webhook. Enqueues jobs to Redis. Never performs long-running computation itself.
+**API Gateway** (`api/`) — FastAPI application. Handles all inbound requests: REST endpoints and WebSocket streaming. Enqueues jobs to Redis. Never performs long-running computation itself. (MCP server and GitHub webhook deferred to Phase 5.)
 
 **Worker Service** (`worker/`) — Python process pool managed by ARQ. Executes the six-stage generation pipeline. Scales horizontally by adding worker replicas.
 
-**Frontend** (`web/`) — Next.js 15 application. Communicates with the API Gateway only. Stateless.
+**Frontend** (`web/`) — Next.js 16.2.1 application. Communicates with the API Gateway only. Stateless.
 
 **Storage** — SQLite for structured metadata; FAISS indexes persisted to disk per repository; Markdown files for wiki content.
 
@@ -115,11 +115,11 @@ AutoWiki is designed to close the gaps left by existing tools (DeepWiki, Zread, 
 | Stage | Responsibility | Key Technology |
 |---|---|---|
 | **1. Repo Ingestion** | Clone/fetch repo; apply file filters (`.autowikiignore` + built-in rules); detect changes via commit SHA diff | `gitpython` |
-| **2. AST Analysis** | Parse source files with Tree-Sitter; extract functions, classes, imports, call graphs; build unified dependency graph + module tree | `tree-sitter` (9 languages) |
-| **3. RAG Indexer** | Chunk documents with overlap; generate embeddings; build/update FAISS index; persist per `{repo_hash}` | `langchain` splitter, configurable embedding provider, `faiss-cpu` |
-| **4. Wiki Planner** | Feed AST dependency graph + repo structure to LLM; produce hierarchical JSON page plan; validate + retry on malformed output (up to 3 attempts) | LLM structured output |
-| **5. Page Generator** | Per page: RAG retrieval + AST graph slice injected as context; LLM generates page; recurse for large modules via sub-agents; stream results | Hierarchical agent loop |
-| **6. Diagram Synthesis** | Per page: generate Mermaid diagrams (architecture, data-flow, sequence); validate syntax; embed in page Markdown | LLM + Mermaid validator |
+| **2. AST Analysis** | Parse source files with Tree-Sitter; extract functions, classes, imports; single-pass `FileAnalysis` per file | `tree-sitter` (9 languages) |
+| **3. Dependency Graph** | Build file-level import graph; BFS-split into clusters for cross-file relationship context | In-memory `DependencyGraph`; not persisted to disk |
+| **4. RAG Indexer** | Chunk documents with overlap; generate embeddings; build/update FAISS index; persist per `{repo_hash}`; skippable with `reuse_index=True` | `langchain` splitter, configurable embedding provider, `faiss-cpu` |
+| **5. Wiki Planner** | Two-phase LLM plan: Phase 1 outline (hierarchy/titles/purposes), Phase 2 file assignment; each phase validates and self-retries → `WikiPlan` | LLM structured output |
+| **6. Page Generator** | Bottom-up 4-pass orchestrator per page: Pass 1 outline (fast model), Pass 2 draft, Pass 3 fact-check (fast model), Pass 4 targeted revision (conditional); Mermaid post-processing | `generate_batch` concurrency, `fast_llm` |
 
 ### 4.4 Incremental Re-Indexing
 
@@ -264,7 +264,7 @@ POST   /api/repos/{repo_id}/research           Start Deep Research job
 WS     /ws/repos/{repo_id}/research/{job_id}   Stream research progress
 WS     /ws/jobs/{job_id}                       Stream job progress 0–100 (used by JobProgressBar)
 
-POST   /webhook/github                         GitHub push webhook *(Phase 4)*
+POST   /webhook/github                         GitHub push webhook *(Phase 5 — deferred)*
 ```
 
 **Key endpoint schemas:**
@@ -308,7 +308,9 @@ autowiki research github.com/owner/repo "..."  # Trigger Deep Research; print re
 
 `autowiki serve` starts the full stack in a single foreground process: it spawns the FastAPI API server, an ARQ worker, and the Next.js frontend as subprocesses. It is the non-Docker entry point. In Docker Compose, each service runs independently; `autowiki serve` is not used.
 
-### 6.3 MCP Server Tools
+### 6.3 MCP Server Tools *(Phase 5 — deferred)*
+
+> **Note:** MCP server was originally planned for Phase 3 but was deferred to Phase 5 to prioritize Deep Research mode. See Phase 3 scope change in the STALE banner above.
 
 | Tool | Description |
 |---|---|
@@ -352,7 +354,7 @@ Synthesizer (LLM)
   → Final Conclusion: summary + source references + confidence level
 ```
 
-Deep Research is available in the Web UI (ResearchPanel), CLI (`autowiki research github.com/owner/repo "..."`), and MCP (`deep_research` tool).
+Deep Research is available in the Web UI (ResearchPanel) and CLI (`autowiki research github.com/owner/repo "..."`). The MCP `deep_research` tool is deferred to Phase 5.
 
 ---
 
@@ -360,9 +362,9 @@ Deep Research is available in the Web UI (ResearchPanel), CLI (`autowiki researc
 
 ### 8.1 Tech Stack
 
-- Next.js 15 (App Router) + TypeScript
-- Tailwind CSS
-- shadcn/ui (component primitives)
+- Next.js 16.2.1 (App Router) + TypeScript
+- Tailwind v4 (CSS-only, no `tailwind.config.ts`)
+- @base-ui/react (component primitives; not shadcn/ui or @radix-ui/react)
 - Mermaid.js (diagram rendering)
 - D3 or react-flow (interactive dependency graph)
 
@@ -568,8 +570,11 @@ volumes:
 - *GitHub webhooks and push-triggered auto-refresh deferred to Phase 5*
 
 ### Phase 5 — Polish & Extensibility
+- MCP server tools (`read_wiki_structure`, `read_wiki_page`, `search_wiki`, `ask_question`, `deep_research`) — deferred from Phase 3
+- GitHub webhook push-triggered auto-refresh (`POST /webhook/github`) — deferred from Phase 4
 - Platform adapter interface (GitLab, Bitbucket stubs)
 - Private repo support (GitHub PAT)
+- Hybrid search (keyword + semantic)
 - Golden-file LLM regression tests
 - Performance profiling and optimization
 
