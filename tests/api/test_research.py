@@ -167,8 +167,10 @@ async def test_ws_research_404_closes_with_4004(research_env):
     await init_db(db_path)
 
     from starlette.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
 
     with TestClient(app) as client:
-        with pytest.raises(Exception):
+        with pytest.raises(WebSocketDisconnect) as exc_info:
             with client.websocket_connect("/ws/repos/r1/research/nonexistent") as ws:
                 ws.receive_json()
+    assert exc_info.value.code == 4004

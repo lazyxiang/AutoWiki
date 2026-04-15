@@ -177,6 +177,7 @@ async def test_run_deep_research_flow_emits_events(mock_llm, mock_embedding):
             "plan": [
                 {"query": "Q1", "rationale": "R1"},
                 {"query": "Q2", "rationale": "R2"},
+                {"query": "Q3", "rationale": "R3"},
             ]
         }
 
@@ -213,8 +214,8 @@ async def test_run_deep_research_flow_emits_events(mock_llm, mock_embedding):
     assert "step_finding" in types
     assert types[-1] == "report"
     assert result.report.startswith("# Report")
-    assert len(result.plan) == 2
-    assert len(result.findings) == 2
+    assert len(result.plan) == 3
+    assert len(result.findings) == 3
 
 
 async def test_run_deep_research_persists_report(
@@ -254,7 +255,13 @@ async def test_run_deep_research_persists_report(
     fake_store.search.return_value = [{"file": "x.py", "text": "pass"}]
 
     async def _structured(*a, **k):
-        return {"plan": [{"query": "Q1", "rationale": "R1"}]}
+        return {
+            "plan": [
+                {"query": "Q1", "rationale": "R1"},
+                {"query": "Q2", "rationale": "R2"},
+                {"query": "Q3", "rationale": "R3"},
+            ]
+        }
 
     mock_llm.generate_structured.side_effect = _structured
 
@@ -278,7 +285,7 @@ async def test_run_deep_research_persists_report(
                 assert report.status == "done"
                 assert report.report_markdown.startswith("# Report")
                 assert json.loads(report.plan_json)[0]["query"] == "Q1"
-                assert len(json.loads(report.findings_json)) == 1
+                assert len(json.loads(report.findings_json)) == 3
         finally:
             await dispose_db(db_path)
             reset_config()

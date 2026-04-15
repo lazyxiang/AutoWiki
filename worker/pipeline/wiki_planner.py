@@ -903,7 +903,9 @@ async def generate_wiki_plan(
     # --- User steering: skip Phase 1 when user provides page list ---
     if user_steering is not None and user_steering.pages:
         repo_notes_dicts = [{"content": n} for n in (user_steering.repo_notes or [])]
-        module_assignments, _ = assign_by_modules(user_steering.pages, all_files)
+        module_assignments, unassigned = assign_by_modules(
+            user_steering.pages, all_files
+        )
         pages = []
         for upage in user_steering.pages:
             assigned_files = module_assignments.get(upage.title, [])
@@ -919,6 +921,13 @@ async def generate_wiki_plan(
                     ),
                 )
             )
+
+        if unassigned and pages:
+            overview = next(
+                (p for p in pages if p.title.lower() == "overview"), pages[0]
+            )
+            overview.files = [*overview.files, *unassigned]
+
         return WikiPlan(
             repo_notes=repo_notes_dicts if repo_notes_dicts else [{"content": ""}],
             pages=pages,

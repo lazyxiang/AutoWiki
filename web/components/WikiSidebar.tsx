@@ -97,7 +97,16 @@ export function WikiSidebar({ pages, owner, repo, repoId }: Props) {
             >
               {page.title}
               {page.has_user_notes && (
-                <span className="ml-1 text-xs text-blue-500" title="Steered by .autowiki/wiki.json">●</span>
+                <>
+                  <span
+                    aria-hidden="true"
+                    className="ml-1 text-xs text-blue-500"
+                    title="Steered by .autowiki/wiki.json"
+                  >
+                    ●
+                  </span>
+                  <span className="sr-only">Steered by .autowiki/wiki.json</span>
+                </>
               )}
             </Link>
           </li>

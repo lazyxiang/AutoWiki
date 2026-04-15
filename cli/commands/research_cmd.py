@@ -24,24 +24,32 @@ def research_cmd(
 
     repo_id = hashlib.sha256(f"github:{owner}/{name}".encode()).hexdigest()[:16]
 
-    repo_resp = httpx.get(f"{api_url}/api/repos/{repo_id}", timeout=10)
-    if repo_resp.status_code == 404:
-        typer.echo("Repository not found. Run `autowiki index` first.", err=True)
-        raise typer.Exit(1)
-    if repo_resp.status_code >= 400:
-        typer.echo(f"API error {repo_resp.status_code}: {repo_resp.text}", err=True)
-        raise typer.Exit(1)
-    if repo_resp.json().get("status") != "ready":
-        typer.echo("Repository is not ready. Wait for indexing to complete.", err=True)
-        raise typer.Exit(1)
+    try:
+        repo_resp = httpx.get(f"{api_url}/api/repos/{repo_id}", timeout=10)
+        if repo_resp.status_code == 404:
+            typer.echo("Repository not found. Run `autowiki index` first.", err=True)
+            raise typer.Exit(1)
+        if repo_resp.status_code >= 400:
+            typer.echo(f"API error {repo_resp.status_code}: {repo_resp.text}", err=True)
+            raise typer.Exit(1)
+        if repo_resp.json().get("status") != "ready":
+            typer.echo(
+                "Repository is not ready. Wait for indexing to complete.", err=True
+            )
+            raise typer.Exit(1)
 
-    start_resp = httpx.post(
-        f"{api_url}/api/repos/{repo_id}/research",
-        json={"question": question},
-        timeout=10,
-    )
-    start_resp.raise_for_status()
-    job_id = start_resp.json()["job_id"]
+        start_resp = httpx.post(
+            f"{api_url}/api/repos/{repo_id}/research",
+            json={"question": question},
+            timeout=10,
+        )
+        start_resp.raise_for_status()
+        job_id = start_resp.json()["job_id"]
+    except typer.Exit:
+        raise
+    except (httpx.HTTPError, ValueError, KeyError) as e:
+        typer.echo(f"API error: {e}", err=True)
+        raise typer.Exit(1)
 
     import websockets
 

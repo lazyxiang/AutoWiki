@@ -73,12 +73,27 @@ def load_user_steering(clone_root: Path) -> UserSteering | None:
         title = p.get("title")
         if not isinstance(title, str) or not title.strip():
             continue
-        modules = [m for m in (p.get("modules") or []) if isinstance(m, str)]
+        modules_raw = p.get("modules") or []
+        if not isinstance(modules_raw, list):
+            logger.warning(
+                ".autowiki/wiki.json page %r modules must be a list; ignoring",
+                title,
+            )
+            modules_raw = []
+        modules = [m for m in modules_raw if isinstance(m, str)]
+
         notes_raw = p.get("page_notes") or []
+        if not isinstance(notes_raw, list):
+            logger.warning(
+                ".autowiki/wiki.json page %r page_notes must be a list; ignoring",
+                title,
+            )
+            notes_raw = []
         page_notes = [
             n if isinstance(n, str) else n.get("content", "")
             for n in notes_raw
-            if isinstance(n, (str, dict))
+            if isinstance(n, str)
+            or (isinstance(n, dict) and isinstance(n.get("content"), str))
         ]
         page_notes = [n for n in page_notes if n]
         purpose = p.get("purpose")

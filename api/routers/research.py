@@ -66,12 +66,28 @@ async def start_research(repo_id: str, req: StartResearchRequest) -> dict:
         )
         await s.commit()
 
-    await _enqueue_deep_research(
-        repo_id=repo_id,
-        job_id=job_id,
-        report_id=report_id,
-        question=req.question.strip(),
-    )
+    try:
+        await _enqueue_deep_research(
+            repo_id=repo_id,
+            job_id=job_id,
+            report_id=report_id,
+            question=req.question.strip(),
+        )
+    except Exception as exc:
+        async with get_session(db_path) as s:
+            job = await s.get(Job, job_id)
+            report = await s.get(ResearchReport, report_id)
+            if job is not None:
+                job.status = "failed"
+                job.error = "Failed to enqueue research job"
+            if report is not None:
+                report.status = "failed"
+                report.error = "Failed to enqueue research job"
+            await s.commit()
+        raise HTTPException(
+            status_code=503, detail="Research queue unavailable"
+        ) from exc
+
     return {"job_id": job_id, "report_id": report_id, "status": "queued"}
 
 

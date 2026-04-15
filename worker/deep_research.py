@@ -98,6 +98,10 @@ async def plan_research(
     )
     result = await llm.generate_structured(prompt, _PLANNER_SCHEMA, system=system)
     raw_steps = result.get("plan", [])[:MAX_STEPS]
+    if len(raw_steps) < MIN_STEPS:
+        raise ValueError(
+            f"Planner returned {len(raw_steps)} steps; expected {MIN_STEPS}–{MAX_STEPS}"
+        )
     return [ResearchStep(query=s["query"], rationale=s["rationale"]) for s in raw_steps]
 
 
