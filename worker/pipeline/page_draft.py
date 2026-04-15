@@ -75,7 +75,8 @@ def build_draft_prompt(
     if spec.purpose:
         cached_parts.append(f"Purpose: {spec.purpose}\n")
 
-    cached_parts.append(f"Source files: {', '.join(spec.files or [])}\n")
+    all_files = (spec.primary_files or []) + (spec.reference_files or [])
+    cached_parts.append(f"Source files: {', '.join(all_files)}\n")
 
     if dep_info:
         deps_on = dep_info.get("depends_on", [])

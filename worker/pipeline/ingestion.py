@@ -405,9 +405,9 @@ def get_affected_pages(changed_files: list[str], wiki_plan: WikiPlan) -> set[str
         >>> from worker.pipeline.wiki_planner import WikiPlan, WikiPageSpec
         >>> plan = WikiPlan(pages=[
         ...     WikiPageSpec(title="API Layer", purpose="...",
-        ...                  files=["api/routes.py", "api/models.py"]),
+        ...                  primary_files=["api/routes.py", "api/models.py"]),
         ...     WikiPageSpec(title="Worker", purpose="...",
-        ...                  files=["worker/jobs.py"]),
+        ...                  primary_files=["worker/jobs.py"]),
         ... ])
         >>> get_affected_pages(["api/routes.py"], plan)
         {'API Layer'}
@@ -419,6 +419,7 @@ def get_affected_pages(changed_files: list[str], wiki_plan: WikiPlan) -> set[str
     changed = set(changed_files)
     affected: set[str] = set()
     for page in wiki_plan.pages:
-        if any(f in changed for f in (page.files or [])):
+        all_page_files = set(page.primary_files) | set(page.reference_files)
+        if any(f in changed for f in all_page_files):
             affected.add(page.title)
     return affected

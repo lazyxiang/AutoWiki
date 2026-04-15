@@ -168,7 +168,7 @@ async def test_generate_page_outline_with_mock_llm():
     spec = WikiPageSpec(
         title="Core Server",
         purpose="Main server entry point.",
-        files=["src/main.py", "src/config.py"],
+        primary_files=["src/main.py", "src/config.py"],
     )
     outline = await generate_page_outline(
         spec,
@@ -216,7 +216,7 @@ async def test_generate_page_outline_retries_on_validation_error():
     mock_fast_llm = AsyncMock()
     mock_fast_llm.generate_structured.side_effect = structured_side_effect
 
-    spec = WikiPageSpec(title="Test", purpose="Test.", files=["a.py"])
+    spec = WikiPageSpec(title="Test", purpose="Test.", primary_files=["a.py"])
     outline = await generate_page_outline(
         spec,
         entity_summaries="entities",

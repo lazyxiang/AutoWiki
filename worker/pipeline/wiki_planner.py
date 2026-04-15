@@ -65,7 +65,7 @@ def _suggest_page_range(file_count: int, entity_count: int) -> tuple[int, int]:
     return (30, 70)
 
 
-@dataclass(init=False)
+@dataclass
 class WikiPageSpec:
     """Specification for a single wiki page within the plan.
 
@@ -98,36 +98,6 @@ class WikiPageSpec:
     page_notes: list[dict] = field(default_factory=lambda: [{"content": ""}])
     primary_files: list[str] = field(default_factory=list)  # rel_paths assigned by LLM
     reference_files: list[str] = field(default_factory=list)
-
-    def __init__(
-        self,
-        title: str,
-        purpose: str,
-        parent: str | None = None,
-        page_notes: list[dict] | None = None,
-        primary_files: list[str] | None = None,
-        reference_files: list[str] | None = None,
-        files: list[str] | None = None,
-    ):
-        """Initialise with support for 'files' as a backward-compatibility alias."""
-        self.title = title
-        self.purpose = purpose
-        self.parent = parent
-        self.page_notes = page_notes if page_notes is not None else [{"content": ""}]
-        self.primary_files = primary_files if primary_files is not None else []
-        self.reference_files = reference_files if reference_files is not None else []
-        if files is not None:
-            self.primary_files = files
-
-    @property
-    def files(self) -> list[str]:
-        """Backward compatibility: returns primary_files."""
-        return self.primary_files
-
-    @files.setter
-    def files(self, value: list[str]):
-        """Backward compatibility: sets primary_files."""
-        self.primary_files = value
 
     @property
     def slug(self) -> str:
@@ -787,7 +757,7 @@ def validate_wiki_plan(
         Normal case — all files assigned, no orphans:
 
         >>> raw = {"pages": [
-        ...     {"title": "Overview", "purpose": "Top level.", "files": ["main.py"]},
+        ...     {"title": "Overview", "purpose": "Top level.", "primary_files": ["main.py"]},
         ... ]}
         >>> plan = validate_wiki_plan(raw, all_files=["main.py"])
         >>> plan.pages[0].title
@@ -796,7 +766,7 @@ def validate_wiki_plan(
         Orphan case — ``utils.py`` not assigned; it gets appended to Overview:
 
         >>> raw = {"pages": [
-        ...     {"title": "Overview", "purpose": "...", "files": ["main.py"]},
+        ...     {"title": "Overview", "purpose": "...", "primary_files": ["main.py"]},
         ... ]}
         >>> plan = validate_wiki_plan(raw, all_files=["main.py", "utils.py"])
         >>> "utils.py" in plan.pages[0].files
@@ -838,7 +808,6 @@ def validate_wiki_plan(
                 parent=parent,
                 primary_files=p.get("primary_files", []),
                 reference_files=p.get("reference_files", []),
-                files=p.get("files"),
             )
         )
 
@@ -898,7 +867,7 @@ def validate_wiki_plan(
         )
 
     # Flat plan check for repos with >30 files
-    total_file_count = len(all_files) if all_files else sum(len(p.files) for p in pages)
+    total_file_count = len(all_files) if all_files else sum(len(p.primary_files) for p in pages)
     if max_depth == 1 and total_file_count > 30:
         raise ValueError(
             f"All pages are top-level — create 2-3 levels of "
@@ -918,7 +887,7 @@ def validate_wiki_plan(
         # to avoid O(clusters × files × pages × files_per_page) nested loops.
         file_to_page: dict[str, str] = {}
         for p in pages:
-            for f in p.files:
+            for f in p.primary_files:
                 file_to_page[f] = p.title
         for cluster in clusters:
             if len(cluster) <= 1:

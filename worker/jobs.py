@@ -181,15 +181,15 @@ def _collect_page_entities(
 ) -> list[dict]:
     """Collect all AST entities for the source files assigned to a wiki page.
 
-    Iterates over each file path listed in ``page_spec.files``, looks up
-    its ``FileInfo`` in ``file_analysis``, and flattens all entities into a
-    single list.  A ``"file"`` key is injected into each entity dict so
+    Iterates over each file path listed in ``page_spec.primary_files``, looks
+    up its ``FileInfo`` in ``file_analysis``, and flattens all entities into
+    a single list.  A ``"file"`` key is injected into each entity dict so
     downstream consumers can attribute entities to their source file.
 
     Args:
         page_spec (WikiPageSpec): Wiki page specification containing the
-            list of relative file paths (``page_spec.files``) assigned to
-            this page.
+            list of relative file paths (``page_spec.primary_files``)
+            assigned to this page.
         file_analysis (FileAnalysis): Result of single-pass Tree-Sitter
             analysis across all repository files, keyed by relative path.
 
@@ -205,7 +205,7 @@ def _collect_page_entities(
         {"name": "run_full_index", "kind": "function", "file": "worker/jobs.py"}
     """
     entities = []
-    for rel_path in page_spec.files or []:
+    for rel_path in page_spec.primary_files or []:
         file_info = file_analysis.files.get(rel_path)
         if file_info:
             for e in file_info.entities:
@@ -221,8 +221,8 @@ def _collect_page_deps(page_spec: WikiPageSpec, dep_graph: DependencyGraph) -> d
 
     Args:
         page_spec (WikiPageSpec): Wiki page specification containing the
-            list of relative file paths (``page_spec.files``) assigned to
-            this page.
+            list of relative file paths (``page_spec.primary_files``)
+            assigned to this page.
         dep_graph (DependencyGraph): File-level import graph built by
             ``build_dependency_graph``.
 
@@ -236,7 +236,7 @@ def _collect_page_deps(page_spec: WikiPageSpec, dep_graph: DependencyGraph) -> d
     """
     from worker.pipeline.dependency_graph import summarize_page_deps
 
-    return summarize_page_deps(page_spec.files or [], dep_graph)
+    return summarize_page_deps(page_spec.primary_files or [], dep_graph)
 
 
 def _make_faiss_store(repo_data_dir: Path, embedding) -> FAISSStore:
@@ -807,7 +807,8 @@ async def run_refresh_index(
                     title=p["title"],
                     purpose=p.get("purpose", ""),
                     parent=p.get("parent"),
-                    files=p.get("files", []),
+                    primary_files=p.get("primary_files", []),
+                    reference_files=p.get("reference_files", []),
                     # Merge saved page_notes back into the spec; default to empty note
                     page_notes=saved_page_notes.get(p["title"], [{"content": ""}]),
                 )
@@ -861,7 +862,7 @@ async def run_refresh_index(
         )
 
         # Detect structural changes: added or removed files relative to the old plan
-        old_all_files = {f for p in old_plan.pages for f in (p.files or [])}
+        old_all_files = {f for p in old_plan.pages for f in (p.primary_files or [])}
         new_all_files = set(file_analysis.files.keys())
         added_files = new_all_files - old_all_files
         removed_files = old_all_files - new_all_files
@@ -958,7 +959,7 @@ async def run_refresh_index(
             f
             for p in old_plan.pages
             if p.title in affected_page_titles
-            for f in (p.files or [])
+            for f in (p.primary_files or [])
         }
         affected_files_set |= added_files
         affected_file_analysis = FileAnalysis(

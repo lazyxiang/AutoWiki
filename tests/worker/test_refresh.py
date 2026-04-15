@@ -102,7 +102,7 @@ async def test_run_refresh_index_with_changes(
                     {
                         "title": "Overview",
                         "purpose": "High-level overview.",
-                        "files": ["main.py"],
+                        "primary_files": ["main.py"],
                     }
                 ],
             }

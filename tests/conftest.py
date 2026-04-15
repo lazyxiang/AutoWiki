@@ -52,7 +52,7 @@ def mock_llm():
 
     _default_structured = {
         "pages": [
-            {"title": "Overview", "purpose": "Fallback.", "files": ["main.py"]},
+            {"title": "Overview", "purpose": "Fallback.", "primary_files": ["main.py"]},
         ]
     }
 

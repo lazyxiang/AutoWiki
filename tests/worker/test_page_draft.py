@@ -49,7 +49,7 @@ def test_build_draft_prompt_returns_segments():
         ],
         key_claims=["Claim 1", "Claim 2", "Claim 3"],
     )
-    spec = WikiPageSpec(title="API Layer", purpose="HTTP endpoints.", files=["api.py"])
+    spec = WikiPageSpec(title="API Layer", purpose="HTTP endpoints.", primary_files=["api.py"])
     context_chunks = [
         {"file": "api.py", "start_line": 1, "end_line": 20, "text": "code content"}
     ]
@@ -95,7 +95,7 @@ def test_build_draft_prompt_for_parent_page():
         ],
         key_claims=["Workers connect via Redis", "API is stateless", "Frontend is SPA"],
     )
-    spec = WikiPageSpec(title="Architecture", purpose="Top-level.", files=[])
+    spec = WikiPageSpec(title="Architecture", purpose="Top-level.", primary_files=[])
     child_contents = [
         PageResult(slug="api", title="API Layer", content="## API content"),
         PageResult(slug="worker", title="Worker", content="## Worker content"),

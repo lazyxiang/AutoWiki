@@ -296,7 +296,8 @@ async def generate_page(
 
     # ── Post-processing ──
     draft = _strip_preamble_and_ensure_header(draft, spec.title)
-    draft = ensure_diagram_headers(draft, default_source_files=spec.files)
+    all_files = spec.primary_files + spec.reference_files
+    draft = ensure_diagram_headers(draft, default_source_files=all_files)
     draft = sanitize_mermaid_blocks(draft)
     draft = _append_source_files_table(draft, spec)
 
@@ -324,13 +325,14 @@ async def generate_page_batch(
         spec: WikiPageSpec, children: list[PageResult] | None
     ) -> PageResult:
         entities = []
-        for rel_path in spec.files or []:
+        all_files = spec.primary_files + spec.reference_files
+        for rel_path in all_files:
             file_info = file_analysis.files.get(rel_path)
             if file_info:
                 for e in file_info.entities:
                     entities.append({**e, "file": rel_path})
 
-        dep_info = summarize_page_deps(spec.files or [], dep_graph)
+        dep_info = summarize_page_deps(spec.primary_files, dep_graph)
         dep_info_or_none = dep_info if any(dep_info.values()) else None
         entities_or_none = entities if entities else None
 

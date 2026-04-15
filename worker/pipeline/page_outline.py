@@ -220,7 +220,8 @@ def _build_outline_prompt(
     """Build the outline prompt with cacheable entity context."""
     # Cacheable prefix: entity summaries + dep info (reused by fact-check)
     cached_parts = [f"Page: {spec.title}\nPurpose: {spec.purpose}\n"]
-    cached_parts.append(f"Assigned files: {', '.join(spec.files or [])}\n")
+    all_files = (spec.primary_files or []) + (spec.reference_files or [])
+    cached_parts.append(f"Assigned files: {', '.join(all_files)}\n")
     cached_parts.append(f"Entity summaries:\n{entity_summaries}\n")
     if dep_info:
         cached_parts.append(f"Dependencies:\n{dep_info}\n")
@@ -229,7 +230,7 @@ def _build_outline_prompt(
 
     # Variable tail: schema + instructions
     schema_json = json.dumps(_OUTLINE_SCHEMA, indent=2)
-    n_sections = max(3, len(spec.files or []) // 2)
+    n_sections = max(3, len(all_files) // 2)
     min_diagrams = 2 if n_sections >= 3 else 1
     tail = (
         f"Create an outline with {n_sections}-{n_sections + 3} sections.\n"
@@ -264,6 +265,7 @@ async def generate_page_outline(
     segments = _build_outline_prompt(spec, entity_summaries, dep_info, child_titles)
     system = _SYSTEM + get_language_instruction(wiki_language)
 
+    all_files = (spec.primary_files or []) + (spec.reference_files or [])
     for attempt in range(max_retries + 1):
         try:
             raw = await fast_llm.generate_structured(
@@ -271,7 +273,7 @@ async def generate_page_outline(
                 schema=_OUTLINE_SCHEMA,
                 system=system,
             )
-            return validate_outline(raw, page_files=spec.files or [])
+            return validate_outline(raw, page_files=all_files)
         except (ValueError, json.JSONDecodeError, KeyError) as e:
             if attempt < max_retries:
                 error_seg = PromptSegment(

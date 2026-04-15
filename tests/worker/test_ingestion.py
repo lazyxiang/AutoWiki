@@ -112,9 +112,9 @@ def test_get_affected_pages():
 
     plan = WikiPlan(
         pages=[
-            WikiPageSpec(title="API", purpose="API endpoints.", files=["api/main.py"]),
+            WikiPageSpec(title="API", purpose="API endpoints.", primary_files=["api/main.py"]),
             WikiPageSpec(
-                title="Worker", purpose="Background jobs.", files=["worker/main.py"]
+                title="Worker", purpose="Background jobs.", primary_files=["worker/main.py"]
             ),
         ]
     )

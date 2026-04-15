@@ -91,11 +91,11 @@ async def test_get_graph_returns_nodes(client):
             {
                 "repo_notes": [{"content": ""}],
                 "pages": [
-                    {"title": "API", "purpose": "API layer.", "files": ["api/main.py"]},
+                    {"title": "API", "purpose": "API layer.", "primary_files": ["api/main.py"]},
                     {
                         "title": "Worker",
                         "purpose": "Worker layer.",
-                        "files": ["worker/jobs.py"],
+                        "primary_files": ["worker/jobs.py"],
                     },
                 ],
             }

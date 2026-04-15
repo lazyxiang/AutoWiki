@@ -85,7 +85,7 @@ async def test_generate_page_multi_pass(page_store, mock_embedding):
     fast_llm = _make_mock_fast_llm()
 
     spec = WikiPageSpec(
-        title="Models", purpose="Data model classes.", files=["models.py"]
+        title="Models", purpose="Data model classes.", primary_files=["models.py"]
     )
     result = await generate_page(
         spec,
@@ -147,7 +147,7 @@ async def test_generate_page_with_fact_check_fail_triggers_revision(
         f"## Overview\n\nRevised content.\n\n**Diagram: Flow**\n\n{_diagram}",
     ]
 
-    spec = WikiPageSpec(title="Models", purpose="Test.", files=["models.py"])
+    spec = WikiPageSpec(title="Models", purpose="Test.", primary_files=["models.py"])
     await generate_page(
         spec,
         page_store,
@@ -207,7 +207,7 @@ async def test_generate_page_revision_failure_falls_back_to_strip(
         RuntimeError("LLM unavailable"),  # revision fails
     ]
 
-    spec = WikiPageSpec(title="Models", purpose="Test.", files=["models.py"])
+    spec = WikiPageSpec(title="Models", purpose="Test.", primary_files=["models.py"])
     result = await generate_page(
         spec,
         page_store,
@@ -255,8 +255,8 @@ async def test_generate_page_batch_returns_all_results(page_store, mock_embeddin
     from worker.pipeline.ast_analysis import FileAnalysis
     from worker.pipeline.dependency_graph import DependencyGraph
 
-    spec_a = WikiPageSpec(title="Module A", purpose="A module.", files=["a.py"])
-    spec_b = WikiPageSpec(title="Module B", purpose="B module.", files=["b.py"])
+    spec_a = WikiPageSpec(title="Module A", purpose="A module.", primary_files=["a.py"])
+    spec_b = WikiPageSpec(title="Module B", purpose="B module.", primary_files=["b.py"])
 
     results = await generate_page_batch(
         specs_with_children=[(spec_a, None), (spec_b, None)],
@@ -373,8 +373,8 @@ def test_compute_generation_order_unchanged():
 def test_compute_generation_order_single_level():
     plan = WikiPlan(
         pages=[
-            WikiPageSpec(title="A", purpose=".", files=["a.py"]),
-            WikiPageSpec(title="B", purpose=".", files=["b.py"]),
+            WikiPageSpec(title="A", purpose=".", primary_files=["a.py"]),
+            WikiPageSpec(title="B", purpose=".", primary_files=["b.py"]),
         ]
     )
     levels = compute_generation_order(plan)
@@ -385,9 +385,9 @@ def test_compute_generation_order_single_level():
 def test_compute_generation_order_two_levels():
     plan = WikiPlan(
         pages=[
-            WikiPageSpec(title="Root", purpose=".", files=["r.py"]),
-            WikiPageSpec(title="Child1", purpose=".", parent="Root", files=["c1.py"]),
-            WikiPageSpec(title="Child2", purpose=".", parent="Root", files=["c2.py"]),
+            WikiPageSpec(title="Root", purpose=".", primary_files=["r.py"]),
+            WikiPageSpec(title="Child1", purpose=".", parent="Root", primary_files=["c1.py"]),
+            WikiPageSpec(title="Child2", purpose=".", parent="Root", primary_files=["c2.py"]),
         ]
     )
     levels = compute_generation_order(plan)
@@ -400,9 +400,9 @@ def test_compute_generation_order_two_levels():
 def test_compute_generation_order_three_levels():
     plan = WikiPlan(
         pages=[
-            WikiPageSpec(title="Root", purpose=".", files=["r.py"]),
-            WikiPageSpec(title="Mid", purpose=".", parent="Root", files=["m.py"]),
-            WikiPageSpec(title="Leaf", purpose=".", parent="Mid", files=["l.py"]),
+            WikiPageSpec(title="Root", purpose=".", primary_files=["r.py"]),
+            WikiPageSpec(title="Mid", purpose=".", parent="Root", primary_files=["m.py"]),
+            WikiPageSpec(title="Leaf", purpose=".", parent="Mid", primary_files=["l.py"]),
         ]
     )
     levels = compute_generation_order(plan)
@@ -416,8 +416,8 @@ def test_compute_generation_order_handles_cycle():
     """Cyclic parent references should not cause infinite recursion."""
     plan = WikiPlan(
         pages=[
-            WikiPageSpec(title="A", purpose=".", parent="B", files=["a.py"]),
-            WikiPageSpec(title="B", purpose=".", parent="A", files=["b.py"]),
+            WikiPageSpec(title="A", purpose=".", parent="B", primary_files=["a.py"]),
+            WikiPageSpec(title="B", purpose=".", parent="A", primary_files=["b.py"]),
         ]
     )
     levels = compute_generation_order(plan)

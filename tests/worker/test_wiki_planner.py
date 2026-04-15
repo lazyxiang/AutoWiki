@@ -91,8 +91,8 @@ def test_validate_wiki_plan_orphan_files():
     all_files = ["main.py", "orphan.py", "also_orphan.py"]
     plan = validate_wiki_plan(raw, all_files=all_files)
     overview = plan.pages[0]
-    assert "orphan.py" in overview.files
-    assert "also_orphan.py" in overview.files
+    assert "orphan.py" in overview.primary_files
+    assert "also_orphan.py" in overview.primary_files
 
 
 def test_wiki_page_spec_slug_unicode():
@@ -146,7 +146,7 @@ def test_wiki_plan_to_internal_json():
             WikiPageSpec(
                 title="Overview",
                 purpose="Top-level page.",
-                files=["main.py", "README.md"],
+                primary_files=["main.py", "README.md"],
             ),
             WikiPageSpec(
                 title="Engine",
@@ -175,10 +175,10 @@ def test_wiki_plan_to_internal_json():
 def test_validate_wiki_plan_duplicate_slugs_rejected():
     raw = {
         "pages": [
-            {"title": "Overview", "purpose": "Top.", "files": ["a.py"]},
+            {"title": "Overview", "purpose": "Top.", "primary_files": ["a.py"]},
             # "Over view" slugifies to "over-view" — different from "overview"
             # but "Overview" and "overview" both slug to "overview"
-            {"title": "Overview", "purpose": "Duplicate.", "files": ["b.py"]},
+            {"title": "Overview", "purpose": "Duplicate.", "primary_files": ["b.py"]},
         ]
     }
     with pytest.raises(ValueError, match="Duplicate page slugs"):
@@ -193,7 +193,7 @@ def test_validate_wiki_plan_existing_titles_keeps_cross_slice_parent():
                 "title": "Engine",
                 "purpose": "Core engine.",
                 "parent": "Overview",  # Overview is NOT in this partial batch
-                "files": ["engine.py"],
+                "primary_files": ["engine.py"],
             }
         ]
     }
@@ -375,7 +375,7 @@ def test_validate_rejects_page_over_25_files():
             {
                 "title": "Mega Page",
                 "purpose": "Too many files.",
-                "files": [f"f{i}.py" for i in range(30)],
+                "primary_files": [f"f{i}.py" for i in range(30)],
             },
         ]
     }
@@ -386,8 +386,8 @@ def test_validate_rejects_page_over_25_files():
 def test_validate_rejects_empty_non_overview_page():
     raw = {
         "pages": [
-            {"title": "Overview", "purpose": "Top.", "files": ["main.py"]},
-            {"title": "Empty Page", "purpose": "Nothing here.", "files": []},
+            {"title": "Overview", "purpose": "Top.", "primary_files": ["main.py"]},
+            {"title": "Empty Page", "purpose": "Nothing here.", "primary_files": []},
         ]
     }
     with pytest.raises(ValueError, match="no primary files assigned"):
@@ -398,8 +398,8 @@ def test_validate_allows_empty_overview_page():
     """Overview page with 0 files is allowed (orphans get assigned to it)."""
     raw = {
         "pages": [
-            {"title": "Overview", "purpose": "Top.", "files": []},
-            {"title": "API", "purpose": "Endpoints.", "files": ["api.py"]},
+            {"title": "Overview", "purpose": "Top.", "primary_files": []},
+            {"title": "API", "purpose": "Endpoints.", "primary_files": ["api.py"]},
         ]
     }
     plan = validate_wiki_plan(raw)
@@ -409,11 +409,11 @@ def test_validate_allows_empty_overview_page():
 def test_validate_rejects_too_deep_hierarchy():
     raw = {
         "pages": [
-            {"title": "L0", "purpose": ".", "files": ["a.py"]},
-            {"title": "L1", "purpose": ".", "parent": "L0", "files": ["b.py"]},
-            {"title": "L2", "purpose": ".", "parent": "L1", "files": ["c.py"]},
-            {"title": "L3", "purpose": ".", "parent": "L2", "files": ["d.py"]},
-            {"title": "L4", "purpose": ".", "parent": "L3", "files": ["e.py"]},
+            {"title": "L0", "purpose": ".", "primary_files": ["a.py"]},
+            {"title": "L1", "purpose": ".", "parent": "L0", "primary_files": ["b.py"]},
+            {"title": "L2", "purpose": ".", "parent": "L1", "primary_files": ["c.py"]},
+            {"title": "L3", "purpose": ".", "parent": "L2", "primary_files": ["d.py"]},
+            {"title": "L4", "purpose": ".", "parent": "L3", "primary_files": ["e.py"]},
         ]
     }
     with pytest.raises(ValueError, match="flatten to at most 4 levels"):
@@ -424,10 +424,10 @@ def test_validate_allows_4_level_hierarchy():
     """Hierarchy at exactly 4 levels deep should pass."""
     raw = {
         "pages": [
-            {"title": "L0", "purpose": ".", "files": ["a.py"]},
-            {"title": "L1", "purpose": ".", "parent": "L0", "files": ["b.py"]},
-            {"title": "L2", "purpose": ".", "parent": "L1", "files": ["c.py"]},
-            {"title": "L3", "purpose": ".", "parent": "L2", "files": ["d.py"]},
+            {"title": "L0", "purpose": ".", "primary_files": ["a.py"]},
+            {"title": "L1", "purpose": ".", "parent": "L0", "primary_files": ["b.py"]},
+            {"title": "L2", "purpose": ".", "parent": "L1", "primary_files": ["c.py"]},
+            {"title": "L3", "purpose": ".", "parent": "L2", "primary_files": ["d.py"]},
         ]
     }
     plan = validate_wiki_plan(raw)
@@ -439,8 +439,8 @@ def test_validate_rejects_flat_plan_for_large_repo():
     page2_files = [f"g{i}.py" for i in range(15)]
     raw = {
         "pages": [
-            {"title": "Page1", "purpose": ".", "files": page1_files},
-            {"title": "Page2", "purpose": ".", "files": page2_files},
+            {"title": "Page1", "purpose": ".", "primary_files": page1_files},
+            {"title": "Page2", "purpose": ".", "primary_files": page2_files},
         ]
     }
     all_files = [f"f{i}.py" for i in range(20)] + [f"g{i}.py" for i in range(15)]
@@ -452,7 +452,7 @@ def test_validate_rejects_too_few_pages():
     many_files = [f"f{i}.py" for i in range(25)]
     raw = {
         "pages": [
-            {"title": "Overview", "purpose": ".", "files": many_files},
+            {"title": "Overview", "purpose": ".", "primary_files": many_files},
         ]
     }
     with pytest.raises(ValueError, match="create more granular pages"):
