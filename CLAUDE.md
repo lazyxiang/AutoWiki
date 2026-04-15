@@ -107,17 +107,22 @@ WS    /ws/jobs/{job_id}                      # Stream job progress
 WS    /ws/repos/{repo_id}/chat/{session_id}  # Stream chat responses
 ```
 
-### CLI (Phase 1)
+### CLI (Phase 1 + Phase 3)
 ```
 autowiki index github.com/owner/repo [--reuse-index]
 autowiki list
 autowiki serve [--port 3000]
+autowiki research github.com/owner/repo "<question>"
 autowiki config show
 autowiki config set <key> <value>
 ```
 
-### MCP Tools (Phase 3, not yet implemented)
-`read_wiki_structure`, `read_wiki_page`, `search_wiki`, `ask_question`, `deep_research`
+### Research API (Phase 3)
+```
+POST  /api/repos/{repo_id}/research                   # Start deep research → {job_id, report_id}
+GET   /api/repos/{repo_id}/research/{job_id}          # Get report (plan, findings, Markdown)
+WS    /ws/repos/{repo_id}/research/{job_id}           # Stream research events
+```
 
 ## Model Selection
 
@@ -165,6 +170,6 @@ Non-Docker: `autowiki serve` spawns API + worker + Next.js as subprocesses.
 - **Phase 1** ✅ — Core pipeline (index + static wiki + REST API + web UI + CLI)
 - **Phase 2** ✅ — Incremental refresh + Q&A chat + dependency diagrams (merged PR #4)
 - **Phase 2.5** ✅ — Wiki quality enhancements: two-phase planner with per-phase validation, bottom-up child-synthesis generation, 4-pass page orchestrator, prompt caching, fast model, RAG doc_k tuning, diagram post-processing (PRs #15 and #17)
-- **Phase 3** — Deep Research mode + MCP server
-- **Phase 4** — GitHub webhooks + user steering (`.autowiki/wiki.json`)
-- **Phase 5** — GitLab/Bitbucket + hybrid search
+- **Phase 3** ✅ — Deep Research mode: multi-step RAG investigation, LLM planner, per-step AST context, synthesized report; `autowiki research` CLI; REST + WebSocket API (PR #20)
+- **Phase 4** ✅ — User-steered wiki structure via `.autowiki/wiki.json`: override page hierarchy, assign modules to pages, inject repo/page notes into generation (PR #20)
+- **Phase 5** — GitLab/Bitbucket + hybrid search + MCP server

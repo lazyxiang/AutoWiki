@@ -174,6 +174,9 @@ autowiki list
 # Start the full stack (API + worker + web UI)
 autowiki serve [--port 3000] [--api-port 3001]
 
+# Run a deep research query against an indexed repo
+autowiki research github.com/owner/repo "How does the authentication system work?"
+
 # Show or update config
 autowiki config show
 autowiki config set <key> <value>  # Dot-separated key, e.g. llm.provider, embedding.model
@@ -193,9 +196,12 @@ GET   /api/repos/{repo_id}/wiki                       List wiki pages (ordered)
 GET   /api/repos/{repo_id}/wiki/{slug}                Get a wiki page (Markdown + metadata)
 POST  /api/repos/{repo_id}/chat                       Create a new chat session → {session_id}
 GET   /api/repos/{repo_id}/chat/{session_id}          Get chat history
+POST  /api/repos/{repo_id}/research                   Start a deep research query → {job_id, report_id, status}
+GET   /api/repos/{repo_id}/research/{job_id}          Get research report (plan, findings, Markdown)
 GET   /api/jobs/{job_id}                              Job status and progress (0–100)
 WS    /ws/jobs/{job_id}                               Stream {progress, status} until done/failed
 WS    /ws/repos/{repo_id}/chat/{session_id}           Stream chat responses in real time
+WS    /ws/repos/{repo_id}/research/{job_id}           Stream research events (plan/step/finding/report)
 ```
 
 Example:
@@ -352,9 +358,9 @@ WS /ws/jobs/{job_id}                 → streams {progress, status} every second
 - **Phase 1** ✅ — Core pipeline (index + static wiki + REST API + web UI + CLI)
 - **Phase 2** ✅ — Incremental refresh, Q&A chat, dependency diagrams
 - **Phase 2.5** ✅ — Wiki quality enhancements: two-phase planner, 4-pass page generation, prompt caching, fast model support, RAG tuning, diagram post-processing
-- **Phase 3** — Deep Research mode, MCP server
-- **Phase 4** — GitHub webhooks, user-steered wiki structure (`.autowiki/wiki.json`)
-- **Phase 5** — GitLab/Bitbucket, hybrid search
+- **Phase 3** ✅ — Deep Research mode: multi-step RAG investigation with LLM planner, per-step AST context, synthesized Markdown report; REST + WebSocket API; `autowiki research` CLI command (PR #20)
+- **Phase 4** ✅ — User-steered wiki structure via `.autowiki/wiki.json`: override page hierarchy, assign modules to pages, inject repo/page notes into generation (PR #20)
+- **Phase 5** — GitLab/Bitbucket, hybrid search, MCP server
 
 ---
 
