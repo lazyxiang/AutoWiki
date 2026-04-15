@@ -90,3 +90,23 @@ class ChatMessage(Base):
     session: Mapped[ChatSession] = relationship(
         "ChatSession", back_populates="messages"
     )
+
+
+class ResearchReport(Base):
+    __tablename__ = "research_reports"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    repo_id: Mapped[str] = mapped_column(ForeignKey("repositories.id"), nullable=False)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), nullable=False)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    plan_json: Mapped[str | None] = mapped_column(Text, nullable=True, default="[]")
+    findings_json: Mapped[str | None] = mapped_column(Text, nullable=True, default="[]")
+    report_markdown: Mapped[str | None] = mapped_column(Text, nullable=True, default="")
+    # status: queued|running|done|failed
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(UTC)
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    repository: Mapped[Repository] = relationship("Repository")
+    job: Mapped[Job] = relationship("Job")
