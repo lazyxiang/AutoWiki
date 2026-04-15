@@ -49,6 +49,7 @@ from worker.pipeline.page_generator import (
     generate_page_batch,
 )
 from worker.pipeline.rag_indexer import FAISSStore, build_rag_index
+from worker.pipeline.user_steering import load_user_steering
 from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan, generate_wiki_plan
 
 if TYPE_CHECKING:
@@ -420,6 +421,13 @@ async def run_full_index(
         logger.info(
             "README extracted: %d chars", len(readme)
         ) if readme else logger.info("No README found")
+        user_steering = await loop.run_in_executor(None, load_user_steering, clone_root)
+        if user_steering is not None:
+            logger.info(
+                "Loaded .autowiki/wiki.json: %d repo_notes, %d user pages",
+                len(user_steering.repo_notes),
+                len(user_steering.pages),
+            )
         await _update_job(
             db_path,
             job_id,
@@ -514,6 +522,7 @@ async def run_full_index(
             on_retry=_on_retry,
             wiki_language=wiki_language,
             fast_llm=fast_llm,
+            user_steering=user_steering,
         )
         logger.info(
             "Wiki plan generated: %d pages planned for %s", len(plan.pages), name
