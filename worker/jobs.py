@@ -239,6 +239,13 @@ def _collect_page_deps(page_spec: WikiPageSpec, dep_graph: DependencyGraph) -> d
     return summarize_page_deps(page_spec.files or [], dep_graph)
 
 
+def asdict_s(obj) -> dict:
+    """dataclasses.asdict proxy for the Deep Research ARQ job."""
+    from dataclasses import asdict as _asdict
+
+    return _asdict(obj)
+
+
 def _make_faiss_store(repo_data_dir: Path, embedding) -> FAISSStore:
     """Instantiate a FAISSStore pointed at the repository's index files.
 
@@ -260,6 +267,13 @@ def _make_faiss_store(repo_data_dir: Path, embedding) -> FAISSStore:
         index_path=repo_data_dir / "faiss.index",
         meta_path=repo_data_dir / "faiss.meta.pkl",
     )
+
+
+async def _load_faiss_for_research(repo_data_dir: Path, embedding) -> FAISSStore:
+    """Load the FAISS store for a repo, running the blocking IO in an executor."""
+    store = _make_faiss_store(repo_data_dir, embedding)
+    await asyncio.get_running_loop().run_in_executor(None, store.load)
+    return store
 
 
 # ---------------------------------------------------------------------------
@@ -1157,4 +1171,118 @@ async def run_refresh_index(
             status_description=f"Error: {str(e)}",
         )
         await _update_repo(db_path, repo_id, status="error")
+        raise
+
+
+async def run_deep_research(
+    ctx: dict,
+    repo_id: str,
+    job_id: str,
+    report_id: str,
+    question: str,
+) -> None:
+    """ARQ job: run the Deep Research flow and persist the result."""
+    import json as _json
+
+    from shared.models import ResearchReport
+    from worker.deep_research import run_deep_research_flow
+
+    cfg = get_config()
+    db_path = str(cfg.database_path)
+    data_dir = cfg.data_dir
+    await init_db(db_path)
+
+    async def _update_report(**kwargs):
+        async with get_session(db_path) as s:
+            report = await s.get(ResearchReport, report_id)
+            if report is None:
+                raise RuntimeError(f"ResearchReport {report_id!r} not found")
+            for k, v in kwargs.items():
+                setattr(report, k, v)
+            await s.commit()
+
+    try:
+        await _update_job(db_path, job_id, status="running", progress=5)
+        await _update_report(status="running")
+
+        repo_data_dir = data_dir / "repos" / repo_id
+        clone_root = repo_data_dir / "clone"
+
+        loop = asyncio.get_running_loop()
+        readme = await loop.run_in_executor(None, extract_readme, clone_root)
+
+        embedding = make_embedding_provider(cfg)
+        llm = make_llm_provider(cfg)
+        store = await _load_faiss_for_research(repo_data_dir, embedding)
+
+        async with get_session(db_path) as s:
+            repo = await s.get(Repository, repo_id)
+            repo_name = repo.name if repo is not None else repo_id
+
+        async def _on_event(event: dict) -> None:
+            if event["type"] == "plan":
+                await _update_report(plan_json=_json.dumps(event["plan"]))
+                await _update_job(db_path, job_id, progress=20)
+            elif event["type"] == "step_start":
+                await _update_job(
+                    db_path,
+                    job_id,
+                    status_description=(
+                        f"Investigating step {event['step_index'] + 1}"
+                    ),
+                )
+            elif event["type"] == "step_finding":
+                async with get_session(db_path) as s:
+                    rep = await s.get(ResearchReport, report_id)
+                    findings = _json.loads(rep.findings_json or "[]")
+                    findings.append(
+                        {
+                            "step_index": event["step_index"],
+                            "answer": event["answer"],
+                            "sources": event["sources"],
+                        }
+                    )
+                    rep.findings_json = _json.dumps(findings)
+                    await s.commit()
+            elif event["type"] == "report":
+                await _update_report(report_markdown=event["content"])
+
+        result = await run_deep_research_flow(
+            question=question,
+            repo_name=repo_name,
+            readme=readme,
+            store=store,
+            llm=llm,
+            embedding=embedding,
+            on_event=_on_event,
+        )
+
+        now = datetime.now(UTC)
+        await _update_report(
+            status="done",
+            finished_at=now,
+            plan_json=_json.dumps([asdict_s(s) for s in result.plan]),
+            findings_json=_json.dumps([asdict_s(f) for f in result.findings]),
+            report_markdown=result.report,
+        )
+        await _update_job(
+            db_path,
+            job_id,
+            status="done",
+            progress=100,
+            finished_at=now,
+            status_description="Research complete",
+        )
+    except Exception as e:
+        logger.exception("Deep research job failed: %s", e)
+        now = datetime.now(UTC)
+        await _update_report(status="failed", error=str(e), finished_at=now)
+        await _update_job(
+            db_path,
+            job_id,
+            status="failed",
+            error=str(e),
+            finished_at=now,
+            status_description=f"Error: {e}",
+        )
         raise
