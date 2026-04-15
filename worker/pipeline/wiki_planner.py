@@ -26,7 +26,7 @@ import hashlib
 import json
 import logging
 import re
-from dataclasses import InitVar, dataclass, field
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from worker.llm.base import LLMProvider
@@ -65,7 +65,7 @@ def _suggest_page_range(file_count: int, entity_count: int) -> tuple[int, int]:
     return (30, 70)
 
 
-@dataclass
+@dataclass(init=False)
 class WikiPageSpec:
     """Specification for a single wiki page within the plan.
 
@@ -98,10 +98,24 @@ class WikiPageSpec:
     page_notes: list[dict] = field(default_factory=lambda: [{"content": ""}])
     primary_files: list[str] = field(default_factory=list)  # rel_paths assigned by LLM
     reference_files: list[str] = field(default_factory=list)
-    files: InitVar[list[str] | None] = None
 
-    def __post_init__(self, files: list[str] | None):
-        """Backward compatibility: handle 'files' passed in constructor."""
+    def __init__(
+        self,
+        title: str,
+        purpose: str,
+        parent: str | None = None,
+        page_notes: list[dict] | None = None,
+        primary_files: list[str] | None = None,
+        reference_files: list[str] | None = None,
+        files: list[str] | None = None,
+    ):
+        """Initialise with support for 'files' as a backward-compatibility alias."""
+        self.title = title
+        self.purpose = purpose
+        self.parent = parent
+        self.page_notes = page_notes if page_notes is not None else [{"content": ""}]
+        self.primary_files = primary_files if primary_files is not None else []
+        self.reference_files = reference_files if reference_files is not None else []
         if files is not None:
             self.primary_files = files
 
@@ -396,6 +410,14 @@ def _build_outline_prompt(
         "- Optionally set parent (title of parent page) for hierarchy\n"
         "- Group by semantic purpose, not directory structure\n"
         "- Create 2-3 levels of hierarchy for larger repos\n"
+        "- Functional Cohesion: Group files that work together to achieve a single "
+        "goal, even if they are in different directories.\n"
+        "- Sequential Flow Identification: Recognize sequential modules like "
+        "Pipelines, Workflows, or multi-stage processes. Group these related "
+        "stages under a common parent page.\n"
+        "- Hub-and-Leaf Architecture: Treat parent pages as 'Architectural Hubs' "
+        "that explain the high-level orchestration and child pages as "
+        "'Implementation Details' for specific components or stages.\n"
         "- Page titles should describe concepts/components, not directory names\n"
         "- Do NOT assign files to pages — just define the page structure\n\n"
         "Output JSON matching this schema:\n"
