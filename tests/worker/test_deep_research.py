@@ -87,3 +87,44 @@ async def test_plan_research_returns_investigation_steps(mock_llm):
     assert all(isinstance(s, ResearchStep) for s in steps)
     assert steps[0].query == "Where does the pipeline start?"
     assert steps[0].rationale == "Locate the entry point."
+
+
+async def test_investigate_step_returns_finding_with_sources(mock_llm, mock_embedding):
+    """Each investigation step embeds its query, searches FAISS, and calls the LLM."""
+    from unittest.mock import MagicMock
+
+    from worker.deep_research import ResearchStep, investigate_step
+
+    store = MagicMock()
+    store.search.return_value = [
+        {
+            "file": "worker/jobs.py",
+            "text": "def run_full_index(...): ...",
+            "start_line": 120,
+        },
+        {
+            "file": "worker/pipeline/ingestion.py",
+            "text": "def filter_files(...): ...",
+            "start_line": 42,
+        },
+    ]
+
+    async def _generate(prompt, system=""):
+        return "The pipeline is defined in `worker/jobs.py`."
+
+    mock_llm.generate = _generate
+
+    step = ResearchStep(query="Where is the pipeline?", rationale="Entry point.")
+    finding = await investigate_step(
+        step=step,
+        step_index=0,
+        store=store,
+        llm=mock_llm,
+        embedding=mock_embedding,
+    )
+
+    assert finding.step_index == 0
+    assert finding.query == "Where is the pipeline?"
+    assert "worker/jobs.py" in finding.answer
+    assert len(finding.sources) == 2
+    assert finding.sources[0]["file"] == "worker/jobs.py"

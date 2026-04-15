@@ -24,7 +24,9 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from worker.embedding.base import EmbeddingProvider
 from worker.llm.base import LLMProvider
+from worker.pipeline.rag_indexer import FAISSStore
 
 # Event payload emitted to WebSocket / CLI consumers.
 ResearchEvent = dict[str, Any]
@@ -97,3 +99,50 @@ async def plan_research(
     result = await llm.generate_structured(prompt, _PLANNER_SCHEMA, system=system)
     raw_steps = result.get("plan", [])[:MAX_STEPS]
     return [ResearchStep(query=s["query"], rationale=s["rationale"]) for s in raw_steps]
+
+
+_INVESTIGATOR_SYSTEM = (
+    "You are investigating one question about a software repository. "
+    "Answer precisely using ONLY the provided source code context. Cite the "
+    "file names you relied on. If the context is insufficient, say so."
+)
+
+
+async def investigate_step(
+    step: ResearchStep,
+    step_index: int,
+    store: FAISSStore,
+    llm: LLMProvider,
+    embedding: EmbeddingProvider,
+    top_k: int = 8,
+) -> ResearchFinding:
+    """Run RAG retrieval + LLM answer for a single investigation step."""
+    query_vec = await embedding.embed(step.query)
+    chunks = store.search(query_vec, k=top_k)
+
+    context = "\n\n---\n\n".join(
+        f"File: {c.get('file', 'unknown')} (lines {c.get('start_line', '?')}+)\n"
+        f"{c.get('text', '')}"
+        for c in chunks
+    )
+
+    prompt = (
+        f"Investigation step: {step.query}\n"
+        f"Rationale: {step.rationale}\n\n"
+        f"Source code context:\n{context}\n\n"
+        "Answer the investigation step using the context above. Cite file names."
+    )
+    answer = await llm.generate(prompt, system=_INVESTIGATOR_SYSTEM)
+    return ResearchFinding(
+        step_index=step_index,
+        query=step.query,
+        answer=answer,
+        sources=[
+            {
+                "file": c.get("file", "unknown"),
+                "start_line": c.get("start_line"),
+                "end_line": c.get("end_line"),
+            }
+            for c in chunks
+        ],
+    )
