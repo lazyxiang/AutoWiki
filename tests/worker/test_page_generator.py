@@ -279,21 +279,40 @@ async def test_generate_page_batch_returns_all_results(page_store, mock_embeddin
 
 def test_append_source_files_table_adds_table():
     content = "# My Page\n\n## Overview\n\nSome content."
-    result = _append_source_files_table(content, ["src/foo.py", "src/bar.py"])
+    spec = WikiPageSpec(title="My Page", purpose="P", primary_files=["src/foo.py", "src/bar.py"])
+    result = _append_source_files_table(content, spec)
     assert "## Source Files" in result
+    assert "### Primary Files" in result
     assert "| `src/foo.py` |" in result
     assert "| `src/bar.py` |" in result
     assert result.index("## Source Files") > result.index("## Overview")
 
 
+def test_append_source_files_table_distinguishes_primary_and_reference():
+    content = "# My Page\n\nSome content."
+    spec = WikiPageSpec(
+        title="My Page",
+        purpose="Testing.",
+        primary_files=["src/primary.py"],
+        reference_files=["src/reference.py"]
+    )
+    result = _append_source_files_table(content, spec)
+    assert "### Primary Files" in result
+    assert "| `src/primary.py` |" in result
+    assert "### Reference Files" in result
+    assert "| `src/reference.py` |" in result
+
+
 def test_append_source_files_table_empty_files_unchanged():
     content = "# My Page\n\nContent."
-    assert _append_source_files_table(content, []) == content
+    spec = WikiPageSpec(title="T", purpose="P", primary_files=[])
+    assert _append_source_files_table(content, spec) == content
 
 
 def test_append_source_files_table_at_end():
     content = "# My Page\n\nContent."
-    result = _append_source_files_table(content, ["a.py"])
+    spec = WikiPageSpec(title="T", purpose="P", primary_files=["a.py"])
+    result = _append_source_files_table(content, spec)
     assert result.endswith("| `a.py` |")
 
 

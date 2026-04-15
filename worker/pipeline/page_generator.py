@@ -45,17 +45,25 @@ logger = logging.getLogger("worker.page_generator")
 _HEADING_RE = re.compile(r"^#{1,6}\s", re.MULTILINE)
 
 
-def _append_source_files_table(content: str, files: list[str]) -> str:
+def _append_source_files_table(content: str, spec: WikiPageSpec) -> str:
     """Append a Source Files table at the end of the page.
 
-    Skipped when *files* is empty. The table lists every source file assigned
-    to the page spec so readers can navigate directly to the implementation.
+    The table lists every source file assigned to the page spec, distinguishing
+    between implementation (Primary) and context (Reference) files.
     """
-    if not files:
+    if not spec.primary_files and not spec.reference_files:
         return content
 
-    rows = "\n".join(f"| `{f}` |" for f in files)
-    table = f"\n\n## Source Files\n\n| File |\n|------|\n{rows}"
+    sections = []
+    if spec.primary_files:
+        rows = "\n".join(f"| `{f}` |" for f in spec.primary_files)
+        sections.append(f"### Primary Files\n\n| File |\n|------|\n{rows}")
+
+    if spec.reference_files:
+        rows = "\n".join(f"| `{f}` |" for f in spec.reference_files)
+        sections.append(f"### Reference Files\n\n| File |\n|------|\n{rows}")
+
+    table = "\n\n## Source Files\n\n" + "\n\n".join(sections)
     return content.rstrip() + table
 
 
@@ -172,7 +180,8 @@ async def generate_page(
     from worker.utils.mermaid import sanitize_mermaid_blocks
 
     # ── RAG retrieval ──
-    queries = [f"{spec.title} {' '.join((spec.files or [])[:5])}"]
+    all_files = spec.primary_files + spec.reference_files
+    queries = [f"{spec.title} {' '.join(all_files[:10])}"]
     if spec.purpose:
         queries.append(spec.purpose)
     if entity_details:
@@ -289,7 +298,7 @@ async def generate_page(
     draft = _strip_preamble_and_ensure_header(draft, spec.title)
     draft = ensure_diagram_headers(draft, default_source_files=spec.files)
     draft = sanitize_mermaid_blocks(draft)
-    draft = _append_source_files_table(draft, spec.files or [])
+    draft = _append_source_files_table(draft, spec)
 
     return PageResult(slug=spec.slug, title=spec.title, content=draft)
 
