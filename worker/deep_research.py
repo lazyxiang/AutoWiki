@@ -146,3 +146,38 @@ async def investigate_step(
             for c in chunks
         ],
     )
+
+
+_SYNTHESIZER_SYSTEM = (
+    "You are compiling a deep-research report for a software engineer. "
+    "Using the original question, the investigation plan, and the per-step "
+    "findings, write a well-structured Markdown report. Include: a short "
+    "executive summary, the conclusions for each step, a combined answer "
+    "section, and an explicit 'Sources' section that lists every file "
+    "referenced. Use Markdown headings, bullet points, and code fences as "
+    "appropriate."
+)
+
+
+async def synthesize_report(
+    question: str,
+    plan: list[ResearchStep],
+    findings: list[ResearchFinding],
+    llm: LLMProvider,
+) -> str:
+    """Generate the final Markdown report for a Deep Research job."""
+    plan_md = "\n".join(
+        f"{i + 1}. **{s.query}** — {s.rationale}" for i, s in enumerate(plan)
+    )
+    findings_md = "\n\n".join(
+        f"### Step {f.step_index + 1}: {f.query}\n\n{f.answer}\n\n"
+        f"Sources: {', '.join(s.get('file', '?') for s in f.sources)}"
+        for f in findings
+    )
+    prompt = (
+        f"Research question:\n{question}\n\n"
+        f"Investigation plan:\n{plan_md}\n\n"
+        f"Findings:\n{findings_md}\n\n"
+        "Produce the final report in Markdown."
+    )
+    return await llm.generate(prompt, system=_SYNTHESIZER_SYSTEM)

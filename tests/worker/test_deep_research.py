@@ -128,3 +128,37 @@ async def test_investigate_step_returns_finding_with_sources(mock_llm, mock_embe
     assert "worker/jobs.py" in finding.answer
     assert len(finding.sources) == 2
     assert finding.sources[0]["file"] == "worker/jobs.py"
+
+
+async def test_synthesize_report_joins_findings(mock_llm):
+    """Synthesizer builds a single Markdown report from plan + findings."""
+    from worker.deep_research import (
+        ResearchFinding,
+        ResearchStep,
+        synthesize_report,
+    )
+
+    async def _generate(prompt, system=""):
+        assert "Where is the pipeline?" in prompt
+        assert "defined in `worker/jobs.py`" in prompt
+        return "# Final Report\n\nThe pipeline lives in `worker/jobs.py`."
+
+    mock_llm.generate = _generate
+
+    plan = [ResearchStep(query="Where is the pipeline?", rationale="Entry point.")]
+    findings = [
+        ResearchFinding(
+            step_index=0,
+            query="Where is the pipeline?",
+            answer="The pipeline is defined in `worker/jobs.py`.",
+            sources=[{"file": "worker/jobs.py"}],
+        )
+    ]
+    report = await synthesize_report(
+        question="How does the pipeline work?",
+        plan=plan,
+        findings=findings,
+        llm=mock_llm,
+    )
+    assert report.startswith("# Final Report")
+    assert "worker/jobs.py" in report
