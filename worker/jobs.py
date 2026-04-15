@@ -568,6 +568,7 @@ async def run_full_index(
                 dep_graph=dep_graph,
                 on_retry=_on_retry,
                 wiki_language=wiki_language,
+                repo_notes=plan.repo_notes or None,
             )
 
             for result, (page_spec, _) in zip(results, specs_with_children):
@@ -872,6 +873,13 @@ async def run_refresh_index(
         readme = await loop.run_in_executor(None, extract_readme, clone_root)
         if readme:
             logger.info("README extracted: %d chars", len(readme))
+        user_steering = await loop.run_in_executor(None, load_user_steering, clone_root)
+        if user_steering is not None:
+            logger.info(
+                "User steering loaded: %d repo_notes, %d page overrides",
+                len(user_steering.repo_notes),
+                len(user_steering.pages),
+            )
         file_analysis = await loop.run_in_executor(
             None, analyze_all_files, clone_root, files
         )
@@ -1005,6 +1013,7 @@ async def run_refresh_index(
             existing_titles=unaffected_titles,
             wiki_language=wiki_language,
             fast_llm=fast_llm,
+            user_steering=user_steering,
         )
         logger.info(
             "Wiki plan generated: %d pages updated for %s", len(plan.pages), name
@@ -1088,6 +1097,7 @@ async def run_refresh_index(
                 dep_graph=dep_graph,
                 on_retry=_on_retry,
                 wiki_language=wiki_language,
+                repo_notes=plan.repo_notes or None,
             )
 
             for result, (page_spec, _) in zip(results, specs_with_children):
