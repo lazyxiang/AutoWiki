@@ -162,3 +162,54 @@ async def test_synthesize_report_joins_findings(mock_llm):
     )
     assert report.startswith("# Final Report")
     assert "worker/jobs.py" in report
+
+
+async def test_run_deep_research_flow_emits_events(mock_llm, mock_embedding):
+    """The orchestrator emits plan/step_start/step_finding/report events in order."""
+    from unittest.mock import MagicMock
+
+    from worker.deep_research import run_deep_research_flow
+
+    async def _structured(prompt, schema, system=""):
+        return {
+            "plan": [
+                {"query": "Q1", "rationale": "R1"},
+                {"query": "Q2", "rationale": "R2"},
+            ]
+        }
+
+    mock_llm.generate_structured.side_effect = _structured
+
+    async def _generate(prompt, system=""):
+        if "Research question" in prompt:
+            return "# Report\n"
+        return "Answer."
+
+    mock_llm.generate = _generate
+
+    store = MagicMock()
+    store.search.return_value = [{"file": "x.py", "text": "pass", "start_line": 1}]
+
+    events: list[dict] = []
+
+    async def _on_event(ev):
+        events.append(ev)
+
+    result = await run_deep_research_flow(
+        question="Q?",
+        repo_name="autowiki",
+        readme=None,
+        store=store,
+        llm=mock_llm,
+        embedding=mock_embedding,
+        on_event=_on_event,
+    )
+
+    types = [e["type"] for e in events]
+    assert types[0] == "plan"
+    assert "step_start" in types
+    assert "step_finding" in types
+    assert types[-1] == "report"
+    assert result.report.startswith("# Report")
+    assert len(result.plan) == 2
+    assert len(result.findings) == 2

@@ -21,7 +21,7 @@ in ``worker.jobs`` wires these together and streams events via the
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from worker.embedding.base import EmbeddingProvider
@@ -181,3 +181,70 @@ async def synthesize_report(
         "Produce the final report in Markdown."
     )
     return await llm.generate(prompt, system=_SYNTHESIZER_SYSTEM)
+
+
+@dataclass
+class ResearchResult:
+    """Aggregate result returned by the orchestrator."""
+
+    plan: list[ResearchStep]
+    findings: list[ResearchFinding]
+    report: str
+
+    def to_serialisable(self) -> dict:
+        return {
+            "plan": [asdict(s) for s in self.plan],
+            "findings": [asdict(f) for f in self.findings],
+            "report": self.report,
+        }
+
+
+async def run_deep_research_flow(
+    question: str,
+    repo_name: str,
+    readme: str | None,
+    store: FAISSStore,
+    llm: LLMProvider,
+    embedding: EmbeddingProvider,
+    on_event: OnEventCallback | None = None,
+) -> ResearchResult:
+    """Drive planner → investigator → synthesizer, emitting progress events."""
+
+    async def _emit(event: ResearchEvent) -> None:
+        if on_event is not None:
+            await on_event(event)
+
+    plan = await plan_research(question, repo_name, readme, llm)
+    await _emit({"type": "plan", "plan": [asdict(s) for s in plan]})
+
+    findings: list[ResearchFinding] = []
+    for idx, step in enumerate(plan):
+        await _emit(
+            {
+                "type": "step_start",
+                "step_index": idx,
+                "query": step.query,
+                "rationale": step.rationale,
+            }
+        )
+        finding = await investigate_step(
+            step=step,
+            step_index=idx,
+            store=store,
+            llm=llm,
+            embedding=embedding,
+        )
+        findings.append(finding)
+        await _emit(
+            {
+                "type": "step_finding",
+                "step_index": idx,
+                "answer": finding.answer,
+                "sources": finding.sources,
+            }
+        )
+
+    report = await synthesize_report(question, plan, findings, llm)
+    await _emit({"type": "report", "content": report})
+
+    return ResearchResult(plan=plan, findings=findings, report=report)
