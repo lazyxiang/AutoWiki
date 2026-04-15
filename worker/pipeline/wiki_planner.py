@@ -316,9 +316,10 @@ _ASSIGNMENT_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "file": {"type": "string"},
-                    "page_title": {"type": "string"},
+                    "primary_page": {"type": "string"},
+                    "reference_pages": {"type": "array", "items": {"type": "string"}},
                 },
-                "required": ["file", "page_title"],
+                "required": ["file", "primary_page"],
             },
         }
     },
@@ -447,10 +448,12 @@ def _build_assignment_prompt(
     schema_json = json.dumps(_ASSIGNMENT_SCHEMA, indent=2)
     sections.append(
         f"Assign ALL {total} source files to pages. Guidelines:\n"
-        "- Every file must be assigned to exactly one page\n"
-        "- Files that import each other should be on the same page when possible\n"
-        "- Assign files based on semantic purpose, not directory structure\n"
-        "- Each assignment must reference an existing page title exactly\n\n"
+        "- **Code Home Rule**: Every source file must have exactly one `primary_page`. This is where the code's documentation primarily lives.\n"
+        "- **Contextual Reuse Rule**: Files can be assigned to multiple `reference_pages`. Use this when a file provides important context for other pages (e.g., shared utilities, core data models).\n"
+        "- Hub pages should reference their children's primary files.\n"
+        "- Files that import each other should have the same `primary_page` when possible.\n"
+        "- Assign files based on semantic purpose, not directory structure.\n"
+        "- Each assignment must reference existing page titles exactly.\n\n"
         "Output JSON matching this schema:\n"
         f"{schema_json}"
     )
@@ -524,7 +527,7 @@ def _validate_outline_structure(
 
 
 def _validate_assignments(
-    result: dict[str, list[str]],
+    result: dict[str, dict[str, list[str]]],
     outline: list[dict],
 ) -> None:
     """Validate per-page file assignment counts.
@@ -533,23 +536,24 @@ def _validate_assignments(
     assignment-level errors are caught and retried in Phase 2.
 
     Checks:
-    - No page has more than 25 files (over-stuffed pages make poor wiki pages).
-    - No non-overview page has zero files (empty pages add noise).
+    - No page has more than 25 primary files (over-stuffed pages make poor wiki pages).
+    - No non-overview page has zero primary files (empty pages add noise).
 
     Raises:
         ValueError: Describing the first constraint that is violated.
     """
     for page in outline:
         title = page["title"]
-        files = result.get(title, [])
-        if len(files) > 25:
+        page_res = result.get(title, {"primary": [], "reference": []})
+        primary_files = page_res.get("primary", [])
+        if len(primary_files) > 25:
             raise ValueError(
-                f"Page '{title}' has {len(files)} files — "
+                f"Page '{title}' has {len(primary_files)} primary files — "
                 "split into focused sub-pages of ≤25 files each"
             )
-        if "overview" not in title.lower() and len(files) == 0:
+        if "overview" not in title.lower() and len(primary_files) == 0:
             raise ValueError(
-                f"Page '{title}' has no files assigned — "
+                f"Page '{title}' has no primary files assigned — "
                 "either assign files or remove it"
             )
 
@@ -622,7 +626,7 @@ async def _assign_files(
     max_retries: int = 3,
     _extra_context: str | None = None,
     fast_llm: LLMProvider | None = None,
-) -> dict[str, list[str]]:
+) -> dict[str, dict[str, list[str]]]:
     """Phase 2: Assign every file to a page and validate assignments.
 
     Combines LLM generation with immediate per-page constraint checking so
@@ -663,21 +667,31 @@ async def _assign_files(
                 on_retry=on_retry,
             )
             assignments = raw.get("assignments", [])
-            result: dict[str, list[str]] = {p["title"]: [] for p in outline}
-            assigned_files: set[str] = set()
+            result: dict[str, dict[str, list[str]]] = {
+                p["title"]: {"primary": [], "reference": []} for p in outline
+            }
+            assigned_primary_files: set[str] = set()
 
             for a in assignments:
                 f = a.get("file", "")
-                title = a.get("page_title", "")
-                if f in all_files and f not in assigned_files:
-                    target = title if title in valid_titles else first_title
-                    result[target].append(f)
-                    assigned_files.add(f)
+                primary_title = a.get("primary_page", "")
+                reference_titles = a.get("reference_pages", [])
 
-            # Assign any unassigned files to the first page
+                if f in all_files and f not in assigned_primary_files:
+                    target = primary_title if primary_title in valid_titles else first_title
+                    result[target]["primary"].append(f)
+                    assigned_primary_files.add(f)
+
+                    # Handle reference pages
+                    if isinstance(reference_titles, list):
+                        for r_title in reference_titles:
+                            if r_title in valid_titles and r_title != target:
+                                result[r_title]["reference"].append(f)
+
+            # Assign any unassigned files to the first page (primary)
             for f in all_files:
-                if f not in assigned_files:
-                    result[first_title].append(f)
+                if f not in assigned_primary_files:
+                    result[first_title]["primary"].append(f)
 
             _validate_assignments(result, outline)
             return result
@@ -687,10 +701,10 @@ async def _assign_files(
                 prompt += f"\n\nPrevious attempt failed: {e}. Please fix and retry."
 
     # Fallback: round-robin distribution (ignores validation constraints)
-    result = {p["title"]: [] for p in outline}
+    result = {p["title"]: {"primary": [], "reference": []} for p in outline}
     titles = [p["title"] for p in outline]
     for i, f in enumerate(sorted(all_files)):
-        result[titles[i % len(titles)]].append(f)
+        result[titles[i % len(titles)]]["primary"].append(f)
     return result
 
 
@@ -786,7 +800,9 @@ def validate_wiki_plan(
                 title=p["title"],
                 purpose=p["purpose"],
                 parent=parent,
-                files=p.get("files", []),
+                primary_files=p.get("primary_files", []),
+                reference_files=p.get("reference_files", []),
+                files=p.get("files"),
             )
         )
 
@@ -971,7 +987,8 @@ async def generate_wiki_plan(
                 "title": p["title"],
                 "purpose": p["purpose"],
                 "parent": p.get("parent"),
-                "files": file_assignments.get(p["title"], []),
+                "primary_files": file_assignments[p["title"]]["primary"],
+                "reference_files": file_assignments[p["title"]]["reference"],
             }
             for p in outline
         ]

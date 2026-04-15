@@ -313,15 +313,15 @@ async def test_generate_outline(mock_llm):
 
 
 async def test_assign_files(mock_llm):
-    """_assign_files returns a dict mapping page titles to file lists."""
+    """_assign_files returns a dict mapping page titles to primary/reference file lists."""
     from worker.pipeline.wiki_planner import _assign_files
 
     mock_llm.generate_structured.side_effect = None
     mock_llm.generate_structured.return_value = {
         "assignments": [
-            {"file": "main.py", "page_title": "Overview"},
-            {"file": "api.py", "page_title": "API"},
-            {"file": "worker.py", "page_title": "Worker"},
+            {"file": "main.py", "primary_page": "Overview", "reference_pages": ["API"]},
+            {"file": "api.py", "primary_page": "API"},
+            {"file": "worker.py", "primary_page": "Worker"},
         ]
     }
     outline = [
@@ -338,9 +338,10 @@ async def test_assign_files(mock_llm):
         system="Assign files.",
         on_retry=None,
     )
-    assert result["Overview"] == ["main.py"]
-    assert result["API"] == ["api.py"]
-    assert result["Worker"] == ["worker.py"]
+    assert result["Overview"]["primary"] == ["main.py"]
+    assert result["API"]["primary"] == ["api.py"]
+    assert "main.py" in result["API"]["reference"]
+    assert result["Worker"]["primary"] == ["worker.py"]
 
 
 async def test_assign_files_orphans_distributed(mock_llm):
@@ -350,8 +351,8 @@ async def test_assign_files_orphans_distributed(mock_llm):
     mock_llm.generate_structured.side_effect = None
     mock_llm.generate_structured.return_value = {
         "assignments": [
-            {"file": "main.py", "page_title": "Overview"},
-            {"file": "orphan.py", "page_title": "NonExistent"},
+            {"file": "main.py", "primary_page": "Overview"},
+            {"file": "orphan.py", "primary_page": "NonExistent"},
         ]
     }
     outline = [{"title": "Overview", "purpose": "Top."}]
@@ -365,7 +366,7 @@ async def test_assign_files_orphans_distributed(mock_llm):
         on_retry=None,
     )
     # orphan.py should be assigned to Overview (first page)
-    assert "orphan.py" in result["Overview"]
+    assert "orphan.py" in result["Overview"]["primary"]
 
 
 def test_validate_rejects_page_over_25_files():
@@ -473,9 +474,9 @@ async def test_generate_wiki_plan_two_phase(mock_llm):
         # Phase 2: file assignment
         {
             "assignments": [
-                {"file": "main.py", "page_title": "Overview"},
-                {"file": "models.py", "page_title": "Models"},
-                {"file": "utils.py", "page_title": "Utilities"},
+                {"file": "main.py", "primary_page": "Overview"},
+                {"file": "models.py", "primary_page": "Models"},
+                {"file": "utils.py", "primary_page": "Utilities"},
             ]
         },
     ]
@@ -491,6 +492,6 @@ async def test_generate_wiki_plan_two_phase(mock_llm):
     assert len(plan.pages) == 3
     assert {p.title for p in plan.pages} == {"Overview", "Models", "Utilities"}
     titles = [p.title for p in plan.pages]
-    assert plan.pages[titles.index("Overview")].files == ["main.py"]
-    assert plan.pages[titles.index("Models")].files == ["models.py"]
-    assert plan.pages[titles.index("Utilities")].files == ["utils.py"]
+    assert plan.pages[titles.index("Overview")].primary_files == ["main.py"]
+    assert plan.pages[titles.index("Models")].primary_files == ["models.py"]
+    assert plan.pages[titles.index("Utilities")].primary_files == ["utils.py"]
