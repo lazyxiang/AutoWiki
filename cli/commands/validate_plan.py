@@ -88,6 +88,22 @@ def validate_plan_cmd(
         )
     typer.echo("")
 
+    def _locality_score(page: WikiPageSpec) -> float:
+        if not page.files:
+            return 1.0
+        counts: dict[str, int] = {}
+        for f in page.files:
+            key = f.split("/", 1)[0] if "/" in f else "(root)"
+            counts[key] = counts.get(key, 0) + 1
+        top = max(counts.values())
+        return top / len(page.files)
+
+    typer.echo("Locality score (fraction of primary files in top directory):")
+    for p in plan.pages:
+        score = _locality_score(p)
+        typer.echo(f"  - {p.title}: {score:.2f}")
+    typer.echo("")
+
     try:
         validate_wiki_plan(
             {

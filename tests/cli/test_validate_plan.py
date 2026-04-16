@@ -82,3 +82,37 @@ def test_validate_plan_missing_repo_returns_error(tmp_path, monkeypatch):
     result = runner.invoke(app, ["validate-plan", "does-not-exist"])
     assert result.exit_code == 1
     assert "not found" in result.output.lower()
+
+
+def test_validate_plan_reports_locality_score(tmp_path, monkeypatch):
+    repo_dir = tmp_path / "repos" / "locality-repo"
+    _write_plan(
+        repo_dir,
+        {
+            "repo_notes": [],
+            "pages": [
+                {
+                    "title": "Worker Pipeline",
+                    "purpose": "p",
+                    "files": [
+                        "worker/pipeline/a.py",
+                        "worker/pipeline/b.py",
+                        "api/routes.py",  # cross-directory — hurts locality
+                    ],
+                    "secondary_files": [],
+                },
+                {
+                    "title": "Core",
+                    "purpose": "p",
+                    "files": ["core/a.py", "core/b.py"],
+                    "secondary_files": [],
+                },
+            ],
+        },
+    )
+    monkeypatch.setenv("AUTOWIKI_DATA_DIR", str(tmp_path))
+    result = runner.invoke(app, ["validate-plan", "locality-repo"])
+    assert result.exit_code == 0, result.output
+    assert "Locality score" in result.output
+    # Core page (100% same-dir) should be 1.0
+    assert "Core: 1.00" in result.output
