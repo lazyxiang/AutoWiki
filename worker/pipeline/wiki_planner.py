@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING
 
 from worker.llm.base import LLMProvider
 from worker.pipeline.language import get_planner_language_instruction
+from worker.pipeline.pipeline_logging import log_final_failure, log_validation_retry
 from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
 
 if TYPE_CHECKING:
@@ -570,10 +571,31 @@ async def _generate_outline(
             _validate_outline_structure(pages, page_range, total_file_count)
             return pages
         except (ValueError, json.JSONDecodeError, KeyError) as e:
+            log_validation_retry(
+                logger,
+                stage="wiki_planner.outline",
+                attempt=attempt + 1,
+                max_retries=max_retries,
+                exc=e,
+                context={
+                    "total_files": total_file_count,
+                    "page_range": f"{page_range[0]}-{page_range[1]}",
+                },
+            )
             if attempt < max_retries - 1:
                 prompt += f"\n\nPrevious attempt failed: {e}. Please fix and retry."
 
-    raise ValueError("Failed to generate outline after all retries")
+    exc = ValueError("Failed to generate outline after all retries")
+    log_final_failure(
+        logger,
+        stage="wiki_planner.outline",
+        exc=exc,
+        context={
+            "total_files": total_file_count,
+            "max_retries": max_retries,
+        },
+    )
+    raise exc
 
 
 async def _assign_files(

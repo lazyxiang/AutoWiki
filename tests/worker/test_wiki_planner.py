@@ -455,6 +455,55 @@ def test_validate_rejects_too_few_pages():
         validate_wiki_plan(raw, page_range=(5, 20))
 
 
+async def test_generate_outline_logs_each_validation_failure(caplog):
+    """Each retry of _generate_outline must log a WARNING with the error."""
+    import logging
+    from unittest.mock import AsyncMock
+
+    from worker.pipeline.wiki_planner import _generate_outline
+
+    # First two calls return an invalid outline (duplicate slug → validation fails),
+    # third call returns a valid outline.
+    bad = {
+        "pages": [
+            {"title": "Overview", "purpose": "a"},
+            {"title": "overview", "purpose": "b"},  # dup slug
+        ]
+    }
+    good = {
+        "pages": [
+            {"title": "Overview", "purpose": "Top"},
+            {"title": "Core", "purpose": "Core logic", "parent": "Overview"},
+            {"title": "Utils", "purpose": "Helpers", "parent": "Overview"},
+            {"title": "API", "purpose": "Routes", "parent": "Overview"},
+            {"title": "Tests", "purpose": "Tests", "parent": "Overview"},
+        ]
+    }
+    llm = AsyncMock()
+    llm.generate_structured.side_effect = [bad, bad, good]
+
+    with caplog.at_level(logging.WARNING, logger="worker.planner"):
+        pages = await _generate_outline(
+            file_summary="files",
+            repo_name="repo",
+            llm=llm,
+            readme=None,
+            dep_info=None,
+            clusters=None,
+            page_range=(5, 20),
+            system="sys",
+            on_retry=None,
+            max_retries=3,
+            total_file_count=50,
+        )
+
+    assert len(pages) == 5
+    retry_logs = [r for r in caplog.records if "wiki_planner.outline" in r.getMessage()]
+    assert len(retry_logs) == 2  # two failures logged, third succeeded
+    assert all("attempt" in r.getMessage() for r in retry_logs)
+    assert all("Duplicate page slugs" in r.getMessage() for r in retry_logs)
+
+
 async def test_generate_wiki_plan_two_phase(mock_llm):
     """generate_wiki_plan uses two-phase planning."""
     # Phase 1 returns outline, Phase 2 returns assignments
