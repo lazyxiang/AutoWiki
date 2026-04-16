@@ -840,7 +840,24 @@ async def run_refresh_index(
             ],
         )
 
-        affected_page_titles = get_affected_pages(changed_files, old_plan)
+        stale_path = ast_dir / "stale_secondary.json"
+        prior_stale: set[str] = set()
+        if stale_path.exists():
+            try:
+                prior_stale = set(json.loads(stale_path.read_text()))
+            except (OSError, json.JSONDecodeError):
+                prior_stale = set()
+            stale_path.unlink()
+
+        affected = get_affected_pages(changed_files, old_plan)
+        logger.info(
+            "Refresh affects %d primary pages and %d secondary pages (deferred)",
+            len(affected.primary),
+            len(affected.secondary),
+        )
+        await _write_text_async(stale_path, json.dumps(sorted(affected.secondary)))
+        affected_page_titles = affected.primary | prior_stale
+
         if not affected_page_titles:
             logger.info("No affected pages found for changed files.")
             now = datetime.now(UTC)
