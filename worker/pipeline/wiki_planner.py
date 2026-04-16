@@ -1099,6 +1099,7 @@ def validate_wiki_plan(
     # Fix orphaned files: any file not assigned to any page goes to Overview
     if all_files:
         assigned = {f for page in pages for f in page.files}
+        assigned |= {f for page in pages for f in page.secondary_files}
         orphans = [f for f in all_files if f not in assigned]
         if orphans:
             # Find overview page or use first page

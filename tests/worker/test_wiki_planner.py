@@ -776,3 +776,32 @@ def test_to_api_structure_exposes_secondary_file_count_only():
     page = plan.to_api_structure()["pages"][0]
     assert page["secondary_file_count"] == 2
     assert "secondary_files" not in page
+
+
+def test_validate_wiki_plan_considers_secondary_assignment_for_orphans():
+    """A file that is secondary on some page still counts as assigned."""
+    from worker.pipeline.wiki_planner import validate_wiki_plan
+
+    raw = {
+        "pages": [
+            {
+                "title": "Overview",
+                "purpose": "top",
+                "files": ["x.py"],
+                "secondary_files": [],
+            },
+            {
+                "title": "Core",
+                "purpose": "core",
+                "files": ["core.py"],
+                "secondary_files": ["shared.py"],
+            },
+        ]
+    }
+    plan = validate_wiki_plan(raw, all_files=["x.py", "core.py", "shared.py"])
+    # ``shared.py`` must NOT be appended to Overview as an orphan because
+    # it's already referenced as secondary on Core.
+    overview = next(p for p in plan.pages if p.title == "Overview")
+    assert "shared.py" not in overview.files
+    core = next(p for p in plan.pages if p.title == "Core")
+    assert core.secondary_files == ["shared.py"]
