@@ -705,3 +705,74 @@ def test_build_outline_prompt_without_anchors_unchanged():
         repo_name="demo",
     )
     assert "Architectural anchors" not in prompt
+
+
+# ── Stage B: secondary_files ──────────────────────────────────────────────
+
+
+def test_wiki_page_spec_has_secondary_files():
+    """WikiPageSpec must carry an optional secondary_files list."""
+    spec = WikiPageSpec(
+        title="Core",
+        purpose="Core",
+        files=["a.py"],
+        secondary_files=["shared/utils.py"],
+    )
+    assert spec.files == ["a.py"]
+    assert spec.secondary_files == ["shared/utils.py"]
+
+
+def test_wiki_page_spec_secondary_files_default_empty():
+    spec = WikiPageSpec(title="Core", purpose="p")
+    assert spec.secondary_files == []
+
+
+def test_to_internal_json_roundtrips_secondary_files():
+    plan = WikiPlan(
+        pages=[
+            WikiPageSpec(
+                title="Core",
+                purpose="p",
+                files=["a.py"],
+                secondary_files=["b.py"],
+            )
+        ]
+    )
+    payload = plan.to_internal_json()
+    page = payload["pages"][0]
+    assert page["files"] == ["a.py"]
+    assert page["secondary_files"] == ["b.py"]
+
+
+def test_to_wiki_json_omits_secondary_files():
+    """wiki.json is user-facing: secondary assignment must not appear."""
+    plan = WikiPlan(
+        pages=[
+            WikiPageSpec(
+                title="Core",
+                purpose="p",
+                files=["a.py"],
+                secondary_files=["b.py"],
+            )
+        ]
+    )
+    payload = plan.to_wiki_json()
+    page = payload["pages"][0]
+    assert "files" not in page
+    assert "secondary_files" not in page
+
+
+def test_to_api_structure_exposes_secondary_file_count_only():
+    plan = WikiPlan(
+        pages=[
+            WikiPageSpec(
+                title="Core",
+                purpose="p",
+                files=["a.py"],
+                secondary_files=["b.py", "c.py"],
+            )
+        ]
+    )
+    page = plan.to_api_structure()["pages"][0]
+    assert page["secondary_file_count"] == 2
+    assert "secondary_files" not in page

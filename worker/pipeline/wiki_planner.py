@@ -97,7 +97,13 @@ class WikiPageSpec:
     purpose: str  # replaces "description"
     parent: str | None = None  # parent page TITLE string (not slug)
     page_notes: list[dict] = field(default_factory=lambda: [{"content": ""}])
-    files: list[str] = field(default_factory=list)  # rel_paths assigned by LLM
+    files: list[str] = field(default_factory=list)  # primary rel_paths assigned by LLM
+    secondary_files: list[str] = field(default_factory=list)
+    """Files *referenced* by this page but *primarily owned* by another page.
+
+    Included in the generation prompt as "see also" context and used by
+    incremental refresh to mark the page as stale when one of them changes.
+    """
 
     @property
     def slug(self) -> str:
@@ -220,6 +226,7 @@ class WikiPlan:
                     "title": p.title,
                     "purpose": p.purpose,
                     "files": p.files,
+                    "secondary_files": p.secondary_files,
                     **({"parent": p.parent} if p.parent is not None else {}),
                 }
                 for p in self.pages
@@ -258,6 +265,7 @@ class WikiPlan:
                     "parent_slug": p.parent_slug,
                     "description": p.purpose,
                     "has_user_notes": _has_user_notes(p),
+                    "secondary_file_count": len(p.secondary_files),
                 }
                 for p in self.pages
             ]
