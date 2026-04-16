@@ -543,7 +543,12 @@ async def test_generate_wiki_plan_two_phase(mock_llm):
 
 
 async def test_assign_files_logs_each_validation_failure_and_fallback(caplog):
-    """_assign_files must log each retry AND the fallback invocation."""
+    """_assign_files must log each retry AND the fallback invocation.
+
+    The new batched path does exactly 2 attempts (1 initial + 1 retry) before
+    falling back to directory clustering, so we expect 1 WARNING retry log and
+    1 ERROR fallback log.
+    """
     import logging
     from unittest.mock import AsyncMock
 
@@ -556,7 +561,8 @@ async def test_assign_files_logs_each_validation_failure_and_fallback(caplog):
     many = [f"f{i}.py" for i in range(30)]
     stuffed = {"assignments": [{"file": f, "page_title": "Overview"} for f in many]}
     llm = AsyncMock()
-    llm.generate_structured.side_effect = [stuffed, stuffed, stuffed]
+    # Two batched calls will both return a stuffed response that fails validation.
+    llm.generate_structured.side_effect = [stuffed, stuffed]
 
     with caplog.at_level(logging.WARNING, logger="worker.planner"):
         result = await _assign_files(
@@ -567,7 +573,6 @@ async def test_assign_files_logs_each_validation_failure_and_fallback(caplog):
             llm=llm,
             system="sys",
             on_retry=None,
-            max_retries=3,
         )
 
     retry_logs = [
@@ -582,7 +587,7 @@ async def test_assign_files_logs_each_validation_failure_and_fallback(caplog):
         for r in caplog.records
         if "wiki_planner.assign_files" in r.getMessage() and r.levelno == logging.ERROR
     ]
-    assert len(retry_logs) == 3, f"expected 3 retry logs, got {len(retry_logs)}"
+    assert len(retry_logs) == 1, f"expected 1 retry log, got {len(retry_logs)}"
     assert len(fallback_logs) == 1, (
         f"expected 1 fallback error, got {len(fallback_logs)}"
     )
@@ -632,3 +637,37 @@ async def test_assign_files_fallback_uses_directory_clustering(caplog):
     )
     # All api files end up on API Layer
     assert all(f in result["API Layer"] for f in all_files if f.startswith("api/"))
+
+
+async def test_assign_files_uses_batched_path(monkeypatch):
+    """_assign_files must delegate to _assign_files_in_batches."""
+    from unittest.mock import AsyncMock
+
+    from worker.pipeline import wiki_planner as wp
+
+    called = {}
+
+    async def fake_batched(**kwargs):
+        called["hit"] = True
+        return {kwargs["outline"][0]["title"]: list(kwargs["all_files"])}
+
+    monkeypatch.setattr(wp, "_assign_files_in_batches", fake_batched)
+
+    llm = AsyncMock()
+    outline = [
+        {"title": "One", "purpose": "p1"},
+        {"title": "Two", "purpose": "p2"},
+    ]
+    result = await wp._assign_files(
+        outline=outline,
+        file_summary="fs",
+        dep_info=None,
+        all_files=["a.py", "b.py"],
+        llm=llm,
+        system="sys",
+        on_retry=None,
+    )
+
+    assert called.get("hit") is True
+    assert "a.py" in result["One"]
+    assert "b.py" in result["One"]

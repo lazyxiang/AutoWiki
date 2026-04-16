@@ -900,100 +900,68 @@ async def _assign_files(
     _extra_context: str | None = None,
     fast_llm: LLMProvider | None = None,
 ) -> dict[str, list[str]]:
-    """Phase 2: Assign every file to a page and validate assignments.
+    """Phase 2: Assign every file to a page via batched LLM calls.
 
-    Combines LLM generation with immediate per-page constraint checking so
-    that over-stuffed pages (> 25 files) and empty non-overview pages are
-    caught and retried within this phase.
-
-    After all retries are exhausted, falls back to
-    :func:`_directory_cluster_assign`, which preserves directory locality
-    rather than scattering files alphabetically.  The fallback invocation
-    is logged at ``ERROR`` via :func:`log_final_failure`.
+    Delegates to :func:`_assign_files_in_batches`, which splits the file
+    list into ≤40-file batches and reuses a cacheable system segment
+    across batches.  ``fast_llm`` is preferred for the batched call because
+    classification-style assignments scale well on faster models.
+    Validation is performed on the merged result, and validation failures
+    trigger a single retry via the batched path before falling back to
+    directory clustering.
     """
-    prompt = _build_assignment_prompt(
-        outline=outline,
-        file_summary=file_summary,
-        dep_info=dep_info,
-        all_files=all_files,
-    )
-    if _extra_context:
-        prompt += f"\n\n{_extra_context}"
+    preferred_llm = fast_llm or llm
 
-    if not outline:
-        raise ValueError("Cannot assign files: outline is empty")
-    valid_titles = {p["title"] for p in outline}
-    first_title = outline[0]["title"]
+    try:
+        result = await _assign_files_in_batches(
+            outline=outline,
+            file_summary=file_summary,
+            dep_info=dep_info,
+            all_files=all_files,
+            llm=preferred_llm,
+            system=system,
+            on_retry=on_retry,
+        )
+        _validate_assignments(result, outline)
+        return result
+    except ValueError as exc:
+        log_validation_retry(
+            logger,
+            stage="wiki_planner.assign_files",
+            attempt=1,
+            max_retries=2,
+            exc=exc,
+            context={
+                "outline_pages": len(outline),
+                "total_files": len(all_files),
+            },
+        )
 
-    # Build provider pool: fast_llm first (if provided), then main llm.
-    # Attempts escalate through the pool before falling back to round-robin.
-    _llm_pool = []
-    if fast_llm is not None:
-        _llm_pool.append(fast_llm)
-    if llm not in _llm_pool:
-        _llm_pool.append(llm)
+    # One retry with the main LLM (in case the fast model is the weak link)
+    try:
+        result = await _assign_files_in_batches(
+            outline=outline,
+            file_summary=file_summary,
+            dep_info=dep_info,
+            all_files=all_files,
+            llm=llm,
+            system=system,
+            on_retry=on_retry,
+        )
+        _validate_assignments(result, outline)
+        return result
+    except ValueError as exc:
+        log_final_failure(
+            logger,
+            stage="wiki_planner.assign_files",
+            exc=exc,
+            context={
+                "outline_pages": len(outline),
+                "total_files": len(all_files),
+            },
+        )
 
-    for attempt in range(max_retries):
-        _current_llm = _llm_pool[min(attempt, len(_llm_pool) - 1)]
-        try:
-            raw = await async_retry(
-                _current_llm.generate_structured,
-                prompt,
-                schema=_ASSIGNMENT_SCHEMA,
-                system=system,
-                transient_exceptions=TRANSIENT_EXCEPTIONS,
-                on_retry=on_retry,
-            )
-            assignments = raw.get("assignments", [])
-            result: dict[str, list[str]] = {p["title"]: [] for p in outline}
-            assigned_files: set[str] = set()
-
-            for a in assignments:
-                f = a.get("file", "")
-                title = a.get("page_title", "")
-                if f in all_files and f not in assigned_files:
-                    target = title if title in valid_titles else first_title
-                    result[target].append(f)
-                    assigned_files.add(f)
-
-            # Assign any unassigned files to the first page
-            for f in all_files:
-                if f not in assigned_files:
-                    result[first_title].append(f)
-
-            _validate_assignments(result, outline)
-            return result
-
-        except (ValueError, json.JSONDecodeError, KeyError) as e:
-            log_validation_retry(
-                logger,
-                stage="wiki_planner.assign_files",
-                attempt=attempt + 1,
-                max_retries=max_retries,
-                exc=e,
-                context={
-                    "outline_pages": len(outline),
-                    "total_files": len(all_files),
-                },
-            )
-            if attempt < max_retries - 1:
-                prompt += f"\n\nPrevious attempt failed: {e}. Please fix and retry."
-
-    log_final_failure(
-        logger,
-        stage="wiki_planner.assign_files",
-        exc=ValueError(
-            "All LLM assignment attempts failed; using directory-clustering fallback"
-        ),
-        context={
-            "outline_pages": len(outline),
-            "total_files": len(all_files),
-            "max_retries": max_retries,
-        },
-    )
-    # Fallback: locality-preserving directory clustering.  See
-    # _directory_cluster_assign for semantics.  Logged at ERROR by the
-    # preceding log_final_failure call.
+    # Final fallback: directory clustering (locality-preserving)
     return _directory_cluster_assign(outline, all_files)
 
 
