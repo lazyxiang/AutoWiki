@@ -748,14 +748,24 @@ def _directory_cluster_assign(
             continue
 
         # If the target would exceed the cap, try to split across all pages
-        # whose tokens overlap this directory.
+        # whose tokens overlap this directory using remaining-capacity filling.
         if len(result[target]) + len(files) > 25:
             matching_pages = [
                 t for t in page_titles if _tokenize(dir_key) & page_tokens[t]
             ]
-            if len(matching_pages) > 1:
-                for i, f in enumerate(files):
-                    result[matching_pages[i % len(matching_pages)]].append(f)
+            remaining_capacity = {
+                title: max(0, 25 - len(result[title])) for title in matching_pages
+            }
+            if len(matching_pages) > 1 and sum(remaining_capacity.values()) >= len(
+                files
+            ):
+                file_iter = iter(files)
+                try:
+                    for title in matching_pages:
+                        for _ in range(remaining_capacity[title]):
+                            result[title].append(next(file_iter))
+                except StopIteration:
+                    pass
                 continue
 
         result[target].extend(files)
@@ -907,59 +917,49 @@ async def _assign_files(
     across batches.  ``fast_llm`` is preferred for the batched call because
     classification-style assignments scale well on faster models.
     Validation is performed on the merged result, and validation failures
-    trigger a single retry via the batched path before falling back to
+    trigger up to ``max_retries`` attempts (using ``fast_llm`` on the first
+    attempt and ``llm`` for subsequent retries) before falling back to
     directory clustering.
     """
     preferred_llm = fast_llm or llm
 
-    try:
-        result = await _assign_files_in_batches(
-            outline=outline,
-            file_summary=file_summary,
-            dep_info=dep_info,
-            all_files=all_files,
-            llm=preferred_llm,
-            system=system,
-            on_retry=on_retry,
-        )
-        _validate_assignments(result, outline)
-        return result
-    except ValueError as exc:
-        log_validation_retry(
-            logger,
-            stage="wiki_planner.assign_files",
-            attempt=1,
-            max_retries=2,
-            exc=exc,
-            context={
-                "outline_pages": len(outline),
-                "total_files": len(all_files),
-            },
-        )
-
-    # One retry with the main LLM (in case the fast model is the weak link)
-    try:
-        result = await _assign_files_in_batches(
-            outline=outline,
-            file_summary=file_summary,
-            dep_info=dep_info,
-            all_files=all_files,
-            llm=llm,
-            system=system,
-            on_retry=on_retry,
-        )
-        _validate_assignments(result, outline)
-        return result
-    except ValueError as exc:
-        log_final_failure(
-            logger,
-            stage="wiki_planner.assign_files",
-            exc=exc,
-            context={
-                "outline_pages": len(outline),
-                "total_files": len(all_files),
-            },
-        )
+    for attempt in range(1, max_retries + 1):
+        current_llm = preferred_llm if attempt == 1 else llm
+        try:
+            result = await _assign_files_in_batches(
+                outline=outline,
+                file_summary=file_summary,
+                dep_info=dep_info,
+                all_files=all_files,
+                llm=current_llm,
+                system=system,
+                on_retry=on_retry,
+            )
+            _validate_assignments(result, outline)
+            return result
+        except ValueError as exc:
+            if attempt < max_retries:
+                log_validation_retry(
+                    logger,
+                    stage="wiki_planner.assign_files",
+                    attempt=attempt,
+                    max_retries=max_retries,
+                    exc=exc,
+                    context={
+                        "outline_pages": len(outline),
+                        "total_files": len(all_files),
+                    },
+                )
+            else:
+                log_final_failure(
+                    logger,
+                    stage="wiki_planner.assign_files",
+                    exc=exc,
+                    context={
+                        "outline_pages": len(outline),
+                        "total_files": len(all_files),
+                    },
+                )
 
     # Final fallback: directory clustering (locality-preserving)
     return _directory_cluster_assign(outline, all_files)

@@ -187,9 +187,8 @@ async def test_generate_page_outline_with_mock_llm():
     assert segments_passed[0].cacheable is True
 
 
-async def test_page_outline_logs_each_retry(caplog):
+async def test_page_outline_logs_each_retry(caplog, mock_fast_llm):
     import logging
-    from unittest.mock import AsyncMock
 
     from worker.pipeline.page_outline import generate_page_outline
     from worker.pipeline.wiki_planner import WikiPageSpec
@@ -211,15 +210,14 @@ async def test_page_outline_logs_each_retry(caplog):
         ],
         "key_claims": ["one", "two", "three"],
     }
-    fast = AsyncMock()
-    fast.generate_structured.side_effect = [bad, good]
+    mock_fast_llm.generate_structured.side_effect = [bad, good]
 
     with caplog.at_level(logging.WARNING, logger="worker.page_outline"):
         await generate_page_outline(
             spec=spec,
             entity_summaries="",
             dep_info=None,
-            fast_llm=fast,
+            fast_llm=mock_fast_llm,
             max_retries=2,
         )
 

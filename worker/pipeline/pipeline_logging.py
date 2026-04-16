@@ -71,10 +71,12 @@ def log_final_failure(
     """
     ctx = _format_context(context)
     suffix = f" | {ctx}" if ctx else ""
+    exc_info = (type(exc), exc, exc.__traceback__) if exc.__traceback__ else None
     logger.error(
         "%s: all retries exhausted: %s%s",
         stage,
         exc,
         suffix,
-        exc_info=True,
+        exc_info=exc_info,
+        stack_info=exc_info is None,
     )

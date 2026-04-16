@@ -57,4 +57,4 @@ def test_segments_to_anthropic_content_respects_max_breakpoints():
     assert isinstance(content, list)
     # Should have at most 4 cache_control markers
     cached_blocks = [b for b in content if b.get("cache_control")]
-    assert len(cached_blocks) <= 4
+    assert len(cached_blocks) == 4

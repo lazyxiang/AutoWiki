@@ -58,10 +58,9 @@ def setup_logging(config: Config) -> None:
     task_handler.setFormatter(formatter)
     handlers.append(task_handler)
 
-    # 3. Console Handler
-    console_level = logging.DEBUG if debug_enabled else logging.INFO
+    # 3. Console Handler (always INFO; debug detail goes to llm.log, not stdout)
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(console_level)
+    console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(formatter)
     handlers.append(console_handler)
 

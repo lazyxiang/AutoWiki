@@ -545,9 +545,9 @@ async def test_generate_wiki_plan_two_phase(mock_llm):
 async def test_assign_files_logs_each_validation_failure_and_fallback(caplog):
     """_assign_files must log each retry AND the fallback invocation.
 
-    The new batched path does exactly 2 attempts (1 initial + 1 retry) before
-    falling back to directory clustering, so we expect 1 WARNING retry log and
-    1 ERROR fallback log.
+    With max_retries=2, the batched path does 2 attempts (1 initial + 1 retry)
+    before falling back to directory clustering, so we expect 1 WARNING retry
+    log and 1 ERROR fallback log.
     """
     import logging
     from unittest.mock import AsyncMock
@@ -573,6 +573,7 @@ async def test_assign_files_logs_each_validation_failure_and_fallback(caplog):
             llm=llm,
             system="sys",
             on_retry=None,
+            max_retries=2,
         )
 
     retry_logs = [
@@ -649,7 +650,9 @@ async def test_assign_files_uses_batched_path(monkeypatch):
 
     async def fake_batched(**kwargs):
         called["hit"] = True
-        return {kwargs["outline"][0]["title"]: list(kwargs["all_files"])}
+        titles = [page["title"] for page in kwargs["outline"]]
+        files = list(kwargs["all_files"])
+        return {titles[0]: [files[0]], titles[1]: [files[1]]}
 
     monkeypatch.setattr(wp, "_assign_files_in_batches", fake_batched)
 
@@ -670,4 +673,4 @@ async def test_assign_files_uses_batched_path(monkeypatch):
 
     assert called.get("hit") is True
     assert "a.py" in result["One"]
-    assert "b.py" in result["One"]
+    assert "b.py" in result["Two"]

@@ -186,15 +186,13 @@ async def test_run_fact_check_fails_open_on_error(mock_fast_llm):
     assert result.verdict == "pass"
 
 
-async def test_fact_check_logs_failure_with_context(caplog):
+async def test_fact_check_logs_failure_with_context(caplog, mock_fast_llm):
     import logging
-    from unittest.mock import AsyncMock
 
     from worker.pipeline.fact_check import run_fact_check
     from worker.pipeline.page_outline import PageOutline, SectionPlan
 
-    llm = AsyncMock()
-    llm.generate_structured.side_effect = RuntimeError("boom")
+    mock_fast_llm.generate_structured.side_effect = RuntimeError("boom")
 
     outline = PageOutline(
         sections=[SectionPlan(heading="Intro", kind="prose", focus="...")],
@@ -208,7 +206,7 @@ async def test_fact_check_logs_failure_with_context(caplog):
             entity_summaries="",
             dep_info=None,
             targeted_chunks="",
-            fast_llm=llm,
+            fast_llm=mock_fast_llm,
         )
 
     assert result.verdict == "pass"  # fail-open
