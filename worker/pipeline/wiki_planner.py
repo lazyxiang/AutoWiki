@@ -11,8 +11,10 @@ The main entry point is :func:`generate_wiki_plan`, which:
 2. Calls the LLM with a structured JSON schema via ``async_retry``.
 3. Validates and normalises the response with :func:`validate_wiki_plan`.
 4. Retries up to *max_retries* times if validation fails, appending the error
-   to the prompt.
-5. Falls back to a flat cluster-based plan if all retries are exhausted.
+   to the prompt to provide feedback.
+5. If Phase 1 (Outline) fails after all retries, the task is terminated with
+   a :class:`WikiPlannerError`. If Phase 2 (Assignment) fails, the planner
+   recovers using a locality-preserving heuristic while keeping the outline.
 
 The plan is represented as a :class:`WikiPlan` (a list of
 :class:`WikiPageSpec` objects) and can be serialised to three different JSON
@@ -1365,20 +1367,16 @@ async def generate_wiki_plan(
 
     * **Phase 1** (:func:`_generate_outline`) — Produces the page hierarchy
       (titles, purposes, parent relationships) and immediately validates
-      structural constraints (duplicate slugs, cycles, depth, flat plan, page
-      count) via :func:`_validate_outline_structure`.  A bad outline is
-      re-generated within Phase 1 rather than being discovered after the
-      expensive Phase 2 LLM call.
+      structural constraints. Failure here is critical and stops the task.
 
-    * **Phase 2** (:func:`_assign_files`) — Assigns every source file to a
-      page and immediately validates per-page constraints (over-stuffed pages,
-      empty non-overview pages) via :func:`_validate_assignments`.  Bad
-      assignments are re-generated within Phase 2.
+    * **Phase 2** (:func:`_assign_files`) — Assigns source files to pages and
+      validates per-page constraints. Failure triggers a heuristic recovery
+      that preserves the validated outline while ensuring all core files are
+      assigned.
 
-    * **Final** — Combines outline + assignments into a :class:`WikiPlan` via
-      :func:`validate_wiki_plan`, which handles orphan-file assignment as a
-      normalisation step.  Any remaining error falls back to a cluster-based
-      plan.
+    * **Final** — Combines outline + assignments into a :class:`WikiPlan`.
+      If validation fails even after heuristic recovery, a
+      :class:`WikiPlannerError` is raised to signal a terminal failure.
     """
     from worker.pipeline.dependency_graph import format_for_llm_prompt
     from worker.pipeline.user_steering import assign_by_modules
