@@ -331,7 +331,10 @@ _SYSTEM = (
     "3. Use the dependency graph to understand how files "
     "relate to each other\n"
     "4. Group tightly-coupled files into coherent pages based "
-    "on semantic purpose, not directory structure\n"
+    "on semantic purpose. Directories are a strong default "
+    "signal — only override directory structure when files in "
+    "different directories form a tight semantic unit (e.g. a "
+    "frontend component and its backend route).\n"
     "5. Create a clear hierarchy: top-level pages for major "
     "subsystems, child pages for details\n\n"
     "Each page should have a clear PURPOSE — it should "
@@ -357,7 +360,13 @@ def _build_outline_prompt(
         sections.append(f"README:\n{readme}")
 
     if anchors_block:
-        sections.append("Architectural anchors:\n" + anchors_block)
+        sections.append(
+            "Architectural anchors:\n"
+            + anchors_block
+            + "\n\nThe largest internal packages shown above are usually "
+            "meaningful architectural units. Use them as hierarchy hints "
+            "unless dependency analysis says otherwise."
+        )
 
     sections.append(f"File summaries:\n{file_summary}")
 
@@ -378,9 +387,18 @@ def _build_outline_prompt(
             if len(c) <= _CLUSTER_DETAIL_LIMIT:
                 cluster_strs.append(f"  Cluster ({len(c)} files): {', '.join(c)}")
             else:
+                # Derive the dominant package prefix from the cluster files
+                # (e.g. "worker/pipeline" for a cluster of worker/pipeline/*.py)
+                prefixes: dict[str, int] = {}
+                for f in c:
+                    parts = f.split("/")
+                    pkg = "/".join(parts[:-1]) if len(parts) > 1 else "(root)"
+                    prefixes[pkg] = prefixes.get(pkg, 0) + 1
+                top_pkg = max(prefixes, key=lambda k: prefixes[k])
                 cluster_strs.append(
-                    f"  Large cluster ({len(c)} files) — see dependency "
-                    "relationships above for internal structure"
+                    f"  Large cluster: {top_pkg}/* ({len(c)} files) — "
+                    "likely a single subsystem; consider one parent page "
+                    "with sub-pages per file role"
                 )
             shown += 1
         remaining = len(clusters) - shown
@@ -402,7 +420,10 @@ def _build_outline_prompt(
         "purpose (1-2 sentences explaining WHAT the page covers and WHY a "
         "developer would read it)\n"
         "- Optionally set parent (title of parent page) for hierarchy\n"
-        "- Group by semantic purpose, not directory structure\n"
+        "- Group by semantic purpose. Directories are a strong default "
+        "signal — only override directory structure when files in different "
+        "directories form a tight semantic unit (e.g. a frontend component "
+        "and its backend route).\n"
         "- Create 2-3 levels of hierarchy for larger repos\n"
         "- Page titles should describe concepts/components, not directory names\n"
         "- Do NOT assign files to pages — just define the page structure\n\n"
