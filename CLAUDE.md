@@ -88,6 +88,9 @@ Default LLM: `claude-sonnet-4-6`. Supported providers: `anthropic`, `openai`, `o
 - **`PromptSegment`**: typed dataclass wrapping prompt parts with optional `cache_control`; all LLM providers translate `list[PromptSegment]` → provider-native format; enables Anthropic prompt caching for long system prompts
 - **`fast_model` / `fast_llm`**: `LLMConfig.fast_model` configured via `AUTOWIKI_LLM_FAST_MODEL` (defaults to main model when empty); `make_fast_llm_provider()` returns main provider unchanged when models match; used for Pass 1 outline and Pass 3 fact-check to cut latency and cost; threaded through jobs → planner Phase 2 → page generator
 - **`cache_ttl`**: `LLMConfig.cache_ttl` hints cache lifetime for providers that support it; Anthropic uses `"ephemeral"` cache control on system segments
+- **Pipeline observability**: every retry loop over LLM structured-output calls in `worker/pipeline/` must log validation failures via `pipeline_logging.log_validation_retry` and log final fallback invocations via `pipeline_logging.log_final_failure`. Silent `except (ValueError, json.JSONDecodeError, KeyError): pass` is a bug. See `worker/pipeline/pipeline_logging.py`.
+- **Planner fallback semantics**: when `_assign_files` exhausts its retries, it calls `_directory_cluster_assign(outline, all_files)` — a locality-preserving heuristic that scores each file against wiki pages using dir-token overlap (dir tokens ×3, filename tokens ×1) and splits oversized groups (>25 files) across matching pages. This replaces the old silent round-robin that produced random-looking cross-page assignments.
+- **Planner batched assignment**: `_assign_files` delegates to `_assign_files_in_batches`, which splits files into 40-file chunks (`_BATCH_SIZE_DEFAULT`), builds one cacheable `PromptSegment` system message (outline + file summary + dep info) reused across all batches, runs the first batch serially to warm the Anthropic prompt cache, then runs remaining batches in parallel via `asyncio.gather`. Unassigned files after all batches get a cleanup round; residue goes to `_directory_cluster_assign`.
 
 ## API Surface
 
@@ -167,3 +170,9 @@ Non-Docker: `autowiki serve` spawns API + worker + Next.js as subprocesses.
 - **Phase 3** ✅ — Deep Research mode: multi-step RAG investigation, LLM planner, per-step AST context, synthesized report; `autowiki research` CLI; REST + WebSocket API (PR #20)
 - **Phase 4** ✅ — User-steered wiki structure via `.autowiki/wiki.json`: override page hierarchy, assign modules to pages, inject repo/page notes into generation (PR #20)
 - **Phase 5** — GitLab/Bitbucket + hybrid search + MCP server
+
+## Deferred Planner Improvements
+
+- **Layer C1 outline anchors** — embed stable anchor IDs in Phase 1 outline so Phase 2 file-assignment JSON can reference them by ID rather than fuzzy title matching, eliminating misrouting when two pages share similar names
+- **Layer C2 multi-page assignment** — allow a single file to appear in more than one wiki page (e.g. a shared utility referenced in both an overview and a deep-dive); requires changing the `WikiPlan` schema and downstream page generator context builder
+- **Independent stage validation harness** — a CLI command (`autowiki validate-plan <repo>`) that runs the planner in isolation against a saved `wiki_plan.json` and reports assignment coverage, page size distribution, and any validation failures without triggering full generation
