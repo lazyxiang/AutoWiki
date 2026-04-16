@@ -271,13 +271,19 @@ async def generate_page(
                 on_retry=on_retry,
                 wiki_language=wiki_language,
             )
-        except Exception:
-            # Revision failed — deterministic fallback: strip all flagged issues
-            logger.warning(
-                "Targeted revision failed for page %r, applying deterministic fallback",
-                spec.title,
-                exc_info=True,
+        except Exception as exc:
+            from worker.pipeline.pipeline_logging import log_final_failure
+
+            log_final_failure(
+                logger,
+                stage="page_generator.revision",
+                exc=exc,
+                context={
+                    "page_title": spec.title,
+                    "issue_count": len(fc_result.issues),
+                },
             )
+            # Revision failed — deterministic fallback: strip all flagged issues
             for issue in fc_result.issues:
                 if issue.kind == "claim" and issue.claim:
                     draft = strip_failed_claim(

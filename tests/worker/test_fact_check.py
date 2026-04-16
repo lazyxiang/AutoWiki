@@ -186,6 +186,34 @@ async def test_run_fact_check_fails_open_on_error(mock_fast_llm):
     assert result.verdict == "pass"
 
 
+async def test_fact_check_logs_failure_with_context(caplog, mock_fast_llm):
+    import logging
+
+    from worker.pipeline.fact_check import run_fact_check
+    from worker.pipeline.page_outline import PageOutline, SectionPlan
+
+    mock_fast_llm.generate_structured.side_effect = RuntimeError("boom")
+
+    outline = PageOutline(
+        sections=[SectionPlan(heading="Intro", kind="prose", focus="...")],
+        key_claims=["c1", "c2"],
+    )
+
+    with caplog.at_level(logging.WARNING, logger="worker.fact_check"):
+        result = await run_fact_check(
+            draft="draft text",
+            outline=outline,
+            entity_summaries="",
+            dep_info=None,
+            targeted_chunks="",
+            fast_llm=mock_fast_llm,
+        )
+
+    assert result.verdict == "pass"  # fail-open
+    failure_logs = [r for r in caplog.records if "fact_check" in r.getMessage()]
+    assert any("boom" in r.getMessage() for r in failure_logs)
+
+
 async def test_run_targeted_revision_fixes_claims(mock_llm):
     mock_llm.generate.return_value = "## Overview\n\nRevised content here."
 

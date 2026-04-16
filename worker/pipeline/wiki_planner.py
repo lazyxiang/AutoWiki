@@ -30,7 +30,9 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from worker.llm.base import LLMProvider
+from worker.llm.prompt_segment import PromptSegment
 from worker.pipeline.language import get_planner_language_instruction
+from worker.pipeline.pipeline_logging import log_final_failure, log_validation_retry
 from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
 
 if TYPE_CHECKING:
@@ -423,6 +425,63 @@ def _build_assignment_prompt(
     return "\n\n".join(sections)
 
 
+def _build_batch_assignment_system(
+    outline: list[dict],
+    file_summary: str,
+    dep_info: str | None,
+) -> list[PromptSegment]:
+    """Build the cacheable *system* portion of a batched assignment call.
+
+    The system turn contains the full repository context — outline,
+    file summaries, and dependency info — which is identical for every
+    batch in a single planning run.  Marking it cacheable lets Anthropic's
+    ``ephemeral`` cache amortise the tokens across batches so only the
+    first batch pays full cost.
+
+    Non-Anthropic providers (OpenAI, Gemini, Ollama) ignore the cache
+    hint and simply concatenate the segments into the system prompt.
+    """
+    outline_json = json.dumps(outline, indent=2)
+    parts: list[str] = [
+        "You are assigning source files to wiki pages.",
+        "",
+        f"## Wiki page structure:\n{outline_json}",
+        "",
+        f"## File summaries:\n{file_summary}",
+    ]
+    if dep_info:
+        parts.append("")
+        parts.append(f"## Dependency relationships:\n{dep_info}")
+    return [PromptSegment(text="\n".join(parts), cacheable=True)]
+
+
+def _build_batch_assignment_user(
+    batch_files: list[str],
+    outline_titles: list[str],
+) -> PromptSegment:
+    """Build the per-batch *user* segment.
+
+    Contains only the batch-specific content — the file list to assign and
+    a reminder of valid page titles — so the system segment's cache stays
+    valid across batches.
+    """
+    titles_str = ", ".join(f'"{t}"' for t in outline_titles)
+    files_str = "\n".join(f"- {f}" for f in batch_files)
+    schema_json = json.dumps(_ASSIGNMENT_SCHEMA, indent=2)
+    text = (
+        f"Assign each of the following {len(batch_files)} files to one of the "
+        f"page titles below.  Each ``page_title`` MUST exactly match one of: "
+        f"{titles_str}.\n\n"
+        f"Files to assign:\n{files_str}\n\n"
+        "Rules:\n"
+        "- Every listed file must appear in the output.\n"
+        "- Choose the page whose purpose best matches the file's semantic role.\n"
+        "- Files that import each other usually belong on the same page.\n\n"
+        f"Output JSON matching this schema:\n{schema_json}"
+    )
+    return PromptSegment(text=text, cacheable=False)
+
+
 def _validate_outline_structure(
     pages: list[dict],
     page_range: tuple[int, int],
@@ -570,10 +629,273 @@ async def _generate_outline(
             _validate_outline_structure(pages, page_range, total_file_count)
             return pages
         except (ValueError, json.JSONDecodeError, KeyError) as e:
+            log_validation_retry(
+                logger,
+                stage="wiki_planner.outline",
+                attempt=attempt + 1,
+                max_retries=max_retries,
+                exc=e,
+                context={
+                    "total_files": total_file_count,
+                    "page_range": f"{page_range[0]}-{page_range[1]}",
+                },
+            )
             if attempt < max_retries - 1:
                 prompt += f"\n\nPrevious attempt failed: {e}. Please fix and retry."
 
-    raise ValueError("Failed to generate outline after all retries")
+    exc = ValueError("Failed to generate outline after all retries")
+    log_final_failure(
+        logger,
+        stage="wiki_planner.outline",
+        exc=exc,
+        context={
+            "total_files": total_file_count,
+            "max_retries": max_retries,
+        },
+    )
+    raise exc
+
+
+def _tokenize(text: str) -> set[str]:
+    """Lowercase word tokens with length ≥ 3.  Used for page↔directory matching."""
+    return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if len(w) >= 3}
+
+
+def _directory_key(rel_path: str) -> str:
+    """Return the first directory segment of ``rel_path``.
+
+    Files at the repo root return ``""``.
+    """
+    parts = rel_path.split("/", 1)
+    return parts[0] if len(parts) > 1 else ""
+
+
+def _best_matching_page(
+    dir_key: str,
+    page_tokens: dict[str, set[str]],
+    sample_files: list[str],
+) -> str | None:
+    """Return the title of the page whose tokens best match *dir_key*.
+
+    Scoring:
+    * +3 per overlapping token between dir_key and page tokens.
+    * +1 per overlapping token between any word in sample file basenames
+      and the page tokens.
+    * Ties broken by page order (first listed wins).
+    """
+    candidate_tokens: set[str] = _tokenize(dir_key)
+    for f in sample_files[:5]:
+        candidate_tokens |= _tokenize(f.replace("/", " "))
+
+    best_title: str | None = None
+    best_score = 0
+    for title, tokens in page_tokens.items():
+        overlap = candidate_tokens & tokens
+        if not overlap:
+            continue
+        dir_overlap = _tokenize(dir_key) & tokens
+        score = len(dir_overlap) * 3 + (len(overlap) - len(dir_overlap))
+        if score > best_score:
+            best_score = score
+            best_title = title
+    return best_title
+
+
+def _directory_cluster_assign(
+    outline: list[dict],
+    all_files: list[str],
+) -> dict[str, list[str]]:
+    """Locality-preserving file assignment fallback.
+
+    Groups files by their top-level directory, then assigns each directory
+    group to the page whose title + purpose tokens best match the directory
+    name and sample file basenames.  Unmatched files go to the "Overview"
+    page if one exists, else to the first outline page.
+
+    When a single page would receive more than 25 files (the per-page cap
+    enforced by :func:`_validate_assignments`), the group is split across
+    all pages whose tokens matched the directory at all.
+    """
+    page_titles = [p["title"] for p in outline]
+    page_tokens: dict[str, set[str]] = {
+        p["title"]: _tokenize(p["title"] + " " + p.get("purpose", "")) for p in outline
+    }
+
+    # Bucket files by first directory segment
+    buckets: dict[str, list[str]] = {}
+    for f in all_files:
+        buckets.setdefault(_directory_key(f), []).append(f)
+
+    result: dict[str, list[str]] = {t: [] for t in page_titles}
+
+    # Overview fallback target
+    overview_title = next(
+        (t for t in page_titles if "overview" in t.lower()),
+        page_titles[0] if page_titles else None,
+    )
+
+    for dir_key, files in buckets.items():
+        if not dir_key:
+            # Files at repo root go to overview
+            if overview_title:
+                result[overview_title].extend(files)
+            continue
+
+        target = _best_matching_page(dir_key, page_tokens, files)
+        if target is None:
+            if overview_title:
+                result[overview_title].extend(files)
+            continue
+
+        # If the target would exceed the cap, try to split across all pages
+        # whose tokens overlap this directory using remaining-capacity filling.
+        if len(result[target]) + len(files) > 25:
+            matching_pages = [
+                t for t in page_titles if _tokenize(dir_key) & page_tokens[t]
+            ]
+            remaining_capacity = {
+                title: max(0, 25 - len(result[title])) for title in matching_pages
+            }
+            if len(matching_pages) > 1 and sum(remaining_capacity.values()) >= len(
+                files
+            ):
+                file_iter = iter(files)
+                try:
+                    for title in matching_pages:
+                        for _ in range(remaining_capacity[title]):
+                            result[title].append(next(file_iter))
+                except StopIteration:
+                    pass
+                continue
+
+        result[target].extend(files)
+
+    return result
+
+
+_BATCH_SIZE_DEFAULT = 40
+
+
+async def _assign_files_in_batches(
+    outline: list[dict],
+    file_summary: str,
+    dep_info: str | None,
+    all_files: list[str],
+    llm: LLMProvider,
+    system: str,
+    on_retry: OnRetryCallback | None,
+    batch_size: int = _BATCH_SIZE_DEFAULT,
+    max_cleanup_retries: int = 2,
+) -> dict[str, list[str]]:
+    """Phase 2 batched assignment core.
+
+    Splits *all_files* into chunks of *batch_size* and invokes
+    ``llm.generate_structured`` once per batch.  The system turn — which
+    carries the large outline + file summary + dep info — is built once
+    and reused across every call so Anthropic's ``ephemeral`` cache
+    amortises the context tokens.
+
+    Partial results are merged across batches.  Any files the LLM fails
+    to assign are re-batched for up to *max_cleanup_retries* cleanup rounds
+    before being handed off to directory clustering for the residue.
+    """
+    import asyncio
+
+    valid_titles = [p["title"] for p in outline]
+    valid_titles_set = set(valid_titles)
+    result: dict[str, list[str]] = {t: [] for t in valid_titles}
+    assigned: set[str] = set()
+
+    # Build the cacheable system segment ONCE and reuse across all batches.
+    stage_system_seg = PromptSegment(text=system, cacheable=False)
+    context_segs = _build_batch_assignment_system(
+        outline=outline,
+        file_summary=file_summary,
+        dep_info=dep_info,
+    )
+    system_segments: list[PromptSegment] = [stage_system_seg, *context_segs]
+
+    async def _run_batch(batch: list[str]) -> None:
+        user_segment = _build_batch_assignment_user(
+            batch_files=batch,
+            outline_titles=valid_titles,
+        )
+        try:
+            raw = await async_retry(
+                llm.generate_structured,
+                user_segment,
+                schema=_ASSIGNMENT_SCHEMA,
+                system=system_segments,
+                transient_exceptions=TRANSIENT_EXCEPTIONS,
+                on_retry=on_retry,
+            )
+        except Exception as exc:
+            log_validation_retry(
+                logger,
+                stage="wiki_planner.assign_files.batch",
+                attempt=1,
+                max_retries=1,
+                exc=exc,
+                context={"batch_size": len(batch)},
+            )
+            return
+        for a in raw.get("assignments", []):
+            f = a.get("file", "")
+            title = a.get("page_title", "")
+            if f not in batch or f in assigned:
+                continue
+            if title not in valid_titles_set:
+                continue
+            result[title].append(f)
+            assigned.add(f)
+
+    # Initial pass: batch every file.
+    # Run the first batch serially to warm the cache, then the rest in parallel.
+    batches: list[list[str]] = [
+        all_files[i : i + batch_size] for i in range(0, len(all_files), batch_size)
+    ]
+    if batches:
+        await _run_batch(batches[0])
+    if len(batches) > 1:
+        await asyncio.gather(*(_run_batch(b) for b in batches[1:]))
+
+    # Cleanup rounds for unassigned files
+    for attempt in range(1, max_cleanup_retries + 1):
+        unassigned = [f for f in all_files if f not in assigned]
+        if not unassigned:
+            break
+        log_validation_retry(
+            logger,
+            stage="wiki_planner.assign_files.cleanup",
+            attempt=attempt,
+            max_retries=max_cleanup_retries,
+            exc=ValueError(f"{len(unassigned)} files unassigned after batches"),
+            context={"unassigned": len(unassigned), "total": len(all_files)},
+        )
+        cleanup_batches = [
+            unassigned[i : i + batch_size]
+            for i in range(0, len(unassigned), batch_size)
+        ]
+        for b in cleanup_batches:
+            await _run_batch(b)
+
+    # Anything still unassigned → directory clustering residue
+    unassigned = [f for f in all_files if f not in assigned]
+    if unassigned:
+        log_final_failure(
+            logger,
+            stage="wiki_planner.assign_files.residue",
+            exc=ValueError(
+                f"{len(unassigned)} files still unassigned after cleanup; "
+                "routing residue to directory clustering"
+            ),
+            context={"residue": len(unassigned)},
+        )
+        residue_assignment = _directory_cluster_assign(outline, unassigned)
+        for title, files in residue_assignment.items():
+            result[title].extend(files)
+
+    return result
 
 
 async def _assign_files(
@@ -588,75 +910,59 @@ async def _assign_files(
     _extra_context: str | None = None,
     fast_llm: LLMProvider | None = None,
 ) -> dict[str, list[str]]:
-    """Phase 2: Assign every file to a page and validate assignments.
+    """Phase 2: Assign every file to a page via batched LLM calls.
 
-    Combines LLM generation with immediate per-page constraint checking so
-    that over-stuffed pages (> 25 files) and empty non-overview pages are
-    caught and retried within this phase.
+    Delegates to :func:`_assign_files_in_batches`, which splits the file
+    list into ≤40-file batches and reuses a cacheable system segment
+    across batches.  ``fast_llm`` is preferred for the batched call because
+    classification-style assignments scale well on faster models.
+    Validation is performed on the merged result, and validation failures
+    trigger up to ``max_retries`` attempts (using ``fast_llm`` on the first
+    attempt and ``llm`` for subsequent retries) before falling back to
+    directory clustering.
     """
-    prompt = _build_assignment_prompt(
-        outline=outline,
-        file_summary=file_summary,
-        dep_info=dep_info,
-        all_files=all_files,
-    )
-    if _extra_context:
-        prompt += f"\n\n{_extra_context}"
+    preferred_llm = fast_llm or llm
 
-    if not outline:
-        raise ValueError("Cannot assign files: outline is empty")
-    valid_titles = {p["title"] for p in outline}
-    first_title = outline[0]["title"]
-
-    # Build provider pool: fast_llm first (if provided), then main llm.
-    # Attempts escalate through the pool before falling back to round-robin.
-    _llm_pool = []
-    if fast_llm is not None:
-        _llm_pool.append(fast_llm)
-    if llm not in _llm_pool:
-        _llm_pool.append(llm)
-
-    for attempt in range(max_retries):
-        _current_llm = _llm_pool[min(attempt, len(_llm_pool) - 1)]
+    for attempt in range(1, max_retries + 1):
+        current_llm = preferred_llm if attempt == 1 else llm
         try:
-            raw = await async_retry(
-                _current_llm.generate_structured,
-                prompt,
-                schema=_ASSIGNMENT_SCHEMA,
+            result = await _assign_files_in_batches(
+                outline=outline,
+                file_summary=file_summary,
+                dep_info=dep_info,
+                all_files=all_files,
+                llm=current_llm,
                 system=system,
-                transient_exceptions=TRANSIENT_EXCEPTIONS,
                 on_retry=on_retry,
             )
-            assignments = raw.get("assignments", [])
-            result: dict[str, list[str]] = {p["title"]: [] for p in outline}
-            assigned_files: set[str] = set()
-
-            for a in assignments:
-                f = a.get("file", "")
-                title = a.get("page_title", "")
-                if f in all_files and f not in assigned_files:
-                    target = title if title in valid_titles else first_title
-                    result[target].append(f)
-                    assigned_files.add(f)
-
-            # Assign any unassigned files to the first page
-            for f in all_files:
-                if f not in assigned_files:
-                    result[first_title].append(f)
-
             _validate_assignments(result, outline)
             return result
+        except ValueError as exc:
+            if attempt < max_retries:
+                log_validation_retry(
+                    logger,
+                    stage="wiki_planner.assign_files",
+                    attempt=attempt,
+                    max_retries=max_retries,
+                    exc=exc,
+                    context={
+                        "outline_pages": len(outline),
+                        "total_files": len(all_files),
+                    },
+                )
+            else:
+                log_final_failure(
+                    logger,
+                    stage="wiki_planner.assign_files",
+                    exc=exc,
+                    context={
+                        "outline_pages": len(outline),
+                        "total_files": len(all_files),
+                    },
+                )
 
-        except (ValueError, json.JSONDecodeError, KeyError) as e:
-            if attempt < max_retries - 1:
-                prompt += f"\n\nPrevious attempt failed: {e}. Please fix and retry."
-
-    # Fallback: round-robin distribution (ignores validation constraints)
-    result = {p["title"]: [] for p in outline}
-    titles = [p["title"] for p in outline]
-    for i, f in enumerate(sorted(all_files)):
-        result[titles[i % len(titles)]].append(f)
-    return result
+    # Final fallback: directory clustering (locality-preserving)
+    return _directory_cluster_assign(outline, all_files)
 
 
 def validate_wiki_plan(

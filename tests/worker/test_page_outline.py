@@ -187,6 +187,44 @@ async def test_generate_page_outline_with_mock_llm():
     assert segments_passed[0].cacheable is True
 
 
+async def test_page_outline_logs_each_retry(caplog, mock_fast_llm):
+    import logging
+
+    from worker.pipeline.page_outline import generate_page_outline
+    from worker.pipeline.wiki_planner import WikiPageSpec
+
+    spec = WikiPageSpec(title="X", purpose="y", files=["a.py"])
+    bad = {"sections": [], "key_claims": []}  # empty → validation failure
+    good = {
+        "sections": [
+            {
+                "heading": "Intro",
+                "kind": "prose",
+                "focus": "overview",
+                "diagram": {
+                    "type": "flowchart",
+                    "purpose": "p",
+                    "source_files": ["a.py"],
+                },
+            }
+        ],
+        "key_claims": ["one", "two", "three"],
+    }
+    mock_fast_llm.generate_structured.side_effect = [bad, good]
+
+    with caplog.at_level(logging.WARNING, logger="worker.page_outline"):
+        await generate_page_outline(
+            spec=spec,
+            entity_summaries="",
+            dep_info=None,
+            fast_llm=mock_fast_llm,
+            max_retries=2,
+        )
+
+    retry_logs = [r for r in caplog.records if "page_outline" in r.getMessage()]
+    assert any("attempt" in r.getMessage() for r in retry_logs)
+
+
 async def test_generate_page_outline_retries_on_validation_error():
     from worker.pipeline.page_outline import generate_page_outline
 

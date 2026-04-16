@@ -455,6 +455,55 @@ def test_validate_rejects_too_few_pages():
         validate_wiki_plan(raw, page_range=(5, 20))
 
 
+async def test_generate_outline_logs_each_validation_failure(caplog):
+    """Each retry of _generate_outline must log a WARNING with the error."""
+    import logging
+    from unittest.mock import AsyncMock
+
+    from worker.pipeline.wiki_planner import _generate_outline
+
+    # First two calls return an invalid outline (duplicate slug → validation fails),
+    # third call returns a valid outline.
+    bad = {
+        "pages": [
+            {"title": "Overview", "purpose": "a"},
+            {"title": "overview", "purpose": "b"},  # dup slug
+        ]
+    }
+    good = {
+        "pages": [
+            {"title": "Overview", "purpose": "Top"},
+            {"title": "Core", "purpose": "Core logic", "parent": "Overview"},
+            {"title": "Utils", "purpose": "Helpers", "parent": "Overview"},
+            {"title": "API", "purpose": "Routes", "parent": "Overview"},
+            {"title": "Tests", "purpose": "Tests", "parent": "Overview"},
+        ]
+    }
+    llm = AsyncMock()
+    llm.generate_structured.side_effect = [bad, bad, good]
+
+    with caplog.at_level(logging.WARNING, logger="worker.planner"):
+        pages = await _generate_outline(
+            file_summary="files",
+            repo_name="repo",
+            llm=llm,
+            readme=None,
+            dep_info=None,
+            clusters=None,
+            page_range=(5, 20),
+            system="sys",
+            on_retry=None,
+            max_retries=3,
+            total_file_count=50,
+        )
+
+    assert len(pages) == 5
+    retry_logs = [r for r in caplog.records if "wiki_planner.outline" in r.getMessage()]
+    assert len(retry_logs) == 2  # two failures logged, third succeeded
+    assert all("attempt" in r.getMessage() for r in retry_logs)
+    assert all("Duplicate page slugs" in r.getMessage() for r in retry_logs)
+
+
 async def test_generate_wiki_plan_two_phase(mock_llm):
     """generate_wiki_plan uses two-phase planning."""
     # Phase 1 returns outline, Phase 2 returns assignments
@@ -491,3 +540,137 @@ async def test_generate_wiki_plan_two_phase(mock_llm):
     assert plan.pages[titles.index("Overview")].files == ["main.py"]
     assert plan.pages[titles.index("Models")].files == ["models.py"]
     assert plan.pages[titles.index("Utilities")].files == ["utils.py"]
+
+
+async def test_assign_files_logs_each_validation_failure_and_fallback(caplog):
+    """_assign_files must log each retry AND the fallback invocation.
+
+    With max_retries=2, the batched path does 2 attempts (1 initial + 1 retry)
+    before falling back to directory clustering, so we expect 1 WARNING retry
+    log and 1 ERROR fallback log.
+    """
+    import logging
+    from unittest.mock import AsyncMock
+
+    from worker.pipeline.wiki_planner import _assign_files
+
+    outline = [
+        {"title": "Overview", "purpose": "top"},
+        {"title": "Core", "purpose": "core"},
+    ]
+    many = [f"f{i}.py" for i in range(30)]
+    stuffed = {"assignments": [{"file": f, "page_title": "Overview"} for f in many]}
+    llm = AsyncMock()
+    # Two batched calls will both return a stuffed response that fails validation.
+    llm.generate_structured.side_effect = [stuffed, stuffed]
+
+    with caplog.at_level(logging.WARNING, logger="worker.planner"):
+        result = await _assign_files(
+            outline=outline,
+            file_summary="files",
+            dep_info=None,
+            all_files=many,
+            llm=llm,
+            system="sys",
+            on_retry=None,
+            max_retries=2,
+        )
+
+    retry_logs = [
+        r
+        for r in caplog.records
+        if "wiki_planner.assign_files" in r.getMessage()
+        and "attempt" in r.getMessage()
+        and r.levelno == logging.WARNING
+    ]
+    fallback_logs = [
+        r
+        for r in caplog.records
+        if "wiki_planner.assign_files" in r.getMessage() and r.levelno == logging.ERROR
+    ]
+    assert len(retry_logs) == 1, f"expected 1 retry log, got {len(retry_logs)}"
+    assert len(fallback_logs) == 1, (
+        f"expected 1 fallback error, got {len(fallback_logs)}"
+    )
+    # Result is still returned so pipeline does not crash
+    assert sum(len(v) for v in result.values()) == len(many)
+
+
+async def test_assign_files_fallback_uses_directory_clustering(caplog):
+    """When all LLM retries fail, the fallback must produce
+    directory-clustered output, not alphabetic round-robin."""
+    from unittest.mock import AsyncMock
+
+    from worker.pipeline.wiki_planner import _assign_files
+
+    outline = [
+        {"title": "Worker Pipeline", "purpose": "Pipeline stages."},
+        {"title": "API Layer", "purpose": "REST and WebSocket endpoints."},
+    ]
+    all_files = [
+        "worker/pipeline/wiki_planner.py",
+        "worker/pipeline/page_generator.py",
+        "worker/pipeline/ast_analysis.py",
+        "api/routers/repos.py",
+        "api/routers/wiki.py",
+    ]
+
+    # LLM raises ValueError every time — triggers fallback
+    llm = AsyncMock()
+    llm.generate_structured.side_effect = ValueError("always bad")
+
+    result = await _assign_files(
+        outline=outline,
+        file_summary="files",
+        dep_info=None,
+        all_files=all_files,
+        llm=llm,
+        system="sys",
+        on_retry=None,
+        max_retries=2,
+    )
+
+    # All worker/pipeline files end up on Worker Pipeline
+    assert all(
+        f in result["Worker Pipeline"]
+        for f in all_files
+        if f.startswith("worker/pipeline/")
+    )
+    # All api files end up on API Layer
+    assert all(f in result["API Layer"] for f in all_files if f.startswith("api/"))
+
+
+async def test_assign_files_uses_batched_path(monkeypatch):
+    """_assign_files must delegate to _assign_files_in_batches."""
+    from unittest.mock import AsyncMock
+
+    from worker.pipeline import wiki_planner as wp
+
+    called = {}
+
+    async def fake_batched(**kwargs):
+        called["hit"] = True
+        titles = [page["title"] for page in kwargs["outline"]]
+        files = list(kwargs["all_files"])
+        return {titles[0]: [files[0]], titles[1]: [files[1]]}
+
+    monkeypatch.setattr(wp, "_assign_files_in_batches", fake_batched)
+
+    llm = AsyncMock()
+    outline = [
+        {"title": "One", "purpose": "p1"},
+        {"title": "Two", "purpose": "p2"},
+    ]
+    result = await wp._assign_files(
+        outline=outline,
+        file_summary="fs",
+        dep_info=None,
+        all_files=["a.py", "b.py"],
+        llm=llm,
+        system="sys",
+        on_retry=None,
+    )
+
+    assert called.get("hit") is True
+    assert "a.py" in result["One"]
+    assert "b.py" in result["Two"]

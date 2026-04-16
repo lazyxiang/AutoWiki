@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from worker.llm.base import LLMProvider
 from worker.llm.prompt_segment import PromptSegment
+from worker.pipeline.pipeline_logging import log_final_failure, log_validation_retry
 from worker.utils.retry import OnRetryCallback
 
 if TYPE_CHECKING:
@@ -274,15 +275,23 @@ async def generate_page_outline(
             return validate_outline(raw, page_files=spec.files or [])
         except (ValueError, json.JSONDecodeError, KeyError) as e:
             if attempt < max_retries:
+                log_validation_retry(
+                    logger,
+                    stage="page_outline",
+                    attempt=attempt + 1,
+                    max_retries=max_retries + 1,
+                    exc=e,
+                    context={"page_title": spec.title, "files": len(spec.files or [])},
+                )
                 error_seg = PromptSegment(
                     text=f"\n\nPrevious attempt failed: {e}. Fix and retry."
                 )
                 segments = list(segments) + [error_seg]
             else:
-                logger.warning(
-                    "Outline generation failed after %d retries for '%s': %s",
-                    max_retries + 1,
-                    spec.title,
-                    e,
+                log_final_failure(
+                    logger,
+                    stage="page_outline",
+                    exc=e,
+                    context={"page_title": spec.title, "files": len(spec.files or [])},
                 )
                 raise
