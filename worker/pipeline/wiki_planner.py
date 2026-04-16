@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from worker.llm.base import LLMProvider
+from worker.llm.prompt_segment import PromptSegment
 from worker.pipeline.language import get_planner_language_instruction
 from worker.pipeline.pipeline_logging import log_final_failure, log_validation_retry
 from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
@@ -422,6 +423,63 @@ def _build_assignment_prompt(
     )
 
     return "\n\n".join(sections)
+
+
+def _build_batch_assignment_system(
+    outline: list[dict],
+    file_summary: str,
+    dep_info: str | None,
+) -> list[PromptSegment]:
+    """Build the cacheable *system* portion of a batched assignment call.
+
+    The system turn contains the full repository context — outline,
+    file summaries, and dependency info — which is identical for every
+    batch in a single planning run.  Marking it cacheable lets Anthropic's
+    ``ephemeral`` cache amortise the tokens across batches so only the
+    first batch pays full cost.
+
+    Non-Anthropic providers (OpenAI, Gemini, Ollama) ignore the cache
+    hint and simply concatenate the segments into the system prompt.
+    """
+    outline_json = json.dumps(outline, indent=2)
+    parts: list[str] = [
+        "You are assigning source files to wiki pages.",
+        "",
+        f"## Wiki page structure:\n{outline_json}",
+        "",
+        f"## File summaries:\n{file_summary}",
+    ]
+    if dep_info:
+        parts.append("")
+        parts.append(f"## Dependency relationships:\n{dep_info}")
+    return [PromptSegment(text="\n".join(parts), cacheable=True)]
+
+
+def _build_batch_assignment_user(
+    batch_files: list[str],
+    outline_titles: list[str],
+) -> PromptSegment:
+    """Build the per-batch *user* segment.
+
+    Contains only the batch-specific content — the file list to assign and
+    a reminder of valid page titles — so the system segment's cache stays
+    valid across batches.
+    """
+    titles_str = ", ".join(f'"{t}"' for t in outline_titles)
+    files_str = "\n".join(f"- {f}" for f in batch_files)
+    schema_json = json.dumps(_ASSIGNMENT_SCHEMA, indent=2)
+    text = (
+        f"Assign each of the following {len(batch_files)} files to one of the "
+        f"page titles below.  Each ``page_title`` MUST exactly match one of: "
+        f"{titles_str}.\n\n"
+        f"Files to assign:\n{files_str}\n\n"
+        "Rules:\n"
+        "- Every listed file must appear in the output.\n"
+        "- Choose the page whose purpose best matches the file's semantic role.\n"
+        "- Files that import each other usually belong on the same page.\n\n"
+        f"Output JSON matching this schema:\n{schema_json}"
+    )
+    return PromptSegment(text=text, cacheable=False)
 
 
 def _validate_outline_structure(
