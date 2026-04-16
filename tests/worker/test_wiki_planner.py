@@ -20,6 +20,20 @@ def _make_file_analysis():
                 function_count=0,
                 summary="",
             ),
+            "models.py": FileInfo(
+                rel_path="models.py",
+                entities=[],
+                class_count=0,
+                function_count=0,
+                summary="",
+            ),
+            "utils.py": FileInfo(
+                rel_path="utils.py",
+                entities=[],
+                class_count=0,
+                function_count=0,
+                summary="",
+            ),
         }
     )
 
@@ -78,7 +92,7 @@ def test_validate_wiki_plan_invalid_parent_dropped():
     assert details_page.parent is None
 
 
-def test_validate_wiki_plan_orphan_files():
+def test_validate_rejects_critical_orphan_files():
     raw = {
         "pages": [
             {
@@ -88,11 +102,16 @@ def test_validate_wiki_plan_orphan_files():
             }
         ]
     }
-    all_files = ["main.py", "orphan.py", "also_orphan.py"]
-    plan = validate_wiki_plan(raw, all_files=all_files)
-    overview = plan.pages[0]
-    assert "orphan.py" in overview.files
-    assert "also_orphan.py" in overview.files
+    # a/core.py is critical, should fail
+    all_files_fail = ["main.py", "a/core.py"]
+    with pytest.raises(ValueError, match="core source files are missing"):
+        validate_wiki_plan(raw, all_files=all_files_fail)
+
+    # tests/test_a.py is low-priority, should pass (ignored from plan)
+    all_files_pass = ["main.py", "tests/test_a.py"]
+    plan = validate_wiki_plan(raw, all_files=all_files_pass)
+    assert len(plan.pages) == 1
+    assert "tests/test_a.py" not in plan.pages[0].files
 
 
 def test_wiki_page_spec_slug_unicode():
@@ -365,29 +384,47 @@ async def test_assign_files_orphans_distributed(mock_llm):
     assert "orphan.py" in result["Overview"]
 
 
-def test_validate_rejects_page_over_25_files():
+def test_validate_rejects_page_over_50_files():
     raw = {
         "pages": [
             {
                 "title": "Mega Page",
                 "purpose": "Too many files.",
-                "files": [f"f{i}.py" for i in range(30)],
+                "files": [f"f{i}.py" for i in range(55)],
             },
         ]
     }
-    with pytest.raises(ValueError, match="split into focused sub-pages"):
+    with pytest.raises(ValueError, match="is overloaded"):
         validate_wiki_plan(raw)
 
 
-def test_validate_rejects_empty_non_overview_page():
+def test_validate_rejects_empty_non_overview_leaf_page():
     raw = {
         "pages": [
             {"title": "Overview", "purpose": "Top.", "files": ["main.py"]},
-            {"title": "Empty Page", "purpose": "Nothing here.", "files": []},
+            {"title": "Empty Leaf", "purpose": "Nothing here.", "files": []},
         ]
     }
-    with pytest.raises(ValueError, match="no files assigned"):
+    with pytest.raises(ValueError, match="has no files assigned"):
         validate_wiki_plan(raw)
+
+
+def test_validate_allows_empty_parent_page():
+    """Empty pages are allowed if they have children."""
+    raw = {
+        "pages": [
+            {"title": "Overview", "purpose": "Top.", "files": ["main.py"]},
+            {"title": "Category", "purpose": "A container.", "files": []},
+            {
+                "title": "Child",
+                "purpose": ".",
+                "parent": "Category",
+                "files": ["child.py"],
+            },
+        ]
+    }
+    plan = validate_wiki_plan(raw)
+    assert len(plan.pages) == 3
 
 
 def test_validate_allows_empty_overview_page():
@@ -542,12 +579,10 @@ async def test_generate_wiki_plan_two_phase(mock_llm):
     assert plan.pages[titles.index("Utilities")].files == ["utils.py"]
 
 
-async def test_assign_files_logs_each_validation_failure_and_fallback(caplog):
-    """_assign_files must log each retry AND the fallback invocation.
+async def test_assign_files_logs_each_validation_failure_and_feedback(caplog):
+    """_assign_files must log each retry AND throw on final failure.
 
-    With max_retries=2, the batched path does 2 attempts (1 initial + 1 retry)
-    before falling back to directory clustering, so we expect 1 WARNING retry
-    log and 1 ERROR fallback log.
+    With max_retries=2, the batched path does 2 attempts before throwing.
     """
     import logging
     from unittest.mock import AsyncMock
@@ -558,55 +593,58 @@ async def test_assign_files_logs_each_validation_failure_and_fallback(caplog):
         {"title": "Overview", "purpose": "top"},
         {"title": "Core", "purpose": "core"},
     ]
-    many = [f"f{i}.py" for i in range(30)]
-    stuffed = {"assignments": [{"file": f, "page_title": "Overview"} for f in many]}
+    # stuffed assignment: only Overview has files, Core is empty (fails validation)
+    stuffed = {"assignments": [{"file": "main.py", "primary_page": "Overview"}]}
     llm = AsyncMock()
     # Two batched calls will both return a stuffed response that fails validation.
     llm.generate_structured.side_effect = [stuffed, stuffed]
 
-    with caplog.at_level(logging.WARNING, logger="worker.planner"):
-        result, _ = await _assign_files(
-            outline=outline,
-            file_summary="files",
-            dep_info=None,
-            all_files=many,
-            llm=llm,
-            system="sys",
-            on_retry=None,
-            max_retries=2,
-        )
+    with caplog.at_level(logging.ERROR, logger="worker.planner"):
+        with pytest.raises(ValueError, match="Failed to assign files"):
+            await _assign_files(
+                outline=outline,
+                file_summary="files",
+                dep_info=None,
+                all_files=["main.py"],
+                llm=llm,
+                system="sys",
+                on_retry=None,
+                max_retries=2,
+            )
 
     retry_logs = [
         r
         for r in caplog.records
         if "wiki_planner.assign_files" in r.getMessage()
         and "attempt" in r.getMessage()
-        and r.levelno == logging.WARNING
+        and r.levelno == logging.ERROR
     ]
     fallback_logs = [
         r
         for r in caplog.records
-        if "wiki_planner.assign_files" in r.getMessage() and r.levelno == logging.ERROR
+        if "wiki_planner.assign_files" in r.getMessage()
+        and "all retries exhausted" in r.getMessage()
+        and r.levelno == logging.ERROR
     ]
     assert len(retry_logs) == 1, f"expected 1 retry log, got {len(retry_logs)}"
     assert len(fallback_logs) == 1, (
         f"expected 1 fallback error, got {len(fallback_logs)}"
     )
-    # Result is still returned so pipeline does not crash
-    assert sum(len(v) for v in result.values()) == len(many)
 
 
-async def test_assign_files_fallback_uses_directory_clustering(caplog):
-    """When all LLM retries fail, the fallback must produce
-    directory-clustered output, not alphabetic round-robin."""
-    from unittest.mock import AsyncMock
+async def test_generate_wiki_plan_phase2_recovery(mock_llm):
+    """When Phase 2 (assignment) fails, generate_wiki_plan must recover
+    using directory-clustering while maintaining the LLM outline."""
+    from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
+    from worker.pipeline.wiki_planner import generate_wiki_plan
 
-    from worker.pipeline.wiki_planner import _assign_files
-
-    outline = [
-        {"title": "Worker Pipeline", "purpose": "Pipeline stages."},
-        {"title": "API Layer", "purpose": "REST and WebSocket endpoints."},
-    ]
+    outline = {
+        "pages": [
+            {"title": "Worker Pipeline", "purpose": "Pipeline stages."},
+            {"title": "API Layer", "purpose": "REST and WebSocket endpoints."},
+            {"title": "Overview", "purpose": "Main entrance."},
+        ]
+    }
     all_files = [
         "worker/pipeline/wiki_planner.py",
         "worker/pipeline/page_generator.py",
@@ -614,30 +652,44 @@ async def test_assign_files_fallback_uses_directory_clustering(caplog):
         "api/routers/repos.py",
         "api/routers/wiki.py",
     ]
-
-    # LLM raises ValueError every time — triggers fallback
-    llm = AsyncMock()
-    llm.generate_structured.side_effect = ValueError("always bad")
-
-    result, _ = await _assign_files(
-        outline=outline,
-        file_summary="files",
-        dep_info=None,
-        all_files=all_files,
-        llm=llm,
-        system="sys",
-        on_retry=None,
-        max_retries=2,
+    file_analysis = FileAnalysis(
+        files={
+            f: FileInfo(
+                rel_path=f, entities=[], class_count=0, function_count=0, summary=""
+            )
+            for f in all_files
+        }
     )
 
-    # All worker/pipeline files end up on Worker Pipeline
+    # mock_llm.generate_structured will be called for Phase 1 (Outline)
+    # and Phase 2 (Assignment). We make Phase 2 fail.
+    # The first call (Outline) succeeds. Subsequent calls (Assignment batches) fail.
+    mock_llm.generate_structured.side_effect = [
+        outline,
+        ValueError("Phase 2 always fails"),
+        ValueError("Phase 2 always fails"),
+    ]
+
+    plan = await generate_wiki_plan(
+        file_analysis,
+        repo_name="testrepo",
+        llm=mock_llm,
+        max_retries=1,  # 1 retry + 1 initial = 2 attempts
+    )
+
+    # The outline from Phase 1 is preserved
+    titles = [p.title for p in plan.pages]
+    assert "Worker Pipeline" in titles
+    assert "API Layer" in titles
+
+    # But files are assigned via heuristic (directory clustering)
+    pipeline_page = next(p for p in plan.pages if p.title == "Worker Pipeline")
+    api_page = next(p for p in plan.pages if p.title == "API Layer")
+
     assert all(
-        f in result["Worker Pipeline"]
-        for f in all_files
-        if f.startswith("worker/pipeline/")
+        f in pipeline_page.files for f in all_files if f.startswith("worker/pipeline/")
     )
-    # All api files end up on API Layer
-    assert all(f in result["API Layer"] for f in all_files if f.startswith("api/"))
+    assert all(f in api_page.files for f in all_files if f.startswith("api/"))
 
 
 async def test_assign_files_uses_batched_path(monkeypatch):

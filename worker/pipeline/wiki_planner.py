@@ -44,6 +44,19 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("worker.planner")
 
+#: Maximum number of files allowed on a single wiki page to ensure focus.
+MAX_FILES_PER_PAGE = 50
+
+
+class WikiPlannerError(Exception):
+    """Critical error in wiki planner that should stop the generation task.
+
+    This error indicates that Phase 1 (Outline generation) failed completely
+    after all retries, or that a user-steering input is unrecoverably invalid.
+    Surfacing this error allows the worker to stop the job and report the
+    failure to the frontend.
+    """
+
 
 def _slugify_title(text: str) -> str:
     """Create a URL-safe slug from a title, supporting Unicode characters.
@@ -498,6 +511,7 @@ def _build_batch_assignment_system(
 def _build_batch_assignment_user(
     batch_files: list[str],
     outline_titles: list[str],
+    last_error: str | None = None,
 ) -> PromptSegment:
     """Build the per-batch *user* segment.
 
@@ -522,8 +536,11 @@ def _build_batch_assignment_user(
         "- Use secondary_pages sparingly — only for genuinely shared "
         "utilities referenced from two or three distinct subsystems.\n"
         "- Files that import each other usually share the same primary_page.\n\n"
-        f"Output JSON matching this schema:\n{schema_json}"
     )
+    if last_error:
+        text += f"CRITICAL: Previous attempt failed with error: {last_error}\n\n"
+
+    text += f"Output JSON matching this schema:\n{schema_json}"
     return PromptSegment(text=text, cacheable=False)
 
 
@@ -602,24 +619,32 @@ def _validate_assignments(
     assignment-level errors are caught and retried in Phase 2.
 
     Checks:
-    - No page has more than 25 files (over-stuffed pages make poor wiki pages).
-    - No non-overview page has zero files (empty pages add noise).
+    - No page has more than 50 files.
+    - No non-overview page has zero files unless it is a parent.
 
     Raises:
         ValueError: Describing the first constraint that is violated.
     """
+    all_parents = {p.get("parent") for p in outline if p.get("parent")}
     for page in outline:
         title = page["title"]
         files = result.get(title, [])
-        if len(files) > 25:
+        if len(files) > MAX_FILES_PER_PAGE:
+            sample = files[:3]
             raise ValueError(
-                f"Page '{title}' has {len(files)} files — "
-                "split into focused sub-pages of ≤25 files each"
+                f"VALIDATION_FAILURE: Page '{title}' is overloaded "
+                f"({len(files)} > {MAX_FILES_PER_PAGE} files). "
+                f"Example files: {sample}. "
+                "Suggestion: Split this page into 2-3 sub-pages."
             )
-        if "overview" not in title.lower() and len(files) == 0:
+
+        is_overview = "overview" in title.lower()
+        is_parent = title in all_parents
+        if not (is_overview or is_parent or len(files) > 0):
             raise ValueError(
-                f"Page '{title}' has no files assigned — "
-                "either assign files or remove it"
+                f"VALIDATION_FAILURE: Page '{title}' has no files assigned. "
+                "Every page must either own source files or serve as a parent "
+                "category. Suggestion: Assign relevant files or remove this page."
             )
 
 
@@ -676,31 +701,59 @@ async def _generate_outline(
             _validate_outline_structure(pages, page_range, total_file_count)
             return pages
         except (ValueError, json.JSONDecodeError, KeyError) as e:
-            log_validation_retry(
-                logger,
-                stage="wiki_planner.outline",
-                attempt=attempt + 1,
-                max_retries=max_retries,
-                exc=e,
-                context={
-                    "total_files": total_file_count,
-                    "page_range": f"{page_range[0]}-{page_range[1]}",
-                },
-            )
             if attempt < max_retries - 1:
-                prompt += f"\n\nPrevious attempt failed: {e}. Please fix and retry."
+                log_validation_retry(
+                    logger,
+                    stage="wiki_planner.outline",
+                    attempt=attempt + 1,
+                    max_retries=max_retries,
+                    exc=e,
+                    context={
+                        "total_files": total_file_count,
+                        "page_range": f"{page_range[0]}-{page_range[1]}",
+                    },
+                )
+                prompt += (
+                    f"\n\nPrevious attempt failed with error: {e}. "
+                    "Please fix and retry."
+                )
+            else:
+                log_final_failure(
+                    logger,
+                    stage="wiki_planner.outline",
+                    exc=e,
+                    context={
+                        "total_files": total_file_count,
+                        "max_retries": max_retries,
+                    },
+                )
+                raise WikiPlannerError(
+                    f"Failed to generate a valid wiki outline: {e}"
+                ) from e
 
-    exc = ValueError("Failed to generate outline after all retries")
-    log_final_failure(
-        logger,
-        stage="wiki_planner.outline",
-        exc=exc,
-        context={
-            "total_files": total_file_count,
-            "max_retries": max_retries,
-        },
-    )
-    raise exc
+
+def _is_high_priority_file(path: str) -> bool:
+    """Determine if a file is a 'core' source file that MUST be assigned to a page.
+
+    To maintain a high-quality, focused wiki, we only enforce assignment for
+    files that contain project-specific business or architectural logic.
+    Low-priority files (tests, specs, documentation, examples, and root-level
+    configs) are allowed to be omitted from the wiki plan.
+
+    Args:
+        path: Repository-relative path to the file.
+
+    Returns:
+        True if the file is 'core' logic, False if it is low-priority residue.
+    """
+    lower = path.lower()
+    # Ignore common test/doc/example patterns
+    if any(p in lower for p in ["test", "spec", "docs/", "example", "bench", "mock"]):
+        return False
+    # Ignore dotfiles and files at the repository root (usually configs)
+    if lower.startswith(".") or "/" not in path:
+        return False
+    return True
 
 
 def _tokenize(text: str) -> set[str]:
@@ -759,9 +812,16 @@ def _directory_cluster_assign(
     name and sample file basenames.  Unmatched files go to the "Overview"
     page if one exists, else to the first outline page.
 
-    When a single page would receive more than 25 files (the per-page cap
-    enforced by :func:`_validate_assignments`), the group is split across
-    all pages whose tokens matched the directory at all.
+    When a single page would receive more than :const:`MAX_FILES_PER_PAGE`
+    files, the group is split across all pages whose tokens matched the
+    directory at all using remaining-capacity filling.
+
+    Args:
+        outline: The wiki outline (list of page dicts).
+        all_files: List of all files to assign.
+
+    Returns:
+        Mapping from page title to list of assigned files.
     """
     page_titles = [p["title"] for p in outline]
     page_tokens: dict[str, set[str]] = {
@@ -796,12 +856,13 @@ def _directory_cluster_assign(
 
         # If the target would exceed the cap, try to split across all pages
         # whose tokens overlap this directory using remaining-capacity filling.
-        if len(result[target]) + len(files) > 25:
+        if len(result[target]) + len(files) > MAX_FILES_PER_PAGE:
             matching_pages = [
                 t for t in page_titles if _tokenize(dir_key) & page_tokens[t]
             ]
             remaining_capacity = {
-                title: max(0, 25 - len(result[title])) for title in matching_pages
+                title: max(0, MAX_FILES_PER_PAGE - len(result[title]))
+                for title in matching_pages
             }
             if len(matching_pages) > 1 and sum(remaining_capacity.values()) >= len(
                 files
@@ -820,6 +881,64 @@ def _directory_cluster_assign(
     return result
 
 
+def _heuristic_recovery_assignment(
+    outline: list[dict],
+    all_files: list[str],
+    partial_assignments: dict[str, list[str]] | None = None,
+) -> dict[str, list[str]]:
+    """Heuristic file assignment used as a fallback for Phase 2 (Assignment).
+
+    This function attempts to maintain a high-quality wiki even when the
+    LLM fails to assign files. It preserves any 'valid' assignments from a
+    partial LLM result (pages that are not empty and not overloaded) and
+    fills the gaps using directory clustering for the remaining files.
+
+    Args:
+        outline: The validated Phase 1 wiki outline.
+        all_files: The full list of files in the repository.
+        partial_assignments: Optional partial results from a failed Phase 2
+            LLM attempt.
+
+    Returns:
+        Mapping from page title to list of assigned files.
+    """
+    valid_assignments: dict[str, list[str]] = {}
+    assigned_files: set[str] = set()
+
+    # 1. Take what we can from LLM's partial output (only keep valid pages)
+    if partial_assignments:
+        all_parents = {p.get("parent") for p in outline if p.get("parent")}
+        for page in outline:
+            title = page["title"]
+            files = partial_assignments.get(title, [])
+            # Simple validity check for a single page
+            is_valid = (
+                0 < len(files) <= MAX_FILES_PER_PAGE
+                or "overview" in title.lower()
+                or title in all_parents
+            )
+            if is_valid:
+                valid_assignments[title] = list(files)
+                assigned_files.update(files)
+
+    # 2. Heuristic assignment for everything else (Orphans + Overloaded)
+    remainder = [f for f in all_files if f not in assigned_files]
+    if remainder:
+        recovery = _directory_cluster_assign(outline, remainder)
+        for title, files in recovery.items():
+            valid_assignments.setdefault(title, []).extend(files)
+
+    # Final safety: deduplicate and ensure every title exists
+    for p in outline:
+        title = p["title"]
+        if title not in valid_assignments:
+            valid_assignments[title] = []
+        else:
+            valid_assignments[title] = list(dict.fromkeys(valid_assignments[title]))
+
+    return valid_assignments
+
+
 _BATCH_SIZE_DEFAULT = 40
 
 
@@ -833,22 +952,13 @@ async def _assign_files_in_batches(
     on_retry: OnRetryCallback | None,
     batch_size: int = _BATCH_SIZE_DEFAULT,
     max_cleanup_retries: int = 2,
+    last_error: str | None = None,
 ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
-    """Phase 2 batched assignment core.
+    """Phase 2 execution: Assign every file to an existing outline.
 
-    Returns a tuple ``(primary, secondary)`` where ``primary[title]`` is
-    the list of files *owned* by that page and ``secondary[title]`` is the
-    list of files *referenced* by that page but owned elsewhere.
-
-    Splits *all_files* into chunks of *batch_size* and invokes
-    ``llm.generate_structured`` once per batch.  The system turn — which
-    carries the large outline + file summary + dep info — is built once
-    and reused across every call so Anthropic's ``ephemeral`` cache
-    amortises the context tokens.
-
-    Partial results are merged across batches.  Any files the LLM fails
-    to assign are re-batched for up to *max_cleanup_retries* cleanup rounds
-    before being handed off to directory clustering for the residue.
+    Splits the repository into batches and assigns each file in parallel
+    using the provided LLM and cacheable system segment. Partial results
+    are merged across batches.
     """
     import asyncio
 
@@ -871,6 +981,7 @@ async def _assign_files_in_batches(
         user_segment = _build_batch_assignment_user(
             batch_files=batch,
             outline_titles=valid_titles,
+            last_error=last_error,
         )
         try:
             raw = await async_retry(
@@ -966,18 +1077,14 @@ async def _assign_files(
     _extra_context: str | None = None,
     fast_llm: LLMProvider | None = None,
 ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
-    """Phase 2: Assign every file to a page via batched LLM calls.
+    """Phase 2 execution: Assign every file via batched LLM calls with feedback.
 
-    Returns ``(primary, secondary)`` — see :func:`_assign_files_in_batches`.
-    Delegates to that function, which splits the file list into ≤40-file
-    batches and reuses a cacheable system segment across batches.
-    ``fast_llm`` is preferred for the batched call because classification-
-    style assignments scale well on faster models.  Validation is performed
-    on the primary result, and validation failures trigger up to
-    ``max_retries`` attempts before falling back to directory clustering.
+    Validation failures trigger retries where the validation error is passed
+    back to the LLM as feedback in the prompt.
     """
     preferred_llm = fast_llm or llm
-    empty_secondary: dict[str, list[str]] = {p["title"]: [] for p in outline}
+    last_error: str | None = _extra_context
+    last_result: dict[str, list[str]] | None = None
 
     for attempt in range(1, max_retries + 1):
         current_llm = preferred_llm if attempt == 1 else llm
@@ -990,10 +1097,13 @@ async def _assign_files(
                 llm=current_llm,
                 system=system,
                 on_retry=on_retry,
+                last_error=last_error,
             )
+            last_result = result
             _validate_assignments(result, outline)
             return result, secondary
         except ValueError as exc:
+            last_error = str(exc)
             if attempt < max_retries:
                 log_validation_retry(
                     logger,
@@ -1017,8 +1127,12 @@ async def _assign_files(
                     },
                 )
 
-    # Final fallback: directory clustering (locality-preserving), no secondary
-    return _directory_cluster_assign(outline, all_files), empty_secondary
+    # Final fallback if all LLM attempts fail: throw error with partial result
+    # to trigger heuristic recovery.
+    err = ValueError(f"Failed to assign files after {max_retries} attempts: {last_error}")
+    err.partial_assignments = last_result
+    raise err
+
 
 
 def validate_wiki_plan(
@@ -1118,37 +1232,50 @@ def validate_wiki_plan(
             )
         )
 
-    # Fix orphaned files: any file not assigned to any page goes to Overview
+    # ── Semantic validation ──────────────────────────────────────────────
+
+    # Check for unassigned files (Orphans) — only critical files trigger failure
     if all_files:
         assigned = {f for page in pages for f in page.files}
         assigned |= {f for page in pages for f in page.secondary_files}
         orphans = [f for f in all_files if f not in assigned]
-        if orphans:
-            # Find overview page or use first page
-            overview = next(
-                (p for p in pages if p.title.lower() == "overview"),
-                pages[0] if pages else None,
+        # Critical orphans: ignore tests, docs, root-configs, etc.
+        critical_orphans = [f for f in orphans if _is_high_priority_file(f)]
+        if critical_orphans:
+            sample = critical_orphans[:3]
+            raise ValueError(
+                f"VALIDATION_FAILURE: {len(critical_orphans)} core source files "
+                f"are missing from the wiki plan. Example missing files: {sample}. "
+                "Every core source file must be assigned to a primary page."
             )
-            if overview:
-                overview.files = list(overview.files) + orphans
-
-    # ── Semantic validation ──────────────────────────────────────────────
+        elif orphans:
+            logger.info(
+                "Skipping %d low-priority files (tests/configs/etc.) from the wiki",
+                len(orphans),
+            )
 
     # Max files per page
     for p in pages:
-        if len(p.files) > 25:
+        if len(p.files) > MAX_FILES_PER_PAGE:
+            sample = p.files[:3]
             raise ValueError(
-                f"Page '{p.title}' has {len(p.files)} files — "
-                "split into focused sub-pages of ≤25 files each"
+                f"VALIDATION_FAILURE: Page '{p.title}' is overloaded "
+                f"({len(p.files)} > {MAX_FILES_PER_PAGE} files). "
+                f"Example files: {sample}. "
+                "Suggestion: Split into 2-3 more focused sub-pages."
             )
 
-    # No empty non-overview pages
+    # No empty non-overview pages unless they are parents
+    all_parents = {p.parent for p in pages if p.parent}
     for p in pages:
         is_overview = "overview" in p.title.lower()
-        if not is_overview and len(p.files) == 0:
+        is_parent = p.title in all_parents
+        if not (is_overview or is_parent or len(p.files) > 0):
             raise ValueError(
-                f"Page '{p.title}' has no files assigned — "
-                "either assign files or remove it"
+                f"VALIDATION_FAILURE: Page '{p.title}' has no files assigned. "
+                "Every page must either own source files or serve as a parent "
+                "category for other pages. Suggestion: Assign relevant files "
+                "or remove this page."
             )
 
     # Hierarchy depth check
@@ -1347,24 +1474,43 @@ async def generate_wiki_plan(
             total_file_count=len(all_files),
             anchors_block=anchors_block,
         )
-    except ValueError:
-        return _fallback_plan(repo_name, all_files, clusters)
+    except WikiPlannerError as exc:
+        # Phase 1 failure is critical — stop the task
+        logger.error("Phase 1 critical failure: %s", exc)
+        raise exc
+    except Exception as exc:
+        # Unexpected errors also stop the task in Phase 1
+        logger.error("Phase 1 unexpected failure: %s", exc)
+        raise WikiPlannerError(f"Outline generation failed: {exc}") from exc
 
     if fixture_recorder is not None:
         fixture_recorder.record_outline(outline)
 
     # Phase 2: Assign files + validate assignments (fast_llm for classification task)
-    primary_assignments, secondary_assignments = await _assign_files(
-        outline=outline,
-        file_summary=file_summary,
-        dep_info=dep_info,
-        all_files=all_files,
-        llm=llm,
-        system=system,
-        on_retry=on_retry,
-        max_retries=max_retries,
-        fast_llm=fast_llm,
-    )
+    try:
+        primary_assignments, secondary_assignments = await _assign_files(
+            outline=outline,
+            file_summary=file_summary,
+            dep_info=dep_info,
+            all_files=all_files,
+            llm=llm,
+            system=system,
+            on_retry=on_retry,
+            max_retries=max_retries,
+            fast_llm=fast_llm,
+        )
+    except Exception as exc:
+        # Phase 2 failure — trigger heuristic recovery while keeping the outline.
+        # We attempt a 'partial heuristic' recovery if some assignments are
+        # available on the exception object; otherwise we do a full heuristic.
+        partial = getattr(exc, "partial_assignments", None)
+        logger.warning(
+            "Phase 2 LLM assignment failed: %s — falling back to %s recovery",
+            exc,
+            "partial heuristic" if partial else "full heuristic",
+        )
+        primary_assignments = _heuristic_recovery_assignment(outline, all_files, partial)
+        secondary_assignments = {p["title"]: [] for p in outline}
 
     if fixture_recorder is not None:
         fixture_recorder.record_assignments(primary_assignments, secondary_assignments)
@@ -1394,45 +1540,6 @@ async def generate_wiki_plan(
             fixture_recorder.record_wiki_plan(plan.to_internal_json())
         return plan
     except ValueError as exc:
-        logger.warning("Final wiki plan validation failed: %s — using fallback", exc)
-        return _fallback_plan(repo_name, all_files, clusters)
-
-
-def _fallback_plan(
-    repo_name: str,
-    all_files: list[str],
-    clusters: list[list[str]] | None,
-) -> WikiPlan:
-    """Build a flat cluster-based fallback plan when LLM planning fails."""
-    fallback_pages = [
-        WikiPageSpec(
-            title="Overview",
-            purpose=(
-                f"High-level overview of the {repo_name} project "
-                "architecture and components."
-            ),
-            files=[],
-        )
-    ]
-    if clusters:
-        assigned: set[str] = set()
-        page_num = 1
-        for cluster in clusters:
-            for offset in range(0, max(1, len(cluster)), 20):
-                chunk = cluster[offset : offset + 20]
-                if not chunk:
-                    continue
-                suffix = f" (part {offset // 20 + 1})" if len(cluster) > 20 else ""
-                fallback_pages.append(
-                    WikiPageSpec(
-                        title=f"Component {page_num}{suffix}",
-                        purpose=f"Documentation for component {page_num}.",
-                        files=chunk,
-                    )
-                )
-                assigned.update(chunk)
-            page_num += 1
-        fallback_pages[0].files = [f for f in (all_files or []) if f not in assigned]
-    else:
-        fallback_pages[0].files = list(all_files or [])
-    return WikiPlan(pages=fallback_pages)
+        logger.error("Final wiki plan validation failed after recovery: %s", exc)
+        # If even recovery fails, we MUST throw so the task terminates with an error.
+        raise WikiPlannerError(f"Failed to build a valid wiki plan: {exc}") from exc
