@@ -12,6 +12,7 @@ from typing import Any
 from worker.llm.base import LLMProvider
 from worker.llm.prompt_segment import PromptSegment
 from worker.pipeline.page_outline import PageOutline
+from worker.pipeline.pipeline_logging import log_final_failure
 from worker.utils.mermaid import sanitize_mermaid_blocks
 from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
 
@@ -179,8 +180,16 @@ async def run_fact_check(
             transient_exceptions=TRANSIENT_EXCEPTIONS,
             on_retry=on_retry,
         )
-    except Exception:
-        logger.warning("Fact-check LLM call failed, treating as pass", exc_info=True)
+    except Exception as exc:
+        log_final_failure(
+            logger,
+            stage="fact_check",
+            exc=exc,
+            context={
+                "outline_sections": len(outline.sections),
+                "key_claims": len(outline.key_claims),
+            },
+        )
         return FactCheckResult(verdict="pass")
 
     return parse_fact_check_result(raw)

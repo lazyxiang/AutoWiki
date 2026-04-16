@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import TYPE_CHECKING, Any
 
 from worker.llm.base import LLMProvider
@@ -13,8 +14,11 @@ from worker.pipeline.page_formatters import (
     _format_entity_details,
 )
 from worker.pipeline.page_outline import PageOutline
+from worker.pipeline.pipeline_logging import log_final_failure
 from worker.utils.mermaid import sanitize_mermaid_blocks
 from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
+
+logger = logging.getLogger("worker.page_draft")
 
 if TYPE_CHECKING:
     from worker.pipeline.page_generator import PageResult
@@ -227,12 +231,21 @@ async def generate_draft(
     )
     system = DRAFT_SYSTEM + get_language_instruction(wiki_language)
 
-    content = await async_retry(
-        llm.generate,
-        segments,
-        system=system,
-        transient_exceptions=TRANSIENT_EXCEPTIONS,
-        on_retry=on_retry,
-    )
+    try:
+        content = await async_retry(
+            llm.generate,
+            segments,
+            system=system,
+            transient_exceptions=TRANSIENT_EXCEPTIONS,
+            on_retry=on_retry,
+        )
+    except Exception as exc:
+        log_final_failure(
+            logger,
+            stage="page_draft",
+            exc=exc,
+            context={"page_title": spec.title, "files": len(spec.files or [])},
+        )
+        raise
 
     return sanitize_mermaid_blocks(content)
