@@ -91,6 +91,9 @@ Default LLM: `claude-sonnet-4-6`. Supported providers: `anthropic`, `openai`, `o
 - **Pipeline observability**: every retry loop over LLM structured-output calls in `worker/pipeline/` must log validation failures via `pipeline_logging.log_validation_retry` and log final fallback invocations via `pipeline_logging.log_final_failure`. Silent `except (ValueError, json.JSONDecodeError, KeyError): pass` is a bug. See `worker/pipeline/pipeline_logging.py`.
 - **Planner fallback semantics**: when `_assign_files` exhausts its retries, it calls `_directory_cluster_assign(outline, all_files)` — a locality-preserving heuristic that scores each file against wiki pages using dir-token overlap (dir tokens ×3, filename tokens ×1) and splits oversized groups (>25 files) across matching pages. This replaces the old silent round-robin that produced random-looking cross-page assignments.
 - **Planner batched assignment**: `_assign_files` delegates to `_assign_files_in_batches`, which splits files into 40-file chunks (`_BATCH_SIZE_DEFAULT`), builds one cacheable `PromptSegment` system message (outline + file summary + dep info) reused across all batches, runs the first batch serially to warm the Anthropic prompt cache, then runs remaining batches in parallel via `asyncio.gather`. Unassigned files after all batches get a cleanup round; residue goes to `_directory_cluster_assign`.
+- **Planner fixture recorder**: set `AUTOWIKI_RECORD_PLANNER_FIXTURES=1` to dump `outline.json`, `assignments.json`, and `wiki_plan.json` under `~/.autowiki/repos/{repo}/fixtures/` during a live run. `autowiki validate-plan` reads only `ast/wiki_plan.json` today — future work can extend it to replay stages from the fixtures without live API calls.
+- **Multi-page assignments (Layer C2)**: `_ASSIGNMENT_SCHEMA` emits `{file, primary_page, secondary_pages: [...≤2]}`. `WikiPageSpec.secondary_files` stores per-page referenced-but-not-owned files; the page generator injects them into the prompt as a "Referenced modules" block but excludes them from the source-files table. `get_affected_pages` returns `AffectedPages(primary=..., secondary=...)` — primary pages regenerate in the current refresh, secondary pages are persisted to `ast/stale_secondary.json` and regenerated in the next refresh cycle.
+- **Outline anchors (Layer C1)**: `generate_wiki_plan` accepts `clone_root` and synthesises three architectural signals from existing artefacts via `worker/pipeline/outline_anchors.py`: a directory tree (≤3 levels, with file counts), up to 25 package-entry docstrings (`__init__.py`, `mod.rs`, `index.ts`), and the `##`/`###` headings of the README. These are injected into the Phase-1 outline prompt under an "Architectural anchors" section to reduce cross-page fragmentation of cohesive subsystems.
 
 ## API Surface
 
@@ -119,6 +122,7 @@ autowiki index github.com/owner/repo [--reuse-index]
 autowiki list
 autowiki serve [--port 3000]
 autowiki research github.com/owner/repo "<question>"
+autowiki validate-plan <repo>       # Offline planner diagnostic — reads ast/wiki_plan.json and reports coverage, page-size distribution, locality scores, and validation status
 autowiki config show
 autowiki config set <key> <value>
 ```
@@ -173,6 +177,8 @@ Non-Docker: `autowiki serve` spawns API + worker + Next.js as subprocesses.
 
 ## Deferred Planner Improvements
 
-- **Layer C1 outline anchors** — embed stable anchor IDs in Phase 1 outline so Phase 2 file-assignment JSON can reference them by ID rather than fuzzy title matching, eliminating misrouting when two pages share similar names
-- **Layer C2 multi-page assignment** — allow a single file to appear in more than one wiki page (e.g. a shared utility referenced in both an overview and a deep-dive); requires changing the `WikiPlan` schema and downstream page generator context builder
-- **Independent stage validation harness** — a CLI command (`autowiki validate-plan <repo>`) that runs the planner in isolation against a saved `wiki_plan.json` and reports assignment coverage, page size distribution, and any validation failures without triggering full generation
+All three items below have been implemented (see `docs/superpowers/plans/2026-04-16-deferred-wiki-planner-robustness.md`):
+
+- **Layer C1 outline anchors** ✅ — `worker/pipeline/outline_anchors.py` surfaces directory tree, package docstrings, and README headings as architectural anchors injected into the Phase-1 outline prompt
+- **Layer C2 multi-page assignment** ✅ — `_ASSIGNMENT_SCHEMA` supports `primary_page` + `secondary_pages`; `WikiPageSpec.secondary_files` carries referenced-but-not-owned files; page generator injects them as "Referenced modules" context; refresh uses `AffectedPages` with eager primary / deferred secondary regeneration
+- **Independent stage validation harness** ✅ — `autowiki validate-plan <repo>` reads `ast/wiki_plan.json` and reports coverage, size distribution, locality scores, and validation failures; `AUTOWIKI_RECORD_PLANNER_FIXTURES=1` records planner fixtures for future offline replay
