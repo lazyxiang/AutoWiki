@@ -24,6 +24,11 @@ def normalize_prompt(prompt: PromptInput) -> list[PromptSegment]:
                     f"got {type(seg).__name__} at index {i}"
                 )
         return prompt
+    if isinstance(prompt, PromptSegment):
+        raise TypeError(
+            "normalize_prompt expects str or List[PromptSegment], "
+            "got a bare PromptSegment — wrap it in a list: [segment]"
+        )
     return [PromptSegment(text=prompt, cacheable=False)]
 
 

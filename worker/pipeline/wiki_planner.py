@@ -875,7 +875,7 @@ async def _assign_files_in_batches(
         try:
             raw = await async_retry(
                 llm.generate_structured,
-                user_segment,
+                [user_segment],
                 schema=_ASSIGNMENT_SCHEMA,
                 system=system_segments,
                 transient_exceptions=TRANSIENT_EXCEPTIONS,

@@ -174,7 +174,7 @@ async def run_fact_check(
     try:
         raw = await async_retry(
             fast_llm.generate_structured,
-            user_segment,
+            [user_segment],
             schema=_FACT_CHECK_SCHEMA,
             system=system_segments,
             transient_exceptions=TRANSIENT_EXCEPTIONS,
