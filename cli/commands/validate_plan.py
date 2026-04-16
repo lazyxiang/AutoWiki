@@ -28,11 +28,11 @@ def _data_dir() -> Path:
     return Path.home() / ".autowiki"
 
 
-def _load_plan(plan_path: Path) -> WikiPlan:
+def _load_plan(plan_path: Path) -> tuple[dict, WikiPlan]:
     data = json.loads(plan_path.read_text())
     pages = [
         WikiPageSpec(
-            title=p["title"],
+            title=p.get("title", "(missing title)"),
             purpose=p.get("purpose", ""),
             parent=p.get("parent"),
             files=p.get("files", []),
@@ -40,7 +40,7 @@ def _load_plan(plan_path: Path) -> WikiPlan:
         )
         for p in data.get("pages", [])
     ]
-    return WikiPlan(repo_notes=data.get("repo_notes", []), pages=pages)
+    return data, WikiPlan(repo_notes=data.get("repo_notes", []), pages=pages)
 
 
 def _percentile(values: list[int], p: float) -> float:
@@ -63,7 +63,7 @@ def validate_plan_cmd(
         typer.echo(f"Error: wiki plan not found at {plan_path}", err=True)
         raise typer.Exit(1)
 
-    plan = _load_plan(plan_path)
+    raw_plan, plan = _load_plan(plan_path)
     total_primary = sum(len(p.files) for p in plan.pages)
     total_secondary = sum(len(p.secondary_files) for p in plan.pages)
     sizes = [len(p.files) for p in plan.pages]
@@ -106,18 +106,7 @@ def validate_plan_cmd(
 
     try:
         validate_wiki_plan(
-            {
-                "pages": [
-                    {
-                        "title": p.title,
-                        "purpose": p.purpose,
-                        "parent": p.parent,
-                        "files": p.files,
-                        "secondary_files": p.secondary_files,
-                    }
-                    for p in plan.pages
-                ]
-            },
+            raw_plan,
         )
         typer.echo("Validation: OK")
     except ValueError as exc:

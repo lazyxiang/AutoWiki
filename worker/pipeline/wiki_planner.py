@@ -1131,10 +1131,11 @@ async def _assign_files(
 
     # Final fallback if all LLM attempts fail: throw error with partial result
     # to trigger heuristic recovery.
-    err = ValueError(f"Failed to assign files after {max_retries} attempts: {last_error}")
+    err = ValueError(
+        f"Failed to assign files after {max_retries} attempts: {last_error}"
+    )
     err.partial_assignments = last_result
     raise err
-
 
 
 def validate_wiki_plan(
@@ -1507,7 +1508,9 @@ async def generate_wiki_plan(
             exc,
             "partial heuristic" if partial else "full heuristic",
         )
-        primary_assignments = _heuristic_recovery_assignment(outline, all_files, partial)
+        primary_assignments = _heuristic_recovery_assignment(
+            outline, all_files, partial
+        )
         secondary_assignments = {p["title"]: [] for p in outline}
 
     if fixture_recorder is not None:
