@@ -763,6 +763,131 @@ def _directory_cluster_assign(
     return result
 
 
+_BATCH_SIZE_DEFAULT = 40
+
+
+async def _assign_files_in_batches(
+    outline: list[dict],
+    file_summary: str,
+    dep_info: str | None,
+    all_files: list[str],
+    llm: LLMProvider,
+    system: str,
+    on_retry: OnRetryCallback | None,
+    batch_size: int = _BATCH_SIZE_DEFAULT,
+    max_cleanup_retries: int = 2,
+) -> dict[str, list[str]]:
+    """Phase 2 batched assignment core.
+
+    Splits *all_files* into chunks of *batch_size* and invokes
+    ``llm.generate_structured`` once per batch.  The system turn — which
+    carries the large outline + file summary + dep info — is built once
+    and reused across every call so Anthropic's ``ephemeral`` cache
+    amortises the context tokens.
+
+    Partial results are merged across batches.  Any files the LLM fails
+    to assign are re-batched for up to *max_cleanup_retries* cleanup rounds
+    before being handed off to directory clustering for the residue.
+    """
+    import asyncio
+
+    valid_titles = [p["title"] for p in outline]
+    valid_titles_set = set(valid_titles)
+    result: dict[str, list[str]] = {t: [] for t in valid_titles}
+    assigned: set[str] = set()
+
+    # Build the cacheable system segment ONCE and reuse across all batches.
+    stage_system_seg = PromptSegment(text=system, cacheable=False)
+    context_segs = _build_batch_assignment_system(
+        outline=outline,
+        file_summary=file_summary,
+        dep_info=dep_info,
+    )
+    system_segments: list[PromptSegment] = [stage_system_seg, *context_segs]
+
+    async def _run_batch(batch: list[str]) -> None:
+        user_segment = _build_batch_assignment_user(
+            batch_files=batch,
+            outline_titles=valid_titles,
+        )
+        try:
+            raw = await async_retry(
+                llm.generate_structured,
+                user_segment,
+                schema=_ASSIGNMENT_SCHEMA,
+                system=system_segments,
+                transient_exceptions=TRANSIENT_EXCEPTIONS,
+                on_retry=on_retry,
+            )
+        except Exception as exc:
+            log_validation_retry(
+                logger,
+                stage="wiki_planner.assign_files.batch",
+                attempt=1,
+                max_retries=1,
+                exc=exc,
+                context={"batch_size": len(batch)},
+            )
+            return
+        for a in raw.get("assignments", []):
+            f = a.get("file", "")
+            title = a.get("page_title", "")
+            if f not in batch or f in assigned:
+                continue
+            if title not in valid_titles_set:
+                continue
+            result[title].append(f)
+            assigned.add(f)
+
+    # Initial pass: batch every file.
+    # Run the first batch serially to warm the cache, then the rest in parallel.
+    batches: list[list[str]] = [
+        all_files[i : i + batch_size] for i in range(0, len(all_files), batch_size)
+    ]
+    if batches:
+        await _run_batch(batches[0])
+    if len(batches) > 1:
+        await asyncio.gather(*(_run_batch(b) for b in batches[1:]))
+
+    # Cleanup rounds for unassigned files
+    for _ in range(max_cleanup_retries):
+        unassigned = [f for f in all_files if f not in assigned]
+        if not unassigned:
+            break
+        log_validation_retry(
+            logger,
+            stage="wiki_planner.assign_files.cleanup",
+            attempt=1,
+            max_retries=max_cleanup_retries,
+            exc=ValueError(f"{len(unassigned)} files unassigned after batches"),
+            context={"unassigned": len(unassigned), "total": len(all_files)},
+        )
+        cleanup_batches = [
+            unassigned[i : i + batch_size]
+            for i in range(0, len(unassigned), batch_size)
+        ]
+        for b in cleanup_batches:
+            await _run_batch(b)
+
+    # Anything still unassigned → directory clustering residue
+    unassigned = [f for f in all_files if f not in assigned]
+    if unassigned:
+        log_final_failure(
+            logger,
+            stage="wiki_planner.assign_files.residue",
+            exc=ValueError(
+                f"{len(unassigned)} files still unassigned after cleanup; "
+                "routing residue to directory clustering"
+            ),
+            context={"residue": len(unassigned)},
+        )
+        residue_assignment = _directory_cluster_assign(outline, unassigned)
+        for title, files in residue_assignment.items():
+            result[title].extend(files)
+
+    return result
+
+
 async def _assign_files(
     outline: list[dict],
     file_summary: str,
