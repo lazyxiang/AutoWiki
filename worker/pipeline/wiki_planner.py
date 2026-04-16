@@ -860,14 +860,14 @@ async def _assign_files_in_batches(
         await asyncio.gather(*(_run_batch(b) for b in batches[1:]))
 
     # Cleanup rounds for unassigned files
-    for _ in range(max_cleanup_retries):
+    for attempt in range(1, max_cleanup_retries + 1):
         unassigned = [f for f in all_files if f not in assigned]
         if not unassigned:
             break
         log_validation_retry(
             logger,
             stage="wiki_planner.assign_files.cleanup",
-            attempt=1,
+            attempt=attempt,
             max_retries=max_cleanup_retries,
             exc=ValueError(f"{len(unassigned)} files unassigned after batches"),
             context={"unassigned": len(unassigned), "total": len(all_files)},
