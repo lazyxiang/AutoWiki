@@ -98,7 +98,7 @@ Default LLM: `claude-sonnet-4-6`. Supported providers: `anthropic`, `openai`, `o
 ## API Surface
 
 ### REST/WebSocket (Phase 1 + Phase 2 + Phase 3)
-```
+```http
 POST  /api/repos                              # Submit repo for indexing
 GET   /api/repos                             # List all repos
 GET   /api/repos/{repo_id}                   # Status + metadata
@@ -117,10 +117,10 @@ WS    /ws/repos/{repo_id}/research/{job_id}  # Stream research events
 ```
 
 ### CLI (Phase 1 + Phase 3)
-```
+```bash
 autowiki index github.com/owner/repo [--reuse-index]
 autowiki list
-autowiki serve [--port 3000]
+autowiki serve [--port 3000] [--debug]
 autowiki research github.com/owner/repo "<question>"
 autowiki validate-plan <repo>       # Offline planner diagnostic — reads ast/wiki_plan.json and reports coverage, page-size distribution, locality scores, and validation status
 autowiki config show
