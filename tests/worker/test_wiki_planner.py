@@ -326,7 +326,7 @@ async def test_assign_files(mock_llm):
         {"title": "API", "purpose": "REST API."},
         {"title": "Worker", "purpose": "Jobs."},
     ]
-    result = await _assign_files(
+    result, _ = await _assign_files(
         outline=outline,
         file_summary="main.py: ...\napi.py: ...\nworker.py: ...",
         dep_info=None,
@@ -352,7 +352,7 @@ async def test_assign_files_orphans_distributed(mock_llm):
         ]
     }
     outline = [{"title": "Overview", "purpose": "Top."}]
-    result = await _assign_files(
+    result, _ = await _assign_files(
         outline=outline,
         file_summary="main.py: ...\norphan.py: ...",
         dep_info=None,
@@ -565,7 +565,7 @@ async def test_assign_files_logs_each_validation_failure_and_fallback(caplog):
     llm.generate_structured.side_effect = [stuffed, stuffed]
 
     with caplog.at_level(logging.WARNING, logger="worker.planner"):
-        result = await _assign_files(
+        result, _ = await _assign_files(
             outline=outline,
             file_summary="files",
             dep_info=None,
@@ -619,7 +619,7 @@ async def test_assign_files_fallback_uses_directory_clustering(caplog):
     llm = AsyncMock()
     llm.generate_structured.side_effect = ValueError("always bad")
 
-    result = await _assign_files(
+    result, _ = await _assign_files(
         outline=outline,
         file_summary="files",
         dep_info=None,
@@ -652,7 +652,7 @@ async def test_assign_files_uses_batched_path(monkeypatch):
         called["hit"] = True
         titles = [page["title"] for page in kwargs["outline"]]
         files = list(kwargs["all_files"])
-        return {titles[0]: [files[0]], titles[1]: [files[1]]}
+        return {titles[0]: [files[0]], titles[1]: [files[1]]}, {}
 
     monkeypatch.setattr(wp, "_assign_files_in_batches", fake_batched)
 
@@ -661,7 +661,7 @@ async def test_assign_files_uses_batched_path(monkeypatch):
         {"title": "One", "purpose": "p1"},
         {"title": "Two", "purpose": "p2"},
     ]
-    result = await wp._assign_files(
+    result, _ = await wp._assign_files(
         outline=outline,
         file_summary="fs",
         dep_info=None,

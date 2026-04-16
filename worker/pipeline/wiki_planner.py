@@ -300,9 +300,14 @@ _ASSIGNMENT_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "file": {"type": "string"},
-                    "page_title": {"type": "string"},
+                    "primary_page": {"type": "string"},
+                    "secondary_pages": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": 2,
+                    },
                 },
-                "required": ["file", "page_title"],
+                "required": ["file", "primary_page"],
             },
         }
     },
@@ -482,14 +487,19 @@ def _build_batch_assignment_user(
     files_str = "\n".join(f"- {f}" for f in batch_files)
     schema_json = json.dumps(_ASSIGNMENT_SCHEMA, indent=2)
     text = (
-        f"Assign each of the following {len(batch_files)} files to one of the "
-        f"page titles below.  Each ``page_title`` MUST exactly match one of: "
-        f"{titles_str}.\n\n"
+        f"Assign each of the following {len(batch_files)} files to the "
+        f"wiki page whose purpose best matches it. Each assignment has a "
+        f"required ``primary_page`` and an optional ``secondary_pages`` "
+        f"list (at most 2 entries).\n\n"
+        f"``primary_page`` MUST exactly match one of: {titles_str}.\n"
+        f"``secondary_pages`` entries (if any) must also match one of "
+        f"those titles, and must NOT equal ``primary_page``.\n\n"
         f"Files to assign:\n{files_str}\n\n"
         "Rules:\n"
-        "- Every listed file must appear in the output.\n"
-        "- Choose the page whose purpose best matches the file's semantic role.\n"
-        "- Files that import each other usually belong on the same page.\n\n"
+        "- Every listed file must have a primary_page.\n"
+        "- Use secondary_pages sparingly — only for genuinely shared "
+        "utilities referenced from two or three distinct subsystems.\n"
+        "- Files that import each other usually share the same primary_page.\n\n"
         f"Output JSON matching this schema:\n{schema_json}"
     )
     return PromptSegment(text=text, cacheable=False)
@@ -801,8 +811,12 @@ async def _assign_files_in_batches(
     on_retry: OnRetryCallback | None,
     batch_size: int = _BATCH_SIZE_DEFAULT,
     max_cleanup_retries: int = 2,
-) -> dict[str, list[str]]:
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     """Phase 2 batched assignment core.
+
+    Returns a tuple ``(primary, secondary)`` where ``primary[title]`` is
+    the list of files *owned* by that page and ``secondary[title]`` is the
+    list of files *referenced* by that page but owned elsewhere.
 
     Splits *all_files* into chunks of *batch_size* and invokes
     ``llm.generate_structured`` once per batch.  The system turn — which
@@ -819,6 +833,7 @@ async def _assign_files_in_batches(
     valid_titles = [p["title"] for p in outline]
     valid_titles_set = set(valid_titles)
     result: dict[str, list[str]] = {t: [] for t in valid_titles}
+    secondary: dict[str, list[str]] = {t: [] for t in valid_titles}
     assigned: set[str] = set()
 
     # Build the cacheable system segment ONCE and reuse across all batches.
@@ -856,13 +871,17 @@ async def _assign_files_in_batches(
             return
         for a in raw.get("assignments", []):
             f = a.get("file", "")
-            title = a.get("page_title", "")
+            primary_title = a.get("primary_page", "") or a.get("page_title", "")
+            secondaries = a.get("secondary_pages", []) or []
             if f not in batch or f in assigned:
                 continue
-            if title not in valid_titles_set:
+            if primary_title not in valid_titles_set:
                 continue
-            result[title].append(f)
+            result[primary_title].append(f)
             assigned.add(f)
+            for sec in secondaries[:2]:
+                if sec in valid_titles_set and sec != primary_title:
+                    secondary[sec].append(f)
 
     # Initial pass: batch every file.
     # Run the first batch serially to warm the cache, then the rest in parallel.
@@ -910,7 +929,7 @@ async def _assign_files_in_batches(
         for title, files in residue_assignment.items():
             result[title].extend(files)
 
-    return result
+    return result, secondary
 
 
 async def _assign_files(
@@ -924,24 +943,24 @@ async def _assign_files(
     max_retries: int = 3,
     _extra_context: str | None = None,
     fast_llm: LLMProvider | None = None,
-) -> dict[str, list[str]]:
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     """Phase 2: Assign every file to a page via batched LLM calls.
 
-    Delegates to :func:`_assign_files_in_batches`, which splits the file
-    list into ≤40-file batches and reuses a cacheable system segment
-    across batches.  ``fast_llm`` is preferred for the batched call because
-    classification-style assignments scale well on faster models.
-    Validation is performed on the merged result, and validation failures
-    trigger up to ``max_retries`` attempts (using ``fast_llm`` on the first
-    attempt and ``llm`` for subsequent retries) before falling back to
-    directory clustering.
+    Returns ``(primary, secondary)`` — see :func:`_assign_files_in_batches`.
+    Delegates to that function, which splits the file list into ≤40-file
+    batches and reuses a cacheable system segment across batches.
+    ``fast_llm`` is preferred for the batched call because classification-
+    style assignments scale well on faster models.  Validation is performed
+    on the primary result, and validation failures trigger up to
+    ``max_retries`` attempts before falling back to directory clustering.
     """
     preferred_llm = fast_llm or llm
+    empty_secondary: dict[str, list[str]] = {p["title"]: [] for p in outline}
 
     for attempt in range(1, max_retries + 1):
         current_llm = preferred_llm if attempt == 1 else llm
         try:
-            result = await _assign_files_in_batches(
+            result, secondary = await _assign_files_in_batches(
                 outline=outline,
                 file_summary=file_summary,
                 dep_info=dep_info,
@@ -951,7 +970,7 @@ async def _assign_files(
                 on_retry=on_retry,
             )
             _validate_assignments(result, outline)
-            return result
+            return result, secondary
         except ValueError as exc:
             if attempt < max_retries:
                 log_validation_retry(
@@ -976,8 +995,8 @@ async def _assign_files(
                     },
                 )
 
-    # Final fallback: directory clustering (locality-preserving)
-    return _directory_cluster_assign(outline, all_files)
+    # Final fallback: directory clustering (locality-preserving), no secondary
+    return _directory_cluster_assign(outline, all_files), empty_secondary
 
 
 def validate_wiki_plan(
@@ -1073,6 +1092,7 @@ def validate_wiki_plan(
                 purpose=p["purpose"],
                 parent=parent,
                 files=p.get("files", []),
+                secondary_files=p.get("secondary_files", []),
             )
         )
 
@@ -1307,7 +1327,7 @@ async def generate_wiki_plan(
         return _fallback_plan(repo_name, all_files, clusters)
 
     # Phase 2: Assign files + validate assignments (fast_llm for classification task)
-    file_assignments = await _assign_files(
+    primary_assignments, secondary_assignments = await _assign_files(
         outline=outline,
         file_summary=file_summary,
         dep_info=dep_info,
@@ -1326,7 +1346,8 @@ async def generate_wiki_plan(
                 "title": p["title"],
                 "purpose": p["purpose"],
                 "parent": p.get("parent"),
-                "files": file_assignments.get(p["title"], []),
+                "files": primary_assignments.get(p["title"], []),
+                "secondary_files": secondary_assignments.get(p["title"], []),
             }
             for p in outline
         ]
