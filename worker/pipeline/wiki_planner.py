@@ -39,6 +39,7 @@ from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retr
 if TYPE_CHECKING:
     from worker.pipeline.ast_analysis import FileAnalysis
     from worker.pipeline.dependency_graph import DependencyGraph
+    from worker.pipeline.fixture_recorder import FixtureRecorder
     from worker.pipeline.user_steering import UserSteering
 
 logger = logging.getLogger("worker.planner")
@@ -1206,6 +1207,7 @@ async def generate_wiki_plan(
     fast_llm: LLMProvider | None = None,
     user_steering: UserSteering | None = None,
     clone_root: Path | None = None,
+    fixture_recorder: FixtureRecorder | None = None,
 ) -> WikiPlan:
     """Generate a hierarchical wiki plan using two-phase LLM planning.
 
@@ -1327,6 +1329,9 @@ async def generate_wiki_plan(
     except ValueError:
         return _fallback_plan(repo_name, all_files, clusters)
 
+    if fixture_recorder is not None:
+        fixture_recorder.record_outline(outline)
+
     # Phase 2: Assign files + validate assignments (fast_llm for classification task)
     primary_assignments, secondary_assignments = await _assign_files(
         outline=outline,
@@ -1339,6 +1344,9 @@ async def generate_wiki_plan(
         max_retries=max_retries,
         fast_llm=fast_llm,
     )
+
+    if fixture_recorder is not None:
+        fixture_recorder.record_assignments(primary_assignments, secondary_assignments)
 
     # Final: combine and normalise (handles orphan files, safety-net checks)
     raw = {
@@ -1354,13 +1362,16 @@ async def generate_wiki_plan(
         ]
     }
     try:
-        return validate_wiki_plan(
+        plan = validate_wiki_plan(
             raw,
             all_files=all_files,
             existing_titles=existing_titles,
             clusters=clusters,
             page_range=page_range,
         )
+        if fixture_recorder is not None:
+            fixture_recorder.record_wiki_plan(plan.to_internal_json())
+        return plan
     except ValueError as exc:
         logger.warning("Final wiki plan validation failed: %s — using fallback", exc)
         return _fallback_plan(repo_name, all_files, clusters)
