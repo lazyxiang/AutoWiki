@@ -333,12 +333,16 @@ def _build_outline_prompt(
     dep_info: str | None = None,
     clusters: list[list[str]] | None = None,
     page_range: tuple[int, int] = (5, 20),
+    anchors_block: str | None = None,
 ) -> str:
     """Build the Phase 1 prompt: generate page tree without file assignments."""
     sections = [f"Repository: {repo_name}"]
 
     if readme:
         sections.append(f"README:\n{readme}")
+
+    if anchors_block:
+        sections.append("Architectural anchors:\n" + anchors_block)
 
     sections.append(f"File summaries:\n{file_summary}")
 
@@ -591,6 +595,7 @@ async def _generate_outline(
     max_retries: int = 3,
     total_file_count: int = 0,
     _extra_context: str | None = None,
+    anchors_block: str | None = None,
 ) -> list[dict]:
     """Phase 1: Generate page tree and validate outline structure.
 
@@ -606,6 +611,7 @@ async def _generate_outline(
         dep_info=dep_info,
         clusters=clusters,
         page_range=page_range,
+        anchors_block=anchors_block,
     )
     if _extra_context:
         prompt += f"\n\n{_extra_context}"

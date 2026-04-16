@@ -674,3 +674,34 @@ async def test_assign_files_uses_batched_path(monkeypatch):
     assert called.get("hit") is True
     assert "a.py" in result["One"]
     assert "b.py" in result["Two"]
+
+
+def test_build_outline_prompt_includes_anchors_section_when_provided():
+    """When anchors are passed in, the prompt must surface them under a
+    dedicated heading, not bury them in the existing sections."""
+    from worker.pipeline.wiki_planner import _build_outline_prompt
+
+    prompt = _build_outline_prompt(
+        file_summary="one.py, two.py",
+        repo_name="demo",
+        anchors_block=(
+            "## Directory layout\nworker/ (3)\n"
+            "\n## Package docstrings\nworker: core pipeline."
+        ),
+    )
+    assert "Architectural anchors" in prompt
+    assert "worker/ (3)" in prompt
+    assert "worker: core pipeline." in prompt
+    # Still contains the existing guidance
+    assert "Create a hierarchical wiki plan." in prompt
+
+
+def test_build_outline_prompt_without_anchors_unchanged():
+    """Call sites that do not pass anchors must not see an anchors section."""
+    from worker.pipeline.wiki_planner import _build_outline_prompt
+
+    prompt = _build_outline_prompt(
+        file_summary="one.py, two.py",
+        repo_name="demo",
+    )
+    assert "Architectural anchors" not in prompt
