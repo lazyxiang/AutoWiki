@@ -670,9 +670,32 @@ async def _assign_files(
             return result
 
         except (ValueError, json.JSONDecodeError, KeyError) as e:
+            log_validation_retry(
+                logger,
+                stage="wiki_planner.assign_files",
+                attempt=attempt + 1,
+                max_retries=max_retries,
+                exc=e,
+                context={
+                    "outline_pages": len(outline),
+                    "total_files": len(all_files),
+                },
+            )
             if attempt < max_retries - 1:
                 prompt += f"\n\nPrevious attempt failed: {e}. Please fix and retry."
 
+    log_final_failure(
+        logger,
+        stage="wiki_planner.assign_files",
+        exc=ValueError(
+            "All LLM assignment attempts failed; using directory-clustering fallback"
+        ),
+        context={
+            "outline_pages": len(outline),
+            "total_files": len(all_files),
+            "max_retries": max_retries,
+        },
+    )
     # Fallback: round-robin distribution (ignores validation constraints)
     result = {p["title"]: [] for p in outline}
     titles = [p["title"] for p in outline]

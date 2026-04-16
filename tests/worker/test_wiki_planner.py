@@ -540,3 +540,51 @@ async def test_generate_wiki_plan_two_phase(mock_llm):
     assert plan.pages[titles.index("Overview")].files == ["main.py"]
     assert plan.pages[titles.index("Models")].files == ["models.py"]
     assert plan.pages[titles.index("Utilities")].files == ["utils.py"]
+
+
+async def test_assign_files_logs_each_validation_failure_and_fallback(caplog):
+    """_assign_files must log each retry AND the fallback invocation."""
+    import logging
+    from unittest.mock import AsyncMock
+
+    from worker.pipeline.wiki_planner import _assign_files
+
+    outline = [
+        {"title": "Overview", "purpose": "top"},
+        {"title": "Core", "purpose": "core"},
+    ]
+    many = [f"f{i}.py" for i in range(30)]
+    stuffed = {"assignments": [{"file": f, "page_title": "Overview"} for f in many]}
+    llm = AsyncMock()
+    llm.generate_structured.side_effect = [stuffed, stuffed, stuffed]
+
+    with caplog.at_level(logging.WARNING, logger="worker.planner"):
+        result = await _assign_files(
+            outline=outline,
+            file_summary="files",
+            dep_info=None,
+            all_files=many,
+            llm=llm,
+            system="sys",
+            on_retry=None,
+            max_retries=3,
+        )
+
+    retry_logs = [
+        r
+        for r in caplog.records
+        if "wiki_planner.assign_files" in r.getMessage()
+        and "attempt" in r.getMessage()
+        and r.levelno == logging.WARNING
+    ]
+    fallback_logs = [
+        r
+        for r in caplog.records
+        if "wiki_planner.assign_files" in r.getMessage() and r.levelno == logging.ERROR
+    ]
+    assert len(retry_logs) == 3, f"expected 3 retry logs, got {len(retry_logs)}"
+    assert len(fallback_logs) == 1, (
+        f"expected 1 fallback error, got {len(fallback_logs)}"
+    )
+    # Result is still returned so pipeline does not crash
+    assert sum(len(v) for v in result.values()) == len(many)
