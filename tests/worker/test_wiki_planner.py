@@ -588,3 +588,47 @@ async def test_assign_files_logs_each_validation_failure_and_fallback(caplog):
     )
     # Result is still returned so pipeline does not crash
     assert sum(len(v) for v in result.values()) == len(many)
+
+
+async def test_assign_files_fallback_uses_directory_clustering(caplog):
+    """When all LLM retries fail, the fallback must produce
+    directory-clustered output, not alphabetic round-robin."""
+    from unittest.mock import AsyncMock
+
+    from worker.pipeline.wiki_planner import _assign_files
+
+    outline = [
+        {"title": "Worker Pipeline", "purpose": "Pipeline stages."},
+        {"title": "API Layer", "purpose": "REST and WebSocket endpoints."},
+    ]
+    all_files = [
+        "worker/pipeline/wiki_planner.py",
+        "worker/pipeline/page_generator.py",
+        "worker/pipeline/ast_analysis.py",
+        "api/routers/repos.py",
+        "api/routers/wiki.py",
+    ]
+
+    # LLM raises ValueError every time — triggers fallback
+    llm = AsyncMock()
+    llm.generate_structured.side_effect = ValueError("always bad")
+
+    result = await _assign_files(
+        outline=outline,
+        file_summary="files",
+        dep_info=None,
+        all_files=all_files,
+        llm=llm,
+        system="sys",
+        on_retry=None,
+        max_retries=2,
+    )
+
+    # All worker/pipeline files end up on Worker Pipeline
+    assert all(
+        f in result["Worker Pipeline"]
+        for f in all_files
+        if f.startswith("worker/pipeline/")
+    )
+    # All api files end up on API Layer
+    assert all(f in result["API Layer"] for f in all_files if f.startswith("api/"))

@@ -722,6 +722,11 @@ async def _assign_files(
     Combines LLM generation with immediate per-page constraint checking so
     that over-stuffed pages (> 25 files) and empty non-overview pages are
     caught and retried within this phase.
+
+    After all retries are exhausted, falls back to
+    :func:`_directory_cluster_assign`, which preserves directory locality
+    rather than scattering files alphabetically.  The fallback invocation
+    is logged at ``ERROR`` via :func:`log_final_failure`.
     """
     prompt = _build_assignment_prompt(
         outline=outline,
@@ -803,12 +808,10 @@ async def _assign_files(
             "max_retries": max_retries,
         },
     )
-    # Fallback: round-robin distribution (ignores validation constraints)
-    result = {p["title"]: [] for p in outline}
-    titles = [p["title"] for p in outline]
-    for i, f in enumerate(sorted(all_files)):
-        result[titles[i % len(titles)]].append(f)
-    return result
+    # Fallback: locality-preserving directory clustering.  See
+    # _directory_cluster_assign for semantics.  Logged at ERROR by the
+    # preceding log_final_failure call.
+    return _directory_cluster_assign(outline, all_files)
 
 
 def validate_wiki_plan(
