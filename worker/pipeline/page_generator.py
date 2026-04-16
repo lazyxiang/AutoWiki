@@ -59,6 +59,31 @@ def _append_source_files_table(content: str, files: list[str]) -> str:
     return content.rstrip() + table
 
 
+def _format_secondary_context(
+    spec: WikiPageSpec,
+    entity_summaries_by_file: dict[str, str],
+) -> str:
+    """Render the Pass-2 "referenced modules" section for secondary files.
+
+    Secondary files are *not* source-of-truth for this page — they are
+    owned by another page — but the LLM needs enough context to describe
+    cross-page references correctly.  We emit a compact "Referenced
+    modules" block listing each secondary file with its entity summary.
+
+    Returns an empty string when there are no secondary files with
+    summaries so the caller can unconditionally concatenate.
+    """
+    entries: list[str] = []
+    for rel in spec.secondary_files or []:
+        summary = entity_summaries_by_file.get(rel)
+        if not summary:
+            continue
+        entries.append(f"- {rel}\n  {summary}")
+    if not entries:
+        return ""
+    return "## Referenced modules (owned by other pages)\n" + "\n".join(entries)
+
+
 def _strip_preamble_and_ensure_header(content: str, title: str) -> str:
     """Strip reasoning preamble and ensure the page starts with # title.
 
@@ -153,6 +178,7 @@ async def generate_page(
     wiki_language: str = "en",
     child_contents: list[PageResult] | None = None,
     repo_notes: list[dict] | None = None,
+    entity_summaries_by_file: dict[str, str] | None = None,
 ) -> PageResult:
     """Generate a wiki page using the 4-pass pipeline.
 
@@ -221,6 +247,9 @@ async def generate_page(
     )
 
     # ── Pass 2: Draft (main model) ──
+    secondary_block = _format_secondary_context(
+        spec, entity_summaries_by_file=entity_summaries_by_file or {}
+    )
     draft = await generate_draft(
         spec=spec,
         outline=outline,
@@ -233,6 +262,7 @@ async def generate_page(
         on_retry=on_retry,
         wiki_language=wiki_language,
         repo_notes=repo_notes,
+        secondary_block=secondary_block or None,
     )
 
     # ── Pass 3: Fact-check (fast model) ──
@@ -335,6 +365,13 @@ async def generate_page_batch(
         dep_info_or_none = dep_info if any(dep_info.values()) else None
         entities_or_none = entities if entities else None
 
+        secondary_summaries: dict[str, str] = {}
+        for rel_path in spec.secondary_files or []:
+            file_info = file_analysis.files.get(rel_path)
+            if file_info and file_info.entities:
+                sec_entities = [{**e, "file": rel_path} for e in file_info.entities]
+                secondary_summaries[rel_path] = _format_entity_details(sec_entities)
+
         return await generate_page(
             spec=spec,
             store=store,
@@ -347,6 +384,7 @@ async def generate_page_batch(
             on_retry=on_retry,
             wiki_language=wiki_language,
             child_contents=children,
+            entity_summaries_by_file=secondary_summaries or None,
             repo_notes=repo_notes,
         )
 

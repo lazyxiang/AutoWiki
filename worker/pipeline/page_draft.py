@@ -215,8 +215,10 @@ async def generate_draft(
     on_retry: OnRetryCallback | None = None,
     wiki_language: str = "en",
     repo_notes: list[dict] | None = None,
+    secondary_block: str | None = None,
 ) -> str:
     """Generate the draft Markdown for a wiki page using the main model."""
+    from worker.llm.prompt_segment import PromptSegment
     from worker.pipeline.language import get_language_instruction
 
     segments = build_draft_prompt(
@@ -229,6 +231,9 @@ async def generate_draft(
         child_contents=child_contents,
         repo_notes=repo_notes,
     )
+    if secondary_block:
+        # Insert after the cacheable prefix but before the instruction tail
+        segments.insert(1, PromptSegment(text=secondary_block, cacheable=False))
     system = DRAFT_SYSTEM + get_language_instruction(wiki_language)
 
     try:

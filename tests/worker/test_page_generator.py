@@ -6,6 +6,7 @@ import pytest
 from worker.pipeline.page_generator import (
     PageResult,
     _append_source_files_table,
+    _format_secondary_context,
     _strip_preamble_and_ensure_header,
     compute_generation_order,
     generate_page,
@@ -295,6 +296,53 @@ def test_append_source_files_table_at_end():
     content = "# My Page\n\nContent."
     result = _append_source_files_table(content, ["a.py"])
     assert result.endswith("| `a.py` |")
+
+
+def test_source_files_table_excludes_secondary_files():
+    """_append_source_files_table must only include files explicitly passed in."""
+    draft = "body text"
+    out = _append_source_files_table(draft, ["a.py"])
+    assert "a.py" in out
+    assert "shared/utils.py" not in out
+
+
+# ── _format_secondary_context ────────────────────────────────────────────────
+
+
+def test_format_secondary_context_returns_empty_when_no_files():
+    spec = WikiPageSpec(title="X", purpose="p", files=["a.py"], secondary_files=[])
+    assert _format_secondary_context(spec, entity_summaries_by_file={}) == ""
+
+
+def test_format_secondary_context_lists_referenced_files_with_summaries():
+    spec = WikiPageSpec(
+        title="Core",
+        purpose="p",
+        files=["a.py"],
+        secondary_files=["shared/utils.py", "shared/io.py"],
+    )
+    summaries = {
+        "shared/utils.py": "class Helper: ...",
+        "shared/io.py": "def read(path): ...",
+    }
+    text = _format_secondary_context(spec, entity_summaries_by_file=summaries)
+    assert "Referenced modules" in text
+    assert "shared/utils.py" in text
+    assert "class Helper" in text
+    assert "shared/io.py" in text
+    assert "def read" in text
+
+
+def test_format_secondary_context_skips_files_without_summary():
+    """A secondary file missing from the summaries dict must be silently skipped."""
+    spec = WikiPageSpec(
+        title="Core",
+        purpose="p",
+        files=["a.py"],
+        secondary_files=["missing.py"],
+    )
+    text = _format_secondary_context(spec, entity_summaries_by_file={})
+    assert text == ""
 
 
 def test_strip_preamble_removes_reasoning_before_first_heading():
