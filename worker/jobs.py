@@ -523,6 +523,7 @@ async def run_full_index(
             wiki_language=wiki_language,
             fast_llm=fast_llm,
             user_steering=user_steering,
+            clone_root=clone_root,
         )
         logger.info(
             "Wiki plan generated: %d pages planned for %s", len(plan.pages), name
@@ -1014,6 +1015,7 @@ async def run_refresh_index(
             wiki_language=wiki_language,
             fast_llm=fast_llm,
             user_steering=user_steering,
+            clone_root=clone_root,
         )
         logger.info(
             "Wiki plan generated: %d pages updated for %s", len(plan.pages), name

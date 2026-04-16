@@ -27,6 +27,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from worker.llm.base import LLMProvider
@@ -1175,6 +1176,7 @@ async def generate_wiki_plan(
     wiki_language: str = "en",
     fast_llm: LLMProvider | None = None,
     user_steering: UserSteering | None = None,
+    clone_root: Path | None = None,
 ) -> WikiPlan:
     """Generate a hierarchical wiki plan using two-phase LLM planning.
 
@@ -1245,6 +1247,38 @@ async def generate_wiki_plan(
             pages=pages,
         )
 
+    # Build architectural anchors when a clone_root is provided.
+    anchors_block: str | None = None
+    if clone_root is not None:
+        from worker.pipeline.ast_analysis import _rank_files_by_importance
+        from worker.pipeline.outline_anchors import (
+            build_directory_tree,
+            extract_package_docstrings,
+            extract_readme_sections,
+            format_anchors_for_prompt,
+        )
+
+        ranked = _rank_files_by_importance(
+            list(file_analysis.files),
+            file_analysis.files,
+            dep_graph=dep_graph,
+        )
+        tree = build_directory_tree(list(file_analysis.files), max_depth=3)
+        pkg_docs = extract_package_docstrings(
+            clone_root=clone_root,
+            rel_paths=ranked,
+            max_entries=25,
+        )
+        readme_sections = extract_readme_sections(readme)
+        anchors_block = (
+            format_anchors_for_prompt(
+                directory_tree=tree,
+                package_docstrings=pkg_docs,
+                readme_sections=readme_sections,
+            )
+            or None
+        )
+
     # Phase 1: Generate outline + validate structure
     try:
         outline = await _generate_outline(
@@ -1259,6 +1293,7 @@ async def generate_wiki_plan(
             on_retry=on_retry,
             max_retries=max_retries,
             total_file_count=len(all_files),
+            anchors_block=anchors_block,
         )
     except ValueError:
         return _fallback_plan(repo_name, all_files, clusters)
