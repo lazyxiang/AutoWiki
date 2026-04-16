@@ -22,11 +22,12 @@ def setup_logging(config: Config) -> None:
     config.error_log_path.parent.mkdir(parents=True, exist_ok=True)
 
     debug_enabled = config.debug
-    log_level = logging.DEBUG if debug_enabled else logging.INFO
 
-    # Root logger configuration
+    # Root logger stays at INFO regardless of debug mode so that dependency
+    # libraries (httpx, anthropic SDK, langchain, etc.) never emit DEBUG
+    # records.  Only worker.llm is elevated to DEBUG when debug is on.
     root_logger = logging.getLogger()
-    root_logger.setLevel(log_level)
+    root_logger.setLevel(logging.INFO)
 
     # Clear existing handlers to avoid duplicates
     for handler in root_logger.handlers[:]:
