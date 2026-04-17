@@ -43,11 +43,11 @@ def setup_logging(config: Config) -> None:
 
     handlers: list[logging.Handler] = []
 
-    # 1. Error Log: {data_dir}/error.log (ERROR and above)
+    # 1. Error Log: {data_dir}/error.log (WARNING and above)
     error_handler = RotatingFileHandler(
         config.error_log_path, maxBytes=10 * 1024 * 1024, backupCount=5
     )
-    error_handler.setLevel(logging.ERROR)
+    error_handler.setLevel(logging.WARNING)
     error_handler.setFormatter(formatter)
     handlers.append(error_handler)
 

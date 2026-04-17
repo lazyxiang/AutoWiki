@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,6 +21,14 @@ class LLMConfig(BaseSettings):
     # (5-min "short" vs 1-hour "long"). Currently not wired to any provider;
     # scaffolded here for forward compatibility.
     cache_ttl: Literal["short", "long"] = "short"
+
+    @field_validator("cache_ttl", mode="before")
+    @classmethod
+    def _coerce_cache_ttl(cls, v: object) -> object:
+        """Treat an unset/empty env var as the default 'short'."""
+        if v == "":
+            return "short"
+        return v
 
 
 class EmbeddingConfig(BaseSettings):
