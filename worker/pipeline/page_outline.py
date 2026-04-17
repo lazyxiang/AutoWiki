@@ -57,12 +57,18 @@ _OUTLINE_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "heading": {"type": "string"},
-                    "kind": {"type": "string"},
+                    "kind": {
+                        "type": "string",
+                        "enum": sorted(VALID_SECTION_KINDS),
+                    },
                     "focus": {"type": "string"},
                     "diagram": {
                         "type": ["object", "null"],
                         "properties": {
-                            "type": {"type": "string"},
+                            "type": {
+                                "type": "string",
+                                "enum": sorted(VALID_DIAGRAM_TYPES),
+                            },
                             "purpose": {"type": "string"},
                             "source_files": {
                                 "type": "array",
@@ -203,6 +209,9 @@ _SYSTEM = (
     "dependencies — produce a structured JSON outline that will guide the "
     "actual page drafting.\n\n"
     "Rules:\n"
+    "- 'kind' MUST be exactly one of: prose, prose+diagram, prose+list, "
+    "prose+table, prose+table+diagram — these are format descriptors, not "
+    "section topics\n"
     "- Choose diagram types that best fit the content from this palette:\n"
     "  flowchart, flowchart TD, flowchart LR, sequenceDiagram, classDiagram,\n"
     "  stateDiagram-v2, erDiagram, journey, gantt, mindmap, graph LR\n"
