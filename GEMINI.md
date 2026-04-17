@@ -174,7 +174,7 @@ Non-Docker: `autowiki serve` spawns API + worker + Next.js as subprocesses.
 - **Phase 2.5** ✅ — Wiki quality enhancements: two-phase planner with per-phase validation, bottom-up child-synthesis generation, 4-pass page orchestrator, prompt caching, fast model, RAG doc_k tuning, diagram post-processing (PRs #15 and #17)
 - **Phase 3** ✅ — Deep Research mode: multi-step RAG investigation, LLM planner, per-step AST context, synthesized report; `autowiki research` CLI; REST + WebSocket API (PR #20)
 - **Phase 4** ✅ — User-steered wiki structure via `.autowiki/wiki.json`: override page hierarchy, assign modules to pages, inject repo/page notes into generation (PR #20)
-- **Phase 4.5** ✅ — Planner robustness hardening (PR #22): Layer C1 outline anchors, Layer C2 multi-page assignment (`secondary_files`), `autowiki validate-plan` offline CLI, fixture recorder, feedback-retry loop in `_assign_files`, Gemini JSON parsing, `_is_high_priority_file` segment-based matching, Mermaid orphaned-`end` sanitisation, Docker Compose startup fixes
+- **Phase 4.5** ✅ — Planner robustness hardening (PR #22): Layer C1 outline anchors, Layer C2 multi-page assignment (`secondary_files`), `autowiki validate-plan` offline CLI, fixture recorder, feedback-retry loop in `_assign_files`, Gemini JSON parsing, `_is_high_priority_file` segment-based matching, Mermaid orphaned-`end` sanitization, Docker Compose startup fixes
 - **Phase 5** — GitLab/Bitbucket + hybrid search + MCP server
 
 ## Deferred Planner Improvements

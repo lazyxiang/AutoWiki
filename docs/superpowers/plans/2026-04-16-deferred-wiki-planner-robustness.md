@@ -1644,16 +1644,16 @@ Expected: clean.
 
 ## Stage C — Stage Validation Harness
 
-**Objective:** Let maintainers introspect planner output — or replay a run against saved fixtures — without spending live LLM budget. Two parts:
+**Objective:** Let maintainers introspect planner output without spending live LLM budget. Two parts were implemented:
 
-1. **Fixture recorder** — a small module that dumps `outline.json`, `assignments.json`, and the final `wiki_plan.json` side-by-side whenever `AUTOWIKI_RECORD_PLANNER_FIXTURES=1` is set for a run. Fixtures live at `~/.autowiki/repos/{repo_hash}/fixtures/`.
-2. **`autowiki validate-plan <repo>` CLI** — reads the stored `wiki_plan.json` (plus fixtures if they exist) and reports:
-   - Total files, total pages, orphan count, coverage %.
-   - Primary/secondary per-page size distribution (min / p50 / p90 / max, plus a histogram).
-   - Any validation failures produced by re-running `validate_wiki_plan` on the saved plan.
-   - Directory locality score (how many primary-assigned files share a top-level directory with the majority of other primary-assigned files on the same page).
+1. **Fixture recorder** — `worker/pipeline/fixture_recorder.py` dumps `outline.json`, `assignments.json`, and `wiki_plan.json` under `~/.autowiki/repos/{repo_hash}/fixtures/` when `AUTOWIKI_RECORD_PLANNER_FIXTURES=1` is set.
+2. **`autowiki validate-plan <repo>` CLI** — reads `ast/wiki_plan.json` and reports:
+   - Page count, primary file count, and secondary assignment count.
+   - Primary/secondary per-page size distribution (min / p50 / p90 / max / mean).
+   - Any validation failures from `validate_wiki_plan`.
+   - Directory locality score per page (fraction of primary files in the top directory).
 
-The command is read-only — it neither regenerates nor modifies state.
+The command does **not** consume fixtures, replay planner stages, or compute orphan/coverage percentages. It is read-only and makes no writes.
 
 ### Task C1: Fixture recorder
 

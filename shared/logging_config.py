@@ -89,6 +89,12 @@ def setup_logging(config: Config) -> None:
         llm_handler.addFilter(NameFilter())
         handlers.append(llm_handler)
 
+    # Suppress noisy third-party warnings from error.log (WARNING-level threshold
+    # on error_handler would otherwise funnel httpx/pydantic/anthropic deprecation
+    # warnings into what operators treat as an actionable error stream).
+    for _noisy in ("httpx", "urllib3", "asyncio", "pydantic", "anthropic", "langchain"):
+        logging.getLogger(_noisy).setLevel(logging.ERROR)
+
     # Start the listener with all collected handlers
     _listener = QueueListener(log_queue, *handlers, respect_handler_level=True)
     _listener.start()

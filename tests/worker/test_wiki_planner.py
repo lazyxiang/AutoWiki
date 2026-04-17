@@ -857,3 +857,47 @@ def test_validate_wiki_plan_considers_secondary_assignment_for_orphans():
     assert "shared.py" not in overview.files
     core = next(p for p in plan.pages if p.title == "Core")
     assert core.secondary_files == ["shared.py"]
+
+
+async def test_generate_wiki_plan_with_clone_root(mock_llm):
+    """generate_wiki_plan exercises the clone_root anchors-building branch."""
+    from pathlib import Path
+
+    from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
+
+    fixture_root = Path(__file__).parent.parent / "fixtures" / "simple-repo"
+    files = ["main.py", "models.py", "utils.py"]
+    file_analysis = FileAnalysis(
+        files={f: FileInfo(rel_path=f, entities=[], summary="") for f in files}
+    )
+    mock_llm.generate_structured.side_effect = [
+        {
+            "pages": [
+                {"title": "Overview", "purpose": "Top-level overview."},
+                {"title": "Models", "purpose": "Data models."},
+                {"title": "Utils", "purpose": "Utility helpers."},
+            ]
+        },
+        {
+            "assignments": [
+                {"file": "main.py", "primary_page": "Overview"},
+                {"file": "models.py", "primary_page": "Models"},
+                {"file": "utils.py", "primary_page": "Utils"},
+            ]
+        },
+    ]
+
+    plan = await generate_wiki_plan(
+        file_analysis,
+        repo_name="simple-repo",
+        llm=mock_llm,
+        clone_root=fixture_root,
+    )
+
+    assert len(plan.pages) == 3
+    titles = {p.title for p in plan.pages}
+    assert titles == {"Overview", "Models", "Utils"}
+    # The outline prompt received by Phase 1 should have included an anchors block;
+    # verify the plan was produced (anchors don't appear in plan output, but the
+    # call must complete without error and produce a valid plan).
+    assert any(p.files for p in plan.pages)

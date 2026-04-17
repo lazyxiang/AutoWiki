@@ -985,11 +985,29 @@ def _heuristic_recovery_assignment(
                 assigned_files.update(files)
 
     # 2. Heuristic assignment for everything else (Orphans + Overloaded)
+    # Respect MAX_FILES_PER_PAGE when merging residue into existing buckets;
+    # overflow goes to the overview/first page as a last resort.
     remainder = [f for f in all_files if f not in assigned_files]
+    overflow: list[str] = []
     if remainder:
         recovery = _directory_cluster_assign(outline, remainder)
         for title, files in recovery.items():
-            valid_assignments.setdefault(title, []).extend(files)
+            bucket = valid_assignments.setdefault(title, [])
+            capacity = MAX_FILES_PER_PAGE - len(bucket)
+            if capacity >= len(files):
+                bucket.extend(files)
+            else:
+                bucket.extend(files[: max(capacity, 0)])
+                overflow.extend(files[max(capacity, 0) :])
+    if overflow:
+        fallback = next(
+            (p["title"] for p in outline if "overview" in p["title"].lower()),
+            outline[0]["title"] if outline else None,
+        )
+        if fallback:
+            bucket = valid_assignments.setdefault(fallback, [])
+            cap = MAX_FILES_PER_PAGE - len(bucket)
+            bucket.extend(overflow[: max(cap, 0)])
 
     # Final safety: deduplicate and ensure every title exists
     for p in outline:
@@ -1137,7 +1155,6 @@ async def _assign_files(
     system: str,
     on_retry: OnRetryCallback | None,
     max_retries: int = 3,
-    _extra_context: str | None = None,
     fast_llm: LLMProvider | None = None,
 ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     """Phase 2 execution: Assign every file via batched LLM calls with feedback.
@@ -1146,7 +1163,7 @@ async def _assign_files(
     back to the LLM as feedback in the prompt.
     """
     preferred_llm = fast_llm or llm
-    last_error: str | None = _extra_context
+    last_error: str | None = None
     last_result: dict[str, list[str]] | None = None
 
     for attempt in range(1, max_retries + 1):

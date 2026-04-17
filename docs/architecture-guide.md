@@ -202,12 +202,12 @@ supply `child_contents` for parent pages that do need regeneration.
 
 ## 7. Still-Planned Work (Not Yet Implemented)
 
+> **Note:** Deep Research mode (Phase 3) and user steering via `.autowiki/wiki.json` (Phase 4) are both **implemented** — shipped in PR #20. The items below are features still pending.
+
 | Phase | Feature | Reference |
 |-------|---------|-----------|
-| Phase 3 | Deep Research mode | `docs/superpowers/specs/2026-03-22-autowiki-design.md` §8 |
-| Phase 3 | MCP server (`read_wiki_structure`, `read_wiki_page`, `search_wiki`, `ask_question`, `deep_research`) | `CLAUDE.md` API Surface |
-| Phase 4 | GitHub webhooks for auto-refresh | `docs/superpowers/specs/2026-03-22-autowiki-design.md` §9 |
-| Phase 4 | User steering via `.autowiki/wiki.json` | `CLAUDE.md` storage layout; original PRD |
+| Phase 5 | MCP server (`read_wiki_structure`, `read_wiki_page`, `search_wiki`, `ask_question`, `deep_research`) | `CLAUDE.md` API Surface |
 | Phase 5 | GitLab / Bitbucket support | `docs/superpowers/specs/2026-03-22-autowiki-design.md` |
 | Phase 5 | Hybrid search (BM25 + vector) | `docs/superpowers/specs/2026-03-22-autowiki-design.md` |
+| Deferred | GitHub webhooks for auto-refresh | `docs/superpowers/specs/2026-03-22-autowiki-design.md` §9 |
 | Stub | `cache_ttl: long` (1-hour Anthropic cache) | `docs/superpowers/specs/2026-04-10-wiki-page-quality-redesign.md` implementation notes |

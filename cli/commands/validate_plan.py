@@ -8,24 +8,17 @@ without running the pipeline.  No LLM calls, no git clone, no writes.
 from __future__ import annotations
 
 import json
-import os
 import statistics
 from pathlib import Path
 
 import typer
 
+from shared.config import Config
 from worker.pipeline.wiki_planner import (
     WikiPageSpec,
     WikiPlan,
     validate_wiki_plan,
 )
-
-
-def _data_dir() -> Path:
-    raw = os.environ.get("AUTOWIKI_DATA_DIR")
-    if raw:
-        return Path(raw)
-    return Path.home() / ".autowiki"
 
 
 def _load_plan(plan_path: Path) -> tuple[dict, WikiPlan]:
@@ -61,7 +54,7 @@ def validate_plan_cmd(
     ),
 ) -> None:
     """Report coverage, sizes, and validation status of a stored plan."""
-    data_dir = _data_dir()
+    data_dir = Config().data_dir
     plan_path = data_dir / "repos" / repo / "ast" / "wiki_plan.json"
     if not plan_path.is_file():
         typer.echo(f"Error: wiki plan not found at {plan_path}", err=True)
