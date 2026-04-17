@@ -15,6 +15,7 @@ This module handles everything that happens before analysis:
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -384,12 +385,30 @@ async def get_changed_files(clone_dir: Path, old_sha: str, new_sha: str) -> list
     return await loop.run_in_executor(None, _do_diff)
 
 
-def get_affected_pages(changed_files: list[str], wiki_plan: WikiPlan) -> set[str]:
-    """Return titles of wiki pages whose assigned files overlap with changed_files.
+@dataclass
+class AffectedPages:
+    """Result of :func:`get_affected_pages`.
 
-    Used during incremental refresh to determine which wiki pages need to be
-    regenerated: only pages that reference at least one of the changed files
-    are included in the result.
+    ``primary`` — page titles whose *primary* file set overlaps with the
+    changed file set.  These pages must be regenerated in the current
+    refresh cycle.
+
+    ``secondary`` — page titles whose *secondary* file set overlaps but
+    whose primary set does not.  These pages are marked stale and
+    regenerated in the next refresh cycle (deferred, to keep refresh
+    cost bounded).  A page never appears in both sets — primary wins.
+    """
+
+    primary: set[str]
+    secondary: set[str]
+
+
+def get_affected_pages(changed_files: list[str], wiki_plan: WikiPlan) -> AffectedPages:
+    """Return pages affected by the changed files, split by assignment kind.
+
+    Primary pages (whose owned files changed) are regenerated eagerly in
+    the current refresh cycle.  Secondary pages (where the changed file is
+    only referenced, not owned) are deferred to the next cycle.
 
     Args:
         changed_files: List of relative file paths (as returned by
@@ -398,27 +417,16 @@ def get_affected_pages(changed_files: list[str], wiki_plan: WikiPlan) -> set[str
             describing the current page-to-file assignments.
 
     Returns:
-        set[str]: Page titles (strings matching ``WikiPageSpec.title``) for
-        every page that references at least one changed file.
-
-    Example:
-        >>> from worker.pipeline.wiki_planner import WikiPlan, WikiPageSpec
-        >>> plan = WikiPlan(pages=[
-        ...     WikiPageSpec(title="API Layer", purpose="...",
-        ...                  files=["api/routes.py", "api/models.py"]),
-        ...     WikiPageSpec(title="Worker", purpose="...",
-        ...                  files=["worker/jobs.py"]),
-        ... ])
-        >>> get_affected_pages(["api/routes.py"], plan)
-        {'API Layer'}
-        >>> get_affected_pages(["api/routes.py", "worker/jobs.py"], plan)
-        {'API Layer', 'Worker'}
-        >>> get_affected_pages(["unrelated/file.py"], plan)
-        set()
+        :class:`AffectedPages` with ``primary`` and ``secondary`` title sets.
+        A page never appears in both sets — primary wins.
     """
     changed = set(changed_files)
-    affected: set[str] = set()
+    primary: set[str] = set()
+    secondary: set[str] = set()
     for page in wiki_plan.pages:
         if any(f in changed for f in (page.files or [])):
-            affected.add(page.title)
-    return affected
+            primary.add(page.title)
+            continue  # primary wins
+        if any(f in changed for f in (page.secondary_files or [])):
+            secondary.add(page.title)
+    return AffectedPages(primary=primary, secondary=secondary)

@@ -35,6 +35,7 @@ from worker.embedding import make_embedding_provider
 from worker.llm import make_fast_llm_provider, make_llm_provider
 from worker.pipeline.ast_analysis import FileAnalysis, analyze_all_files
 from worker.pipeline.dependency_graph import build_dependency_graph
+from worker.pipeline.fixture_recorder import FixtureRecorder, is_recording_enabled
 from worker.pipeline.ingestion import (
     clone_or_fetch,
     extract_readme,
@@ -513,6 +514,11 @@ async def run_full_index(
 
         # Stage 5: Wiki Planner — LLM generates logical page tree (WikiPlan)
         logger.info("Stage 5: Wiki Planner starting")
+        fixture_recorder = (
+            FixtureRecorder(root=repo_data_dir / "fixtures")
+            if is_recording_enabled()
+            else None
+        )
         plan = await generate_wiki_plan(
             file_analysis,
             repo_name=name,
@@ -523,6 +529,8 @@ async def run_full_index(
             wiki_language=wiki_language,
             fast_llm=fast_llm,
             user_steering=user_steering,
+            clone_root=clone_root,
+            fixture_recorder=fixture_recorder,
         )
         logger.info(
             "Wiki plan generated: %d pages planned for %s", len(plan.pages), name
@@ -798,9 +806,9 @@ async def run_refresh_index(
             )
             return
 
-        content = await asyncio.get_running_loop().run_in_executor(
-            None, wiki_plan_path.read_text
-        )
+        loop = asyncio.get_running_loop()
+        content = await loop.run_in_executor(None, wiki_plan_path.read_text)
+
         plan_data = json.loads(content)
 
         # Load user-facing wiki.json to preserve any user-edited page_notes
@@ -832,6 +840,7 @@ async def run_refresh_index(
                     purpose=p.get("purpose", ""),
                     parent=p.get("parent"),
                     files=p.get("files", []),
+                    secondary_files=p.get("secondary_files", []),
                     # Merge saved page_notes back into the spec; default to empty note
                     page_notes=saved_page_notes.get(p["title"], [{"content": ""}]),
                 )
@@ -839,7 +848,35 @@ async def run_refresh_index(
             ],
         )
 
-        affected_page_titles = get_affected_pages(changed_files, old_plan)
+        stale_path = ast_dir / "stale_secondary.json"
+        prior_stale: set[str] = set()
+
+        def _read_stale():
+            if not stale_path.exists():
+                return set()
+            try:
+                return set(json.loads(stale_path.read_text()))
+            except (OSError, json.JSONDecodeError):
+                return set()
+
+        prior_stale = await loop.run_in_executor(None, _read_stale)
+
+        affected = get_affected_pages(changed_files, old_plan)
+        logger.info(
+            "Refresh affects %d primary pages and %d secondary pages (deferred)",
+            len(affected.primary),
+            len(affected.secondary),
+        )
+        # Write deferred secondary pages for the next refresh cycle.  Include
+        # prior_stale entries so they are not silently dropped if this refresh
+        # fails before regenerating them.  Pages processed in this cycle
+        # (affected.primary | prior_stale) are excluded because they are
+        # regenerated below — they only stay queued if that regeneration fails,
+        # at which point the next full refresh will re-detect them via diff.
+        next_stale = affected.secondary | (prior_stale - affected.primary)
+        await _write_text_async(stale_path, json.dumps(sorted(next_stale)))
+        affected_page_titles = affected.primary | prior_stale
+
         if not affected_page_titles:
             logger.info("No affected pages found for changed files.")
             now = datetime.now(UTC)
@@ -989,7 +1026,7 @@ async def run_refresh_index(
             f
             for p in old_plan.pages
             if p.title in affected_page_titles
-            for f in (p.files or [])
+            for f in [*(p.files or []), *(p.secondary_files or [])]
         }
         affected_files_set |= added_files
         affected_file_analysis = FileAnalysis(
@@ -1003,6 +1040,11 @@ async def run_refresh_index(
         unaffected_titles = {
             p.title for p in old_plan.pages if p.title not in affected_page_titles
         }
+        fixture_recorder = (
+            FixtureRecorder(root=repo_data_dir / "fixtures")
+            if is_recording_enabled()
+            else None
+        )
         plan = await generate_wiki_plan(
             affected_file_analysis,
             repo_name=name,
@@ -1014,6 +1056,8 @@ async def run_refresh_index(
             wiki_language=wiki_language,
             fast_llm=fast_llm,
             user_steering=user_steering,
+            clone_root=clone_root,
+            fixture_recorder=fixture_recorder,
         )
         logger.info(
             "Wiki plan generated: %d pages updated for %s", len(plan.pages), name

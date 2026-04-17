@@ -43,11 +43,11 @@ def setup_logging(config: Config) -> None:
 
     handlers: list[logging.Handler] = []
 
-    # 1. Error Log: {data_dir}/error.log (ERROR and above)
+    # 1. Error Log: {data_dir}/error.log (WARNING and above)
     error_handler = RotatingFileHandler(
         config.error_log_path, maxBytes=10 * 1024 * 1024, backupCount=5
     )
-    error_handler.setLevel(logging.ERROR)
+    error_handler.setLevel(logging.WARNING)
     error_handler.setFormatter(formatter)
     handlers.append(error_handler)
 
@@ -88,6 +88,12 @@ def setup_logging(config: Config) -> None:
 
         llm_handler.addFilter(NameFilter())
         handlers.append(llm_handler)
+
+    # Suppress noisy third-party warnings from error.log (WARNING-level threshold
+    # on error_handler would otherwise funnel httpx/pydantic/anthropic deprecation
+    # warnings into what operators treat as an actionable error stream).
+    for _noisy in ("httpx", "urllib3", "asyncio", "pydantic", "anthropic", "langchain"):
+        logging.getLogger(_noisy).setLevel(logging.ERROR)
 
     # Start the listener with all collected handlers
     _listener = QueueListener(log_queue, *handlers, respect_handler_level=True)

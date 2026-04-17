@@ -5,7 +5,7 @@ import json
 from collections.abc import AsyncIterator
 from typing import Any
 
-from worker.llm.base import LLMProvider
+from worker.llm.base import LLMProvider, _parse_json_response
 from worker.llm.prompt_segment import PromptInput, normalize_prompt, segments_to_text
 
 try:
@@ -64,7 +64,7 @@ class GeminiProvider(LLMProvider):
             contents=prompt_with_schema,
             config=config,
         )
-        return json.loads(response.text)
+        return _parse_json_response(response.text)
 
     async def generate_stream(
         self, prompt: PromptInput, system: PromptInput = ""

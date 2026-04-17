@@ -76,7 +76,7 @@ async def test_batched_assignment_collects_all_files():
     llm = AsyncMock()
     llm.generate_structured.side_effect = fake_generate_structured
 
-    result = await _assign_files_in_batches(
+    result, _ = await _assign_files_in_batches(
         outline=outline,
         file_summary="fs",
         dep_info=None,
@@ -162,7 +162,7 @@ async def test_batched_assignment_retries_unassigned_files():
     llm = AsyncMock()
     llm.generate_structured.side_effect = fake
 
-    result = await _assign_files_in_batches(
+    result, _ = await _assign_files_in_batches(
         outline=outline,
         file_summary="fs",
         dep_info=None,
@@ -177,3 +177,75 @@ async def test_batched_assignment_retries_unassigned_files():
     assert len(result["X"]) == 10
     # Two calls: initial batch + cleanup batch
     assert call_count[0] == 2
+
+
+def test_assignment_schema_has_primary_and_secondary_fields():
+    """_ASSIGNMENT_SCHEMA must require file + primary_page and allow secondary_pages."""
+    from worker.pipeline.wiki_planner import _ASSIGNMENT_SCHEMA
+
+    item_props = _ASSIGNMENT_SCHEMA["properties"]["assignments"]["items"]
+    assert "primary_page" in item_props["properties"]
+    assert "secondary_pages" in item_props["properties"]
+    # primary_page is required; secondary_pages is optional
+    assert "primary_page" in item_props["required"]
+    assert "secondary_pages" not in item_props["required"]
+    # secondary_pages is capped at 2
+    assert item_props["properties"]["secondary_pages"]["maxItems"] == 2
+
+
+def test_batch_user_prompt_mentions_secondary_pages():
+    """The per-batch user prompt must describe both primary_page and secondary_pages."""
+    from worker.pipeline.wiki_planner import _build_batch_assignment_user
+
+    seg = _build_batch_assignment_user(
+        batch_files=["util.py"],
+        outline_titles=["Overview", "Core"],
+    )
+    assert "primary_page" in seg.text
+    assert "secondary_pages" in seg.text
+
+
+async def test_batched_assignment_collects_secondary_assignments():
+    """Secondary page assignments from LLM responses are collected in the second
+    return value of _assign_files_in_batches."""
+    from unittest.mock import AsyncMock
+
+    from worker.pipeline.wiki_planner import _assign_files_in_batches
+
+    outline = [
+        {"title": "Overview", "purpose": "top"},
+        {"title": "Core", "purpose": "core"},
+    ]
+    # shared.py is a utility referenced by both pages
+    all_files = ["main.py", "shared.py"]
+
+    async def fake(user_seg, schema, system):
+        return {
+            "assignments": [
+                {"file": "main.py", "primary_page": "Overview", "secondary_pages": []},
+                {
+                    "file": "shared.py",
+                    "primary_page": "Core",
+                    "secondary_pages": ["Overview"],
+                },
+            ]
+        }
+
+    llm = AsyncMock()
+    llm.generate_structured.side_effect = fake
+
+    primary, secondary = await _assign_files_in_batches(
+        outline=outline,
+        file_summary="fs",
+        dep_info=None,
+        all_files=all_files,
+        llm=llm,
+        system="sys",
+        on_retry=None,
+        batch_size=40,
+    )
+
+    assert "main.py" in primary["Overview"]
+    assert "shared.py" in primary["Core"]
+    # shared.py should appear in Overview's secondary list
+    assert "shared.py" in secondary.get("Overview", [])

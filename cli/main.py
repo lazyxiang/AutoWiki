@@ -7,6 +7,7 @@ from cli.commands.list_repos import list_cmd
 from cli.commands.refresh import refresh_cmd
 from cli.commands.research_cmd import research_cmd
 from cli.commands.serve import serve_cmd
+from cli.commands.validate_plan import validate_plan_cmd
 
 app = typer.Typer(name="autowiki", help="AutoWiki — AI-powered wiki generator")
 app.command("index")(index_cmd)
@@ -16,6 +17,7 @@ app.add_typer(config_app, name="config")
 app.command("refresh")(refresh_cmd)
 app.command("chat")(chat_cmd)
 app.command("research")(research_cmd)
+app.command("validate-plan")(validate_plan_cmd)
 
 if __name__ == "__main__":
     app()

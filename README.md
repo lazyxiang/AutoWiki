@@ -177,6 +177,9 @@ autowiki serve [--port 3000] [--api-port 3001]
 # Run a deep research query against an indexed repo
 autowiki research github.com/owner/repo "How does the authentication system work?"
 
+# Inspect a stored wiki plan without running the pipeline
+autowiki validate-plan owner-repo
+
 # Show or update config
 autowiki config show
 autowiki config set <key> <value>  # Dot-separated key, e.g. llm.provider, embedding.model
@@ -315,7 +318,7 @@ Import statements are extracted from each file using language-specific regex pat
 Source files are split into overlapping chunks with LangChain's `RecursiveCharacterTextSplitter`, embedded in batches by the configured embedding provider, and stored in a FAISS `IndexFlatIP` (inner-product / cosine similarity). Entity-aware chunking keeps whole functions/classes together when possible. Pass `--reuse-index` to skip this stage and reuse an existing index.
 
 **Stage 5 — Wiki planning** (`worker/pipeline/wiki_planner.py`)
-A two-phase LLM process: Phase 1 generates the page hierarchy (titles, purposes, parent relationships); Phase 2 assigns every source file to a page. Each phase validates its own output and self-retries before proceeding. The output is saved as `wiki.json` (user-facing) and `wiki_plan.json` (internal, with file mappings for incremental refresh).
+A two-phase LLM process: Phase 1 generates the page hierarchy (titles, purposes, parent relationships) informed by architectural anchors (directory tree, package docstrings, README headings); Phase 2 assigns every source file to a primary page and up to two secondary pages. Each phase validates its output and self-retries with feedback. On final failure, `_assign_files` falls back to a locality-preserving directory-cluster heuristic. The output is saved as `wiki.json` (user-facing) and `wiki_plan.json` (internal, with file mappings and `secondary_files` for incremental refresh). Use `autowiki validate-plan <repo>` to inspect the plan offline.
 
 **Stage 6 — Page generation** (`worker/pipeline/page_generator.py`)
 Pages are generated bottom-up (leaf pages first, parent pages last) through a 4-pass pipeline per page:
@@ -360,6 +363,7 @@ WS /ws/jobs/{job_id}                 → streams {progress, status} every second
 - **Phase 2.5** ✅ — Wiki quality enhancements: two-phase planner, 4-pass page generation, prompt caching, fast model support, RAG tuning, diagram post-processing
 - **Phase 3** ✅ — Deep Research mode: multi-step RAG investigation with LLM planner, per-step AST context, synthesized Markdown report; REST + WebSocket API; `autowiki research` CLI command (PR #20)
 - **Phase 4** ✅ — User-steered wiki structure via `.autowiki/wiki.json`: override page hierarchy, assign modules to pages, inject repo/page notes into generation (PR #20)
+- **Phase 4.5** ✅ — Planner robustness hardening (PR #22): Layer C1 outline anchors (directory tree / package docstrings / README headings injected into Phase-1 prompt), Layer C2 multi-page file assignment (`secondary_files` on `WikiPageSpec`, deferred stale refresh), `autowiki validate-plan` offline diagnostic CLI, fixture recorder, feedback-retry loop in `_assign_files`, Gemini JSON parsing fixes, `_is_high_priority_file` segment-based matching, Mermaid orphaned-`end` sanitisation, Docker Compose startup fixes
 - **Phase 5** — GitLab/Bitbucket, hybrid search, MCP server
 
 ---

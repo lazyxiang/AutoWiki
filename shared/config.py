@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,12 +22,27 @@ class LLMConfig(BaseSettings):
     # scaffolded here for forward compatibility.
     cache_ttl: Literal["short", "long"] = "short"
 
+    @field_validator("provider", "cache_ttl", mode="before")
+    @classmethod
+    def _coerce_empty_to_default(cls, v: object, info) -> object:
+        """Treat an unset/empty env var as the field default."""
+        if v == "":
+            defaults = {"provider": "anthropic", "cache_ttl": "short"}
+            return defaults[info.field_name]
+        return v
+
 
 class EmbeddingConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AUTOWIKI_EMBEDDING_")
     provider: Literal["openai", "google", "ollama"] = "openai"
     model: str = "text-embedding-3-small"
     api_key: str = ""
+
+    @field_validator("provider", mode="before")
+    @classmethod
+    def _coerce_empty_provider(cls, v: object) -> object:
+        """Treat an unset/empty env var as the field default."""
+        return "openai" if v == "" else v
 
 
 class ServerConfig(BaseSettings):
@@ -36,10 +51,22 @@ class ServerConfig(BaseSettings):
     port: int = 3001
     auth_token: str = ""
 
+    @field_validator("port", mode="before")
+    @classmethod
+    def _coerce_empty_port(cls, v: object) -> object:
+        """Treat an unset/empty env var as the field default."""
+        return 3001 if v == "" else v
+
 
 class ChatConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AUTOWIKI_CHAT_")
     history_window: int = 10
+
+    @field_validator("history_window", mode="before")
+    @classmethod
+    def _coerce_empty_history_window(cls, v: object) -> object:
+        """Treat an unset/empty env var as the field default."""
+        return 10 if v == "" else v
 
 
 class Config(BaseSettings):

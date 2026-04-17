@@ -131,6 +131,10 @@ def sanitize_mermaid(text: str) -> str:
     - Compound shapes like ``[(text)]``, ``([text])``, ``((text))``,
       ``{{text}}`` are preserved; only the inner text is quoted when
       it contains special characters.
+    - Orphaned ``end`` keywords (an ``end`` with no matching ``subgraph``
+      opening at the same nesting level) are removed; the LLM sometimes
+      emits a node definition followed by ``end`` instead of a proper
+      ``subgraph ... end`` block.
 
     Already-quoted labels are left unchanged.
 
@@ -161,7 +165,22 @@ def sanitize_mermaid(text: str) -> str:
     lines = text.split("\n")
     result: list[str] = []
 
+    # Track subgraph depth so orphaned `end` keywords can be dropped.
+    subgraph_depth = 0
+
     for line in lines:
+        stripped = line.strip()
+
+        # Count subgraph openings to maintain depth.
+        if re.match(r"subgraph\b", stripped):
+            subgraph_depth += 1
+        elif stripped == "end":
+            if subgraph_depth > 0:
+                subgraph_depth -= 1
+            else:
+                # Orphaned `end` — no open subgraph to close; drop the line.
+                continue
+
         # Sanitise edge labels first (|...|)
         line = _EDGE_LABEL_RE.sub(_edge_replacer, line)
         # Handle double-bracket shapes before single-bracket ones

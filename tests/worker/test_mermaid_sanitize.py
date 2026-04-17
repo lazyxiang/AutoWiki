@@ -276,3 +276,58 @@ class TestEdgeCases:
     )
     def test_clean_diagrams_unchanged(self, inp, expected):
         assert sanitize_mermaid(inp) == expected
+
+
+class TestOrphanedEnd:
+    """Orphaned `end` keywords with no matching `subgraph` are removed."""
+
+    def test_orphaned_end_removed(self):
+        """LLM uses node definition instead of subgraph syntax; stray `end` dropped."""
+        diagram = (
+            "flowchart LR\n"
+            '    SubGraph1["Session Request"]\n'
+            '        GetSess["get_session()"] --> CheckCache["Check cache"]\n'
+            "    end\n"
+            '    Teardown["dispose_db()"] --> CloseEngine["engine.dispose()"]'
+        )
+        result = sanitize_mermaid(diagram)
+        assert "end" not in [line.strip() for line in result.splitlines()]
+        assert 'Teardown["dispose_db()"]' in result
+
+    def test_valid_subgraph_end_preserved(self):
+        """A properly opened subgraph keeps its `end` keyword."""
+        diagram = (
+            "flowchart TD\n    subgraph Init\n        A --> B\n    end\n    B --> C"
+        )
+        result = sanitize_mermaid(diagram)
+        assert result.count("subgraph") == 1
+        assert result.count("end") == 1
+
+    def test_nested_subgraphs_balanced(self):
+        """Nested subgraphs with matching ends are fully preserved."""
+        diagram = (
+            "flowchart TD\n"
+            "    subgraph Outer\n"
+            "        subgraph Inner\n"
+            "            A --> B\n"
+            "        end\n"
+            "    end"
+        )
+        result = sanitize_mermaid(diagram)
+        assert result.count("subgraph") == 2
+        assert result.count("end") == 2
+
+    def test_mixed_valid_and_orphaned(self):
+        """Valid subgraph + orphaned end: keep valid, drop orphan."""
+        diagram = (
+            "flowchart LR\n"
+            "    subgraph Auth\n"
+            "        A --> B\n"
+            "    end\n"
+            '    Orphan["Node"]\n'
+            "    end\n"
+            "    B --> C"
+        )
+        result = sanitize_mermaid(diagram)
+        assert result.count("end") == 1
+        assert "subgraph Auth" in result

@@ -13,14 +13,30 @@ logger = logging.getLogger("worker.llm")
 
 
 def _parse_json_response(raw: str) -> dict:
-    """Strip optional Markdown code fence and parse JSON."""
+    """Strip optional Markdown code fence and parse JSON.
+
+    Handles three common Gemini response patterns:
+    - Bare JSON object
+    - JSON wrapped in ```json ... ``` fences
+    - Valid JSON followed by trailing prose (Extra data)
+    """
     raw = raw.strip()
     if raw.startswith("```"):
         parts = raw.split("\n", 1)
         raw = parts[1] if len(parts) > 1 else parts[0][3:]
         if "```" in raw:
             raw = raw.rsplit("```", 1)[0]
-    return json.loads(raw)
+        raw = raw.strip()
+    try:
+        obj = json.loads(raw)
+    except json.JSONDecodeError:
+        # Trailing content after valid JSON — stop at first complete object/array
+        obj, _ = json.JSONDecoder().raw_decode(raw)
+    if not isinstance(obj, dict):
+        raise json.JSONDecodeError(
+            f"Expected a JSON object, got {type(obj).__name__}", raw, 0
+        )
+    return obj
 
 
 def _truncate(text: str, max_len: int = 2000) -> str:
