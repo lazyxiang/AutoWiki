@@ -112,6 +112,20 @@ superseded.
 | `docs/superpowers/specs/2026-04-10-wiki-page-quality-redesign.md` | Implemented, merged to main (PRs #15, #17) | 4-pass page generation, `PromptSegment` / prompt caching, `fast_model` split, `doc_k` downweighting, diagram header enforcement |
 | `docs/superpowers/plans/2026-04-10-wiki-page-quality-redesign.md` | Complete | Step-by-step task list for the above |
 
+### Phase 3 & 4 — Deep Research and User Steering
+
+| Document | Status | Introduced |
+|----------|--------|------------|
+| `docs/superpowers/plans/2026-04-14-phase3&4-deep-research-and-steering.md` | Complete (PR #20) | Multi-step RAG research, LLM planner, synthesized report, `autowiki research` CLI, user-steering via `wiki.json` |
+
+### Phase 4.5 — Planner Robustness Hardening
+
+| Document | Status | Introduced |
+|----------|--------|------------|
+| `docs/2026-04-15-wiki-planner-robustness-investigation.md` | Complete | Investigation findings: outline fragmentation root causes, three candidate fixes |
+| `docs/superpowers/plans/2026-04-15-wiki-planner-robustness.md` | Complete | Implementation plan for investigation-recommended fixes applied in pre-PR #22 commits |
+| `docs/superpowers/plans/2026-04-16-deferred-wiki-planner-robustness.md` | **Complete (PR #22)** | Layer C1 outline anchors, Layer C2 `secondary_files` multi-page assignment, `autowiki validate-plan` offline harness, fixture recorder |
+
 ---
 
 ## 5. Tracing a Feature End-to-End
@@ -129,9 +143,11 @@ superseded.
    Key output: a `FileAnalysis` object and a `FAISSStore`.
 
 4. **Stage 5 — Planner** (`worker/pipeline/wiki_planner.py`):
-   - `_build_outline_prompt()` → Phase 1 LLM call → `_validate_outline_structure()`
-   - `_build_assignment_prompt()` → Phase 2 LLM call (fast model) → `_validate_assignments()`
-   - Result: a `WikiPlan` (list of `WikiPageSpec`, each with title, purpose, files, parent)
+   - Phase 1: `_build_outline_prompt()` (with architectural anchors from `outline_anchors.py`) → LLM call → `_validate_outline_structure()`; self-retries with feedback up to `max_retries` times
+   - Phase 2: `_assign_files_in_batches()` (40-file chunks, cacheable system prompt) → `_validate_assignments()`; self-retries with feedback; on final failure falls back to `_directory_cluster_assign()` (locality-preserving heuristic)
+   - Result: a `WikiPlan` (list of `WikiPageSpec`, each with title, purpose, `files`, `secondary_files`, parent)
+   - Optional fixture recording: `AUTOWIKI_RECORD_PLANNER_FIXTURES=1` dumps `outline.json`, `assignments.json`, `wiki_plan.json`
+   - Offline diagnostics: `autowiki validate-plan <repo>` reads `ast/wiki_plan.json`
    - Design rationale: `docs/superpowers/specs/2026-04-08-wiki-planner-improvements-design.md` §5
 
 5. **Stage 6 — Page Generator** (`worker/pipeline/page_generator.py`):

@@ -1,5 +1,7 @@
 # Deferred Planner Improvements — Implementation Plan
 
+> **Status: ✅ COMPLETE — implemented in PR #22 (`feature/deferred-planner-improvements`).**
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Implement the three items explicitly deferred from `docs/superpowers/plans/2026-04-15-wiki-planner-robustness.md` — (1) Layer C1 outline anchors, (2) Layer C2 multi-page file assignment, and (3) the independent stage validation harness — so the Phase 1/2 planner produces less-fragmented page hierarchies, one file can surface on multiple pages when it genuinely belongs to both, and maintainers can diagnose planner output without burning live API budget.

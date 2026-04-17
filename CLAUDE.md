@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-AutoWiki **Phases 1, 2, 2.5, 3, and 4 are complete**. Phase 1 tagged `v0.1.0-phase1`; Phase 2 (chat, diagrams, incremental refresh) merged via PR #4; Phase 2.5 (wiki quality enhancements) merged across PRs #15 and #17; Phase 3 (Deep Research) and Phase 4 (User Steering) merged via PR #20.
+AutoWiki **Phases 1, 2, 2.5, 3, 4, and 4.5 are complete**. Phase 1 tagged `v0.1.0-phase1`; Phase 2 (chat, diagrams, incremental refresh) merged via PR #4; Phase 2.5 (wiki quality enhancements) merged across PRs #15 and #17; Phase 3 (Deep Research) and Phase 4 (User Steering) merged via PR #20; Phase 4.5 (planner robustness hardening: Layer C1/C2, validate-plan, fixture recorder, feedback retries, Mermaid fixes, Docker startup fixes) merged via PR #22.
 
 ## What AutoWiki Is
 
@@ -94,6 +94,7 @@ Default LLM: `claude-sonnet-4-6`. Supported providers: `anthropic`, `openai`, `o
 - **Planner fixture recorder**: set `AUTOWIKI_RECORD_PLANNER_FIXTURES=1` to dump `outline.json`, `assignments.json`, and `wiki_plan.json` under `~/.autowiki/repos/{repo}/fixtures/` during a live run. `autowiki validate-plan` reads only `ast/wiki_plan.json` today — future work can extend it to replay stages from the fixtures without live API calls.
 - **Multi-page assignments (Layer C2)**: `_ASSIGNMENT_SCHEMA` emits `{file, primary_page, secondary_pages: [...≤2]}`. `WikiPageSpec.secondary_files` stores per-page referenced-but-not-owned files; the page generator injects them into the prompt as a "Referenced modules" block but excludes them from the source-files table. `get_affected_pages` returns `AffectedPages(primary=..., secondary=...)` — primary pages regenerate in the current refresh, secondary pages are persisted to `ast/stale_secondary.json` and regenerated in the next refresh cycle.
 - **Outline anchors (Layer C1)**: `generate_wiki_plan` accepts `clone_root` and synthesises three architectural signals from existing artefacts via `worker/pipeline/outline_anchors.py`: a directory tree (≤3 levels, with file counts), up to 25 package-entry docstrings (`__init__.py`, `mod.rs`, `index.ts`), and the `##`/`###` headings of the README. These are injected into the Phase-1 outline prompt under an "Architectural anchors" section to reduce cross-page fragmentation of cohesive subsystems.
+- **Mermaid sanitization** (`worker/utils/mermaid.py`): `sanitize_mermaid` quotes node/edge labels containing `(){}|<>/`, handles compound shapes, strips code fences, and removes orphaned `end` keywords (an `end` with no matching `subgraph` opening) that LLMs sometimes emit when using a node definition instead of a proper `subgraph … end` block.
 
 ## API Surface
 
@@ -173,6 +174,7 @@ Non-Docker: `autowiki serve` spawns API + worker + Next.js as subprocesses.
 - **Phase 2.5** ✅ — Wiki quality enhancements: two-phase planner with per-phase validation, bottom-up child-synthesis generation, 4-pass page orchestrator, prompt caching, fast model, RAG doc_k tuning, diagram post-processing (PRs #15 and #17)
 - **Phase 3** ✅ — Deep Research mode: multi-step RAG investigation, LLM planner, per-step AST context, synthesized report; `autowiki research` CLI; REST + WebSocket API (PR #20)
 - **Phase 4** ✅ — User-steered wiki structure via `.autowiki/wiki.json`: override page hierarchy, assign modules to pages, inject repo/page notes into generation (PR #20)
+- **Phase 4.5** ✅ — Planner robustness hardening (PR #22): Layer C1 outline anchors, Layer C2 multi-page assignment (`secondary_files`), `autowiki validate-plan` offline CLI, fixture recorder, feedback-retry loop in `_assign_files`, Gemini JSON parsing, `_is_high_priority_file` segment-based matching, Mermaid orphaned-`end` sanitisation, Docker Compose startup fixes
 - **Phase 5** — GitLab/Bitbucket + hybrid search + MCP server
 
 ## Deferred Planner Improvements
