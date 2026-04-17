@@ -30,9 +30,11 @@ def _data_dir() -> Path:
 
 def _load_plan(plan_path: Path) -> tuple[dict, WikiPlan]:
     data = json.loads(plan_path.read_text())
+    # Normalise into WikiPlan after validation or for stats use.
+    # Note: validate_plan_cmd calls validate_wiki_plan(data) first.
     pages = [
         WikiPageSpec(
-            title=p.get("title", "(missing title)"),
+            title=p.get("title", ""),
             purpose=p.get("purpose", ""),
             parent=p.get("parent"),
             files=p.get("files", []),
@@ -64,6 +66,15 @@ def validate_plan_cmd(
         raise typer.Exit(1)
 
     raw_plan, plan = _load_plan(plan_path)
+
+    try:
+        validate_wiki_plan(
+            raw_plan,
+        )
+    except ValueError as exc:
+        typer.echo(f"VALIDATION FAILURE: {exc}", err=False)
+        raise typer.Exit(1)
+
     total_primary = sum(len(p.files) for p in plan.pages)
     total_secondary = sum(len(p.secondary_files) for p in plan.pages)
     sizes = [len(p.files) for p in plan.pages]
@@ -103,12 +114,4 @@ def validate_plan_cmd(
         score = _locality_score(p)
         typer.echo(f"  - {p.title}: {score:.2f}")
     typer.echo("")
-
-    try:
-        validate_wiki_plan(
-            raw_plan,
-        )
-        typer.echo("Validation: OK")
-    except ValueError as exc:
-        typer.echo(f"VALIDATION FAILURE: {exc}", err=False)
-        raise typer.Exit(1)
+    typer.echo("Validation: OK")

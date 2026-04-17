@@ -28,9 +28,12 @@ against a ``tmp_path``.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
+
+logger = logging.getLogger("worker.planner.anchors")
 
 
 @dataclass
@@ -149,13 +152,13 @@ def _extract_js_doc(text: str) -> str | None:
     return cleaned or None
 
 
-def extract_package_docstrings(
+async def extract_package_docstrings(
     clone_root: Path,
     rel_paths: list[str],
     max_entries: int = 25,
-    max_chars: int = 500,
+    max_chars: int = 1500,
 ) -> list[PackageDoc]:
-    """Return up to *max_entries* package-entry docstrings.
+    """Extract docstrings from entry-point files (Layer C1).
 
     A path qualifies as a package entry when its basename is one of
     :data:`_PACKAGE_ENTRY_FILENAMES`.  Files are visited in *rel_paths*
@@ -164,16 +167,29 @@ def extract_package_docstrings(
     the ``package`` field is the POSIX path of the entry file's parent
     directory.
     """
+    import asyncio
+
+    loop = asyncio.get_running_loop()
     results: list[PackageDoc] = []
+    root_abs = clone_root.resolve()
+
     for rel in rel_paths:
         if len(results) >= max_entries:
             break
         basename = rel.rsplit("/", 1)[-1]
         if basename not in _PACKAGE_ENTRY_FILENAMES:
             continue
-        path = clone_root / rel
+
+        path = (clone_root / rel).resolve()
+        # Security: ensure resolved path is within clone_root
+        if not path.is_relative_to(root_abs):
+            logger.warning("Security: skipping package entry outside root: %s", rel)
+            continue
+
         try:
-            text = path.read_text(encoding="utf-8", errors="replace")
+            text = await loop.run_in_executor(
+                None, lambda: path.read_text(encoding="utf-8", errors="replace")
+            )
         except OSError:
             continue
 

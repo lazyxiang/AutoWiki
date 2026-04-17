@@ -166,6 +166,19 @@ def test_get_affected_pages_primary_wins_over_secondary():
     assert result.primary == {"P"}
     assert result.secondary == {"Q"}
 
+    # Also check that if a single page has a file in both sets, primary wins
+    plan_overlap = WikiPlan(
+        pages=[
+            WikiPageSpec(
+                title="P", purpose="p", files=["x.py"], secondary_files=["x.py"]
+            ),
+        ]
+    )
+    result_overlap = get_affected_pages(["x.py"], plan_overlap)
+    assert result_overlap.primary == {"P"}
+    assert result_overlap.secondary == set()
+    assert result_overlap.primary.isdisjoint(result_overlap.secondary)
+
 
 def test_get_affected_pages_legacy_plans_without_secondary_still_work():
     from worker.pipeline.ingestion import get_affected_pages

@@ -806,9 +806,9 @@ async def run_refresh_index(
             )
             return
 
-        content = await asyncio.get_running_loop().run_in_executor(
-            None, wiki_plan_path.read_text
-        )
+        loop = asyncio.get_running_loop()
+        content = await loop.run_in_executor(None, wiki_plan_path.read_text)
+
         plan_data = json.loads(content)
 
         # Load user-facing wiki.json to preserve any user-edited page_notes
@@ -840,6 +840,7 @@ async def run_refresh_index(
                     purpose=p.get("purpose", ""),
                     parent=p.get("parent"),
                     files=p.get("files", []),
+                    secondary_files=p.get("secondary_files", []),
                     # Merge saved page_notes back into the spec; default to empty note
                     page_notes=saved_page_notes.get(p["title"], [{"content": ""}]),
                 )
@@ -849,12 +850,18 @@ async def run_refresh_index(
 
         stale_path = ast_dir / "stale_secondary.json"
         prior_stale: set[str] = set()
-        if stale_path.exists():
+
+        def _read_stale():
+            if not stale_path.exists():
+                return set()
             try:
-                prior_stale = set(json.loads(stale_path.read_text()))
+                data = set(json.loads(stale_path.read_text()))
+                stale_path.unlink()
+                return data
             except (OSError, json.JSONDecodeError):
-                prior_stale = set()
-            stale_path.unlink()
+                return set()
+
+        prior_stale = await loop.run_in_executor(None, _read_stale)
 
         affected = get_affected_pages(changed_files, old_plan)
         logger.info(
@@ -1014,7 +1021,7 @@ async def run_refresh_index(
             f
             for p in old_plan.pages
             if p.title in affected_page_titles
-            for f in (p.files or [])
+            for f in [*(p.files or []), *(p.secondary_files or [])]
         }
         affected_files_set |= added_files
         affected_file_analysis = FileAnalysis(

@@ -19,11 +19,11 @@ def test_is_recording_enabled_respects_env(monkeypatch):
     assert is_recording_enabled() is False
 
 
-def test_recorder_writes_each_stage_to_a_separate_file(tmp_path):
+async def test_recorder_writes_each_stage_to_a_separate_file(tmp_path):
     rec = FixtureRecorder(root=tmp_path)
-    rec.record_outline([{"title": "A", "purpose": "p"}])
-    rec.record_assignments(primary={"A": ["x.py"]}, secondary={"A": []})
-    rec.record_wiki_plan({"pages": [{"title": "A", "files": ["x.py"]}]})
+    await rec.record_outline([{"title": "A", "purpose": "p"}])
+    await rec.record_assignments(primary={"A": ["x.py"]}, secondary={"A": []})
+    await rec.record_wiki_plan({"pages": [{"title": "A", "files": ["x.py"]}]})
     assert (tmp_path / "outline.json").exists()
     assert (tmp_path / "assignments.json").exists()
     assert (tmp_path / "wiki_plan.json").exists()
@@ -35,15 +35,15 @@ def test_recorder_writes_each_stage_to_a_separate_file(tmp_path):
     assert payload["secondary"] == {"A": []}
 
 
-def test_recorder_is_noop_when_root_is_none(tmp_path):
+async def test_recorder_is_noop_when_root_is_none(tmp_path):
     rec = FixtureRecorder(root=None)
-    rec.record_outline([{"title": "A", "purpose": "p"}])
+    await rec.record_outline([{"title": "A", "purpose": "p"}])
     # No files written, no exception raised
     assert list(tmp_path.iterdir()) == []
 
 
-def test_recorder_overwrites_existing_files(tmp_path):
+async def test_recorder_overwrites_existing_files(tmp_path):
     (tmp_path / "outline.json").write_text("stale")
     rec = FixtureRecorder(root=tmp_path)
-    rec.record_outline([{"title": "new"}])
+    await rec.record_outline([{"title": "new"}])
     assert json.loads((tmp_path / "outline.json").read_text()) == [{"title": "new"}]

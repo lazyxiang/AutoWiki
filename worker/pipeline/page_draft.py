@@ -72,6 +72,7 @@ def build_draft_prompt(
     entity_details: list[dict[str, Any]] | None = None,
     child_contents: list[PageResult] | None = None,
     repo_notes: list[dict] | None = None,
+    secondary_block: str | None = None,
 ) -> list[PromptSegment]:
     """Build the draft prompt as a list of PromptSegments with caching."""
     # ── Cacheable prefix: source context ──
@@ -197,10 +198,13 @@ def build_draft_prompt(
         "Output Markdown only."
     )
 
-    return [
+    segments = [
         PromptSegment(text="\n".join(cached_parts), cacheable=True),
-        PromptSegment(text=tail),
     ]
+    if secondary_block:
+        segments.append(PromptSegment(text=secondary_block, cacheable=False))
+    segments.append(PromptSegment(text=tail))
+    return segments
 
 
 async def generate_draft(
@@ -218,7 +222,6 @@ async def generate_draft(
     secondary_block: str | None = None,
 ) -> str:
     """Generate the draft Markdown for a wiki page using the main model."""
-    from worker.llm.prompt_segment import PromptSegment
     from worker.pipeline.language import get_language_instruction
 
     segments = build_draft_prompt(
@@ -230,10 +233,8 @@ async def generate_draft(
         entity_details=entity_details,
         child_contents=child_contents,
         repo_notes=repo_notes,
+        secondary_block=secondary_block,
     )
-    if secondary_block:
-        # Insert after the cacheable prefix but before the instruction tail
-        segments.insert(1, PromptSegment(text=secondary_block, cacheable=False))
     system = DRAFT_SYSTEM + get_language_instruction(wiki_language)
 
     try:

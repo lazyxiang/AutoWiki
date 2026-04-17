@@ -51,7 +51,7 @@ Tests touched:
 **Stage C — Stage Validation Harness**
 
 Created:
-- `worker/pipeline/fixture_recorder.py` — helpers to dump `file_analysis.json`, `dep_graph.json`, `outline.json`, `assignments.json` side-by-side with `wiki_plan.json`.
+- `worker/pipeline/fixture_recorder.py` — helpers to dump `outline.json`, `assignments.json`, and `wiki_plan.json`.
 - `cli/commands/validate_plan.py` — `autowiki validate-plan <repo>` Typer command.
 - `tests/worker/test_fixture_recorder.py`
 - `tests/cli/test_validate_plan.py`
@@ -1644,7 +1644,7 @@ Expected: clean.
 
 **Objective:** Let maintainers introspect planner output — or replay a run against saved fixtures — without spending live LLM budget. Two parts:
 
-1. **Fixture recorder** — a small module that dumps `file_analysis.json`, `dep_graph.json`, `outline.json`, `assignments.json`, and the final `wiki_plan.json` side-by-side whenever `AUTOWIKI_RECORD_PLANNER_FIXTURES=1` is set for a run. Fixtures live at `~/.autowiki/repos/{repo_hash}/fixtures/`.
+1. **Fixture recorder** — a small module that dumps `outline.json`, `assignments.json`, and the final `wiki_plan.json` side-by-side whenever `AUTOWIKI_RECORD_PLANNER_FIXTURES=1` is set for a run. Fixtures live at `~/.autowiki/repos/{repo_hash}/fixtures/`.
 2. **`autowiki validate-plan <repo>` CLI** — reads the stored `wiki_plan.json` (plus fixtures if they exist) and reports:
    - Total files, total pages, orphan count, coverage %.
    - Primary/secondary per-page size distribution (min / p50 / p90 / max, plus a histogram).

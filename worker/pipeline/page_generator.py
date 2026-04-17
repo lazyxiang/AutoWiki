@@ -289,6 +289,7 @@ async def generate_page(
             entity_details=entity_details,
             child_contents=child_contents,
             repo_notes=repo_notes,
+            secondary_block=secondary_block or None,
         )
         cache_segs = [s for s in context_segments if s.cacheable]
 

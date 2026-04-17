@@ -1131,11 +1131,11 @@ async def _assign_files(
 
     # Final fallback if all LLM attempts fail: throw error with partial result
     # to trigger heuristic recovery.
-    err = ValueError(
-        f"Failed to assign files after {max_retries} attempts: {last_error}"
+    raise ValueError(
+        f"Failed to assign files after {max_retries} attempts",
+        last_error,
+        last_result,
     )
-    err.partial_assignments = last_result
-    raise err
 
 
 def validate_wiki_plan(
@@ -1442,7 +1442,7 @@ async def generate_wiki_plan(
             dep_graph=dep_graph,
         )
         tree = build_directory_tree(list(file_analysis.files), max_depth=3)
-        pkg_docs = extract_package_docstrings(
+        pkg_docs = await extract_package_docstrings(
             clone_root=clone_root,
             rel_paths=ranked,
             max_entries=25,
@@ -1476,14 +1476,14 @@ async def generate_wiki_plan(
     except WikiPlannerError as exc:
         # Phase 1 failure is critical — stop the task
         logger.error("Phase 1 critical failure: %s", exc)
-        raise exc
+        raise
     except Exception as exc:
         # Unexpected errors also stop the task in Phase 1
         logger.error("Phase 1 unexpected failure: %s", exc)
         raise WikiPlannerError(f"Outline generation failed: {exc}") from exc
 
     if fixture_recorder is not None:
-        fixture_recorder.record_outline(outline)
+        await fixture_recorder.record_outline(outline)
 
     # Phase 2: Assign files + validate assignments (fast_llm for classification task)
     try:
@@ -1500,13 +1500,17 @@ async def generate_wiki_plan(
         )
     except Exception as exc:
         # Phase 2 failure — trigger heuristic recovery while keeping the outline.
-        # We attempt a 'partial heuristic' recovery if some assignments are
-        # available on the exception object; otherwise we do a full heuristic.
-        partial = getattr(exc, "partial_assignments", None)
+        # If it's a ValueError with 3 args (msg, last_error, last_result),
+        # extract the partial assignments.
+        partial = None
+        if isinstance(exc, ValueError) and len(exc.args) == 3:
+            partial = exc.args[2]
+
+        recovery_type = "partial heuristic" if partial else "full heuristic"
         logger.warning(
             "Phase 2 LLM assignment failed: %s — falling back to %s recovery",
             exc,
-            "partial heuristic" if partial else "full heuristic",
+            recovery_type,
         )
         primary_assignments = _heuristic_recovery_assignment(
             outline, all_files, partial
@@ -1514,7 +1518,9 @@ async def generate_wiki_plan(
         secondary_assignments = {p["title"]: [] for p in outline}
 
     if fixture_recorder is not None:
-        fixture_recorder.record_assignments(primary_assignments, secondary_assignments)
+        await fixture_recorder.record_assignments(
+            primary_assignments, secondary_assignments
+        )
 
     # Final: combine and normalise (handles orphan files, safety-net checks)
     raw = {
@@ -1538,7 +1544,7 @@ async def generate_wiki_plan(
             page_range=page_range,
         )
         if fixture_recorder is not None:
-            fixture_recorder.record_wiki_plan(plan.to_internal_json())
+            await fixture_recorder.record_wiki_plan(plan.to_internal_json())
         return plan
     except ValueError as exc:
         logger.error("Final wiki plan validation failed after recovery: %s", exc)

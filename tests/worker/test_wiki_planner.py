@@ -599,7 +599,7 @@ async def test_assign_files_logs_each_validation_failure_and_feedback(caplog):
     # Two batched calls will both return a stuffed response that fails validation.
     llm.generate_structured.side_effect = [stuffed, stuffed]
 
-    with caplog.at_level(logging.ERROR, logger="worker.planner"):
+    with caplog.at_level(logging.WARNING, logger="worker.planner"):
         with pytest.raises(ValueError, match="Failed to assign files"):
             await _assign_files(
                 outline=outline,
@@ -617,7 +617,7 @@ async def test_assign_files_logs_each_validation_failure_and_feedback(caplog):
         for r in caplog.records
         if "wiki_planner.assign_files" in r.getMessage()
         and "attempt" in r.getMessage()
-        and r.levelno == logging.ERROR
+        and r.levelno == logging.WARNING
     ]
     fallback_logs = [
         r

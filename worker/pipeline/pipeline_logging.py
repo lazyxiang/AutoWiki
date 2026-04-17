@@ -41,11 +41,11 @@ def log_validation_retry(
 
     Called inside ``except (ValueError, json.JSONDecodeError, KeyError)``
     blocks to record what the LLM produced and why it was rejected, so the
-    next retry's failure mode is visible.  Always emits ``ERROR``.
+    next retry's failure mode is visible.  Always emits ``WARNING``.
     """
     ctx = _format_context(context)
     suffix = f" | {ctx}" if ctx else ""
-    logger.error(
+    logger.warning(
         "%s: validation failed on attempt %d/%d: %s%s",
         stage,
         attempt,

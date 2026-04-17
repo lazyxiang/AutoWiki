@@ -50,7 +50,7 @@ def test_build_directory_tree_is_stable_ordered():
     assert a_idx < m_idx < z_idx
 
 
-def test_extract_package_docstrings_python_init(tmp_path: Path):
+async def test_extract_package_docstrings_python_init(tmp_path: Path):
     pkg = tmp_path / "worker" / "pipeline"
     pkg.mkdir(parents=True)
     (pkg / "__init__.py").write_text(
@@ -62,7 +62,7 @@ def test_extract_package_docstrings_python_init(tmp_path: Path):
     # Non-package file that should NOT be picked up
     (tmp_path / "worker" / "jobs.py").write_text("'just a module'\nx = 1\n")
 
-    result = extract_package_docstrings(
+    result = await extract_package_docstrings(
         clone_root=tmp_path,
         rel_paths=["worker/pipeline/__init__.py", "worker/jobs.py"],
         max_entries=10,
@@ -75,7 +75,7 @@ def test_extract_package_docstrings_python_init(tmp_path: Path):
     assert '"""' not in result[0].docstring
 
 
-def test_extract_package_docstrings_rust_and_ts(tmp_path: Path):
+async def test_extract_package_docstrings_rust_and_ts(tmp_path: Path):
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "mod.rs").write_text(
         "//! Graph-index helpers.\n"
@@ -86,7 +86,7 @@ def test_extract_package_docstrings_rust_and_ts(tmp_path: Path):
     (tmp_path / "ui" / "index.ts").write_text(
         "/**\n * UI kit barrel entrypoint.\n */\nexport { Button } from './button';\n"
     )
-    result = extract_package_docstrings(
+    result = await extract_package_docstrings(
         clone_root=tmp_path,
         rel_paths=["src/mod.rs", "ui/index.ts"],
         max_entries=10,
@@ -96,13 +96,13 @@ def test_extract_package_docstrings_rust_and_ts(tmp_path: Path):
     assert "UI kit barrel" in packages["ui"]
 
 
-def test_extract_package_docstrings_caps_results(tmp_path: Path):
+async def test_extract_package_docstrings_caps_results(tmp_path: Path):
     for i in range(30):
         pkg = tmp_path / f"pkg{i:02d}"
         pkg.mkdir()
         (pkg / "__init__.py").write_text(f'"""Package {i}."""\n')
     rels = [f"pkg{i:02d}/__init__.py" for i in range(30)]
-    result = extract_package_docstrings(
+    result = await extract_package_docstrings(
         clone_root=tmp_path, rel_paths=rels, max_entries=5
     )
     assert len(result) == 5

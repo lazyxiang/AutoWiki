@@ -80,17 +80,21 @@ def test_unmatched_files_go_to_first_page_when_no_overview():
 
 
 def test_splits_oversized_directory_groups_across_matching_pages():
-    """If one directory has > 25 files but multiple pages match it, split evenly."""
+    """If one directory has > 50 files but multiple pages match it, split evenly."""
+    from worker.pipeline.wiki_planner import MAX_FILES_PER_PAGE
+
     outline = _outline(
         ("Worker Pipeline Part A", "First half of worker pipeline."),
         ("Worker Pipeline Part B", "Second half of worker pipeline."),
     )
-    all_files = [f"worker/pipeline/file{i}.py" for i in range(30)]
+    # Use more than MAX_FILES_PER_PAGE to trigger split
+    file_count = MAX_FILES_PER_PAGE + 10
+    all_files = [f"worker/pipeline/file{i}.py" for i in range(file_count)]
     result = _directory_cluster_assign(outline, all_files)
     # Both pages get roughly half
     page_a_count = len(result["Worker Pipeline Part A"])
     page_b_count = len(result["Worker Pipeline Part B"])
-    assert page_a_count + page_b_count == 30
-    # Neither page exceeds the 25-file cap
-    assert page_a_count <= 25
-    assert page_b_count <= 25
+    assert page_a_count + page_b_count == file_count
+    # Neither page exceeds the 50-file cap
+    assert page_a_count <= MAX_FILES_PER_PAGE
+    assert page_b_count <= MAX_FILES_PER_PAGE
