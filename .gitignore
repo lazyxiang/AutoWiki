@@ -227,3 +227,4 @@ build/
 # Allow web/lib
 !web/lib/
 !web/lib/**
+.worktrees/
