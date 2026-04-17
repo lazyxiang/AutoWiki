@@ -1197,7 +1197,7 @@ Then when building the final raw dict, include `secondary_files`:
 
 - [ ] **Step 7: Update `validate_wiki_plan` to accept `secondary_files`**
 
-In `validate_wiki_plan`, when constructing each `WikiPageSpec`, pass `secondary_files=p.get("secondary_files", [])`. Leave every other check (duplicate slugs, parent validity, orphan handling, depth, page-count) unchanged — secondary assignments do not count toward orphan detection, and the 25-file cap continues to apply to `files` only.
+In `validate_wiki_plan`, when constructing each `WikiPageSpec`, pass `secondary_files=p.get("secondary_files", [])`. Leave every other check (duplicate slugs, parent validity, depth, page-count) unchanged. **Secondary assignments count toward orphan detection** — a file that appears as a `secondary_files` entry on any page is considered assigned and will not be flagged as an orphan (see Task B5). The 25-file cap continues to apply to `files` only.
 
 - [ ] **Step 8: Run the tests to verify they pass**
 

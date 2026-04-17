@@ -369,9 +369,13 @@ async def generate_page_batch(
         secondary_summaries: dict[str, str] = {}
         for rel_path in spec.secondary_files or []:
             file_info = file_analysis.files.get(rel_path)
-            if file_info and file_info.entities:
+            if not file_info:
+                continue
+            if file_info.entities:
                 sec_entities = [{**e, "file": rel_path} for e in file_info.entities]
                 secondary_summaries[rel_path] = _format_entity_details(sec_entities)
+            elif file_info.summary:
+                secondary_summaries[rel_path] = file_info.summary
 
         return await generate_page(
             spec=spec,

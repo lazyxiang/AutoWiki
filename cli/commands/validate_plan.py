@@ -30,6 +30,8 @@ def _data_dir() -> Path:
 
 def _load_plan(plan_path: Path) -> tuple[dict, WikiPlan]:
     data = json.loads(plan_path.read_text())
+    if not isinstance(data, dict):
+        raise ValueError("Plan root must be a JSON object")
     # Normalise into WikiPlan after validation or for stats use.
     # Note: validate_plan_cmd calls validate_wiki_plan(data) first.
     pages = [
@@ -65,13 +67,12 @@ def validate_plan_cmd(
         typer.echo(f"Error: wiki plan not found at {plan_path}", err=True)
         raise typer.Exit(1)
 
-    raw_plan, plan = _load_plan(plan_path)
-
     try:
+        raw_plan, plan = _load_plan(plan_path)
         validate_wiki_plan(
             raw_plan,
         )
-    except ValueError as exc:
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
         typer.echo(f"VALIDATION FAILURE: {exc}", err=False)
         raise typer.Exit(1)
 

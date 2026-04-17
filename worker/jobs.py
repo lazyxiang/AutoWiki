@@ -855,9 +855,7 @@ async def run_refresh_index(
             if not stale_path.exists():
                 return set()
             try:
-                data = set(json.loads(stale_path.read_text()))
-                stale_path.unlink()
-                return data
+                return set(json.loads(stale_path.read_text()))
             except (OSError, json.JSONDecodeError):
                 return set()
 
@@ -869,7 +867,14 @@ async def run_refresh_index(
             len(affected.primary),
             len(affected.secondary),
         )
-        await _write_text_async(stale_path, json.dumps(sorted(affected.secondary)))
+        # Write deferred secondary pages for the next refresh cycle.  Include
+        # prior_stale entries so they are not silently dropped if this refresh
+        # fails before regenerating them.  Pages processed in this cycle
+        # (affected.primary | prior_stale) are excluded because they are
+        # regenerated below — they only stay queued if that regeneration fails,
+        # at which point the next full refresh will re-detect them via diff.
+        next_stale = affected.secondary | (prior_stale - affected.primary)
+        await _write_text_async(stale_path, json.dumps(sorted(next_stale)))
         affected_page_titles = affected.primary | prior_stale
 
         if not affected_page_titles:

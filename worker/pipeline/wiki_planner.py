@@ -734,6 +734,47 @@ async def _generate_outline(
                 ) from e
 
 
+_ROOT_ENTRY_POINTS = frozenset(
+    {
+        "main.py",
+        "app.py",
+        "cli.py",
+        "server.py",
+        "manage.py",
+        "wsgi.py",
+        "asgi.py",
+        "index.js",
+        "index.ts",
+        "index.mjs",
+        "main.go",
+        "main.rs",
+        "lib.rs",
+        "main.java",
+    }
+)
+
+_LOW_PRIORITY_SEGMENTS = frozenset(
+    {
+        "test",
+        "tests",
+        "spec",
+        "specs",
+        "docs",
+        "doc",
+        "examples",
+        "example",
+        "bench",
+        "benchmarks",
+        "mocks",
+        "mock",
+        "fixtures",
+        "testdata",
+        "vendor",
+        "third_party",
+    }
+)
+
+
 def _is_high_priority_file(path: str) -> bool:
     """Determine if a file is a 'core' source file that MUST be assigned to a page.
 
@@ -749,12 +790,29 @@ def _is_high_priority_file(path: str) -> bool:
         True if the file is 'core' logic, False if it is low-priority residue.
     """
     lower = path.lower()
-    # Ignore common test/doc/example patterns
-    if any(p in lower for p in ["test", "spec", "docs/", "example", "bench", "mock"]):
+    # Ignore dotfiles
+    if lower.startswith("."):
         return False
-    # Ignore dotfiles and files at the repository root (usually configs)
-    if lower.startswith(".") or "/" not in path:
+    parts = lower.split("/")
+    filename = parts[-1]
+    # Check each directory segment against known low-priority names
+    dir_segments = parts[:-1]
+    if any(seg in _LOW_PRIORITY_SEGMENTS for seg in dir_segments):
         return False
+    # Check filename prefix/suffix patterns for test and spec files
+    stem = filename.rsplit(".", 1)[0] if "." in filename else filename
+    if (
+        stem.startswith("test_")
+        or stem.endswith("_test")
+        or stem.startswith("spec_")
+        or stem.endswith("_spec")
+        or stem.endswith(".test")
+        or stem.endswith(".spec")
+    ):
+        return False
+    # Root-level entry points are high-priority despite having no directory
+    if "/" not in path:
+        return filename in _ROOT_ENTRY_POINTS
     return True
 
 
