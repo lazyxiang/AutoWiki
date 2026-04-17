@@ -672,6 +672,9 @@ async def _generate_outline(
     too few pages) are caught and retried within this phase rather than being
     deferred to a post-assignment validation step.
     """
+    if max_retries < 1:
+        raise WikiPlannerError("max_retries must be >= 1")
+
     prompt = _build_outline_prompt(
         file_summary=file_summary,
         repo_name=repo_name,
@@ -1214,15 +1217,17 @@ def validate_wiki_plan(
        (duplicate titles after slug derivation).
     4. Silently drops ``parent`` references that point to unknown titles
        rather than raising an error, to tolerate minor LLM hallucinations.
-    5. Appends any *orphaned* files (not assigned to any page) to the
-       ``"Overview"`` page, or to the first page if no Overview exists.
+    5. Raises :exc:`ValueError` if any *critical* orphaned file (a core source
+       file under a non-test directory, or a known root-level entry point such
+       as ``main.py``/``app.py``) is not assigned to any page.  Low-priority
+       files (tests, docs, root-level configs) are silently skipped.
 
     Args:
         raw: Raw dict decoded from the LLM's JSON response.  Must contain a
             ``"pages"`` key whose value is a list of page dicts.
         all_files: Optional list of all relative file paths in the repository.
-            When provided, any file not referenced by any page is treated as an
-            orphan and appended to the first matching page.
+            When provided, any unassigned *critical* file triggers a
+            :exc:`ValueError` so the caller can retry with feedback.
         existing_titles: Optional set of page titles from the *unchanged*
             portion of an existing wiki plan (used during partial incremental
             refresh so cross-slice ``parent`` references remain valid).
@@ -1232,8 +1237,9 @@ def validate_wiki_plan(
 
     Raises:
         ValueError: If ``"pages"`` key is missing, the pages list is empty,
-            any page dict is missing ``"title"`` or ``"purpose"``, or two
-            or more pages share the same derived slug.
+            any page dict is missing ``"title"`` or ``"purpose"``, two or more
+            pages share the same derived slug, or any critical source file is
+            not assigned to a page.
 
     Example:
         Normal case — all files assigned, no orphans:
@@ -1245,14 +1251,15 @@ def validate_wiki_plan(
         >>> plan.pages[0].title
         'Overview'
 
-        Orphan case — ``utils.py`` not assigned; it gets appended to Overview:
+        Orphan case — ``worker/core.py`` not assigned; raises ValueError:
 
         >>> raw = {"pages": [
         ...     {"title": "Overview", "purpose": "...", "files": ["main.py"]},
         ... ]}
-        >>> plan = validate_wiki_plan(raw, all_files=["main.py", "utils.py"])
-        >>> "utils.py" in plan.pages[0].files
-        True
+        >>> validate_wiki_plan(raw, all_files=["main.py", "worker/core.py"])
+        Traceback (most recent call last):
+            ...
+        ValueError: VALIDATION_FAILURE: 1 core source files are missing ...
     """
     if "pages" not in raw:
         raise ValueError("Missing 'pages' key")

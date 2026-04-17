@@ -28,11 +28,15 @@ def _parse_json_response(raw: str) -> dict:
             raw = raw.rsplit("```", 1)[0]
         raw = raw.strip()
     try:
-        return json.loads(raw)
+        obj = json.loads(raw)
     except json.JSONDecodeError:
         # Trailing content after valid JSON — stop at first complete object/array
         obj, _ = json.JSONDecoder().raw_decode(raw)
-        return obj
+    if not isinstance(obj, dict):
+        raise json.JSONDecodeError(
+            f"Expected a JSON object, got {type(obj).__name__}", raw, 0
+        )
+    return obj
 
 
 def _truncate(text: str, max_len: int = 2000) -> str:

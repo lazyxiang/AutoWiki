@@ -100,6 +100,25 @@ async def test_openai_provider_generate():
     assert result == "OpenAI response"
 
 
+def test_parse_json_response_trailing_content():
+    """_parse_json_response handles valid JSON followed by trailing prose."""
+    from worker.llm.base import _parse_json_response
+
+    raw = '{"pages": [{"title": "Overview"}]} some trailing text'
+    result = _parse_json_response(raw)
+    assert result == {"pages": [{"title": "Overview"}]}
+
+
+def test_parse_json_response_raises_for_json_array():
+    """_parse_json_response raises JSONDecodeError when LLM returns a JSON array."""
+    import json
+
+    from worker.llm.base import _parse_json_response
+
+    with pytest.raises(json.JSONDecodeError):
+        _parse_json_response('[{"file": "main.py"}]')
+
+
 async def test_generate_batch_default_impl():
     """Default generate_batch calls generate() for each prompt concurrently."""
 
