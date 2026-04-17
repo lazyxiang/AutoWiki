@@ -22,12 +22,13 @@ class LLMConfig(BaseSettings):
     # scaffolded here for forward compatibility.
     cache_ttl: Literal["short", "long"] = "short"
 
-    @field_validator("cache_ttl", mode="before")
+    @field_validator("provider", "cache_ttl", mode="before")
     @classmethod
-    def _coerce_cache_ttl(cls, v: object) -> object:
-        """Treat an unset/empty env var as the default 'short'."""
+    def _coerce_empty_to_default(cls, v: object, info) -> object:
+        """Treat an unset/empty env var as the field default."""
         if v == "":
-            return "short"
+            defaults = {"provider": "anthropic", "cache_ttl": "short"}
+            return defaults[info.field_name]
         return v
 
 
@@ -37,6 +38,12 @@ class EmbeddingConfig(BaseSettings):
     model: str = "text-embedding-3-small"
     api_key: str = ""
 
+    @field_validator("provider", mode="before")
+    @classmethod
+    def _coerce_empty_provider(cls, v: object) -> object:
+        """Treat an unset/empty env var as the field default."""
+        return "openai" if v == "" else v
+
 
 class ServerConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AUTOWIKI_SERVER_")
@@ -44,10 +51,22 @@ class ServerConfig(BaseSettings):
     port: int = 3001
     auth_token: str = ""
 
+    @field_validator("port", mode="before")
+    @classmethod
+    def _coerce_empty_port(cls, v: object) -> object:
+        """Treat an unset/empty env var as the field default."""
+        return 3001 if v == "" else v
+
 
 class ChatConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AUTOWIKI_CHAT_")
     history_window: int = 10
+
+    @field_validator("history_window", mode="before")
+    @classmethod
+    def _coerce_empty_history_window(cls, v: object) -> object:
+        """Treat an unset/empty env var as the field default."""
+        return 10 if v == "" else v
 
 
 class Config(BaseSettings):
