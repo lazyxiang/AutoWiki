@@ -46,8 +46,33 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("worker.planner")
 
-#: Maximum number of files allowed on a single wiki page to ensure focus.
-MAX_FILES_PER_PAGE = 50
+#: Hard maximum and soft minimum for representative files per wiki page.
+MAX_FILES_PER_PAGE = 10
+MIN_FILES_PER_PAGE = 3
+
+_CODE_EXTS: frozenset[str] = frozenset(
+    {
+        ".py",
+        ".ts",
+        ".tsx",
+        ".js",
+        ".jsx",
+        ".go",
+        ".rs",
+        ".java",
+        ".cpp",
+        ".c",
+        ".cs",
+        ".rb",
+        ".swift",
+        ".kt",
+        ".scala",
+    }
+)
+_DOC_EXTS: frozenset[str] = frozenset({".md", ".rst", ".txt", ".adoc"})
+_CONFIG_EXTS: frozenset[str] = frozenset(
+    {".json", ".yaml", ".yml", ".toml", ".ini", ".env", ".cfg"}
+)
 
 
 class WikiPlannerError(Exception):
@@ -307,27 +332,25 @@ _OUTLINE_SCHEMA = {
     "required": ["pages"],
 }
 
-_ASSIGNMENT_SCHEMA = {
+_SELECTION_SCHEMA = {
     "type": "object",
     "properties": {
-        "assignments": {
+        "selections": {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {
-                    "file": {"type": "string"},
-                    "primary_page": {"type": "string"},
-                    "secondary_pages": {
+                    "page_title": {"type": "string"},
+                    "files": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "maxItems": 2,
                     },
                 },
-                "required": ["file", "primary_page"],
+                "required": ["page_title", "files"],
             },
         }
     },
-    "required": ["assignments"],
+    "required": ["selections"],
 }
 
 _SYSTEM = (
@@ -353,8 +376,9 @@ _SYSTEM = (
     "5. Create a clear hierarchy: top-level pages for major "
     "subsystems, child pages for details\n\n"
     "Each page should have a clear PURPOSE — it should "
-    "explain a concept, component, or workflow. Every source "
-    "file must be assigned to exactly one page.\n\n"
+    "explain a concept, component, or workflow. Pages are "
+    "represented by 5\u20138 of their most representative source "
+    "code files \u2014 full coverage of every file is not required.\n\n"
     "Output ONLY valid JSON."
 )
 
@@ -428,9 +452,9 @@ def _build_outline_prompt(
     sections.append(
         "Create a hierarchical wiki plan. Guidelines:\n"
         f"- Create between {min_pages} and {max_pages} pages. Prefer more granular "
-        "pages over broad ones — a focused page covering 3-5 related files is better "
-        "than a sprawling page covering 15+. Each page should have a clear, single "
-        "responsibility.\n"
+        "pages over broad ones \u2014 a focused page covering 5\u20138 representative "
+        "code files is better than a sprawling page covering 20+. Each page should "
+        "have a clear, single responsibility.\n"
         "- Each page MUST have: title (descriptive, concept-oriented) and "
         "purpose (1-2 sentences explaining WHAT the page covers and WHY a "
         "developer would read it)\n"
@@ -466,7 +490,7 @@ def _build_assignment_prompt(
         sections.append(f"Dependency relationships:\n{dep_info}")
 
     total = len(all_files) if all_files else 0
-    schema_json = json.dumps(_ASSIGNMENT_SCHEMA, indent=2)
+    schema_json = json.dumps(_SELECTION_SCHEMA, indent=2)
     sections.append(
         f"Assign ALL {total} source files to pages. Guidelines:\n"
         "- Every file must be assigned to exactly one page\n"
@@ -523,7 +547,7 @@ def _build_batch_assignment_user(
     """
     titles_str = ", ".join(f'"{t}"' for t in outline_titles)
     files_str = "\n".join(f"- {f}" for f in batch_files)
-    schema_json = json.dumps(_ASSIGNMENT_SCHEMA, indent=2)
+    schema_json = json.dumps(_SELECTION_SCHEMA, indent=2)
     text = (
         f"Assign each of the following {len(batch_files)} files to the "
         f"wiki page whose purpose best matches it. Each assignment has a "
@@ -1068,7 +1092,7 @@ async def _assign_files_in_batches(
             raw = await async_retry(
                 llm.generate_structured,
                 [user_segment],
-                schema=_ASSIGNMENT_SCHEMA,
+                schema=_SELECTION_SCHEMA,
                 system=system_segments,
                 transient_exceptions=TRANSIENT_EXCEPTIONS,
                 on_retry=on_retry,
