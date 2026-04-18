@@ -1076,18 +1076,26 @@ async def _select_files_in_batches(
             )
             return
         title_to_page = {p["title"]: p for p in batch_pages}
+        candidate_files_by_title = {
+            title: set(candidates)
+            for title, _purpose, candidates in pages_with_candidates
+        }
         for sel in raw.get("selections", []):
             title = sel.get("page_title", "")
             files = sel.get("files", [])
-            if title not in result:
+            if title not in title_to_page:
                 continue
-            valid = [f for f in files if f in all_files_set][:MAX_FILES_PER_PAGE]
-            page_dict = title_to_page.get(title, {})
+            valid = [
+                f
+                for f in files
+                if f in all_files_set and f in candidate_files_by_title[title]
+            ]
+            page_dict = title_to_page[title]
             valid.sort(
                 key=lambda f: _score_file_for_page(f, page_dict, file_infos, dep_graph),
                 reverse=True,
             )
-            result[title] = valid
+            result[title] = valid[:MAX_FILES_PER_PAGE]
 
     batches: list[list[dict]] = [
         outline[i : i + _PAGE_BATCH_SIZE]
@@ -1510,10 +1518,14 @@ async def generate_wiki_plan(
             partial = exc.args[2]
 
         recovery_type = "partial heuristic" if partial else "full heuristic"
-        logger.warning(
-            "Phase 2 LLM selection failed: %s — falling back to %s recovery",
-            exc,
-            recovery_type,
+        log_final_failure(
+            logger,
+            stage="wiki_planner.select_files.recovery",
+            exc=exc,
+            context={
+                "recovery_type": recovery_type,
+                "outline_pages": len(outline),
+            },
         )
         primary_assignments = _heuristic_select_files(
             outline, all_files, file_analysis.files, dep_graph, partial
