@@ -846,6 +846,7 @@ async def run_refresh_index(
                 )
                 for p in plan_data.get("pages", [])
             ],
+            all_repo_files=plan_data.get("all_repo_files", []),
         )
 
         stale_path = ast_dir / "stale_secondary.json"
@@ -929,7 +930,11 @@ async def run_refresh_index(
         )
 
         # Detect structural changes: added or removed files relative to the old plan
-        old_all_files = {f for p in old_plan.pages for f in (p.files or [])}
+        old_all_files = (
+            set(old_plan.all_repo_files)
+            if old_plan.all_repo_files
+            else {f for p in old_plan.pages for f in (p.files or [])}
+        )
         new_all_files = set(file_analysis.files.keys())
         added_files = new_all_files - old_all_files
         removed_files = old_all_files - new_all_files
