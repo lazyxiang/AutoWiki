@@ -38,6 +38,13 @@ try:
 except (ImportError, AttributeError):
     pass
 
+try:
+    from google.genai import errors as _genai_errors
+
+    _TRANSIENT += [_genai_errors.ServerError, _genai_errors.ClientError]
+except (ImportError, AttributeError):
+    pass
+
 TRANSIENT_EXCEPTIONS: tuple[type[Exception], ...] = tuple(_TRANSIENT)
 
 

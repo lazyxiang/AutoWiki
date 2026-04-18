@@ -28,13 +28,11 @@ def test_validate_plan_reports_coverage_and_page_sizes(tmp_path, monkeypatch):
                     "title": "Overview",
                     "purpose": "top",
                     "files": ["a.py", "b.py"],
-                    "secondary_files": [],
                 },
                 {
                     "title": "Core",
                     "purpose": "core",
                     "files": [f"core/{i}.py" for i in range(5)],
-                    "secondary_files": ["a.py"],
                 },
             ],
         },
@@ -45,7 +43,7 @@ def test_validate_plan_reports_coverage_and_page_sizes(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert "Pages: 2" in result.output
     assert "Primary files: 7" in result.output
-    assert "Secondary assignments: 1" in result.output
+    assert "Secondary assignments" not in result.output
     # Page sizes
     assert "Overview" in result.output
     assert "Core" in result.output
@@ -64,7 +62,6 @@ def test_validate_plan_reports_validation_failure(tmp_path, monkeypatch):
                     "title": "Overview",
                     "purpose": "top",
                     "files": [f"f{i}.py" for i in range(11)],  # > 10 cap
-                    "secondary_files": [],
                 }
             ],
         },
@@ -100,13 +97,11 @@ def test_validate_plan_reports_locality_score(tmp_path, monkeypatch):
                         "worker/pipeline/b.py",
                         "api/routes.py",  # cross-directory — hurts locality
                     ],
-                    "secondary_files": [],
                 },
                 {
                     "title": "Core",
                     "purpose": "p",
                     "files": ["core/a.py", "core/b.py"],
-                    "secondary_files": [],
                 },
             ],
         },

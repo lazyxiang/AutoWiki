@@ -6,7 +6,6 @@ import pytest
 from worker.pipeline.page_generator import (
     PageResult,
     _append_source_files_table,
-    _format_secondary_context,
     _strip_preamble_and_ensure_header,
     compute_generation_order,
     generate_page,
@@ -298,131 +297,12 @@ def test_append_source_files_table_at_end():
     assert result.endswith("| `a.py` |")
 
 
-def test_source_files_table_excludes_secondary_files():
+def test_source_files_table_only_includes_passed_files():
     """_append_source_files_table must only include files explicitly passed in."""
     draft = "body text"
     out = _append_source_files_table(draft, ["a.py"])
     assert "a.py" in out
     assert "shared/utils.py" not in out
-
-
-# ── _format_secondary_context ────────────────────────────────────────────────
-
-
-def test_format_secondary_context_returns_empty_when_no_files():
-    spec = WikiPageSpec(title="X", purpose="p", files=["a.py"], secondary_files=[])
-    assert _format_secondary_context(spec, entity_summaries_by_file={}) == ""
-
-
-def test_format_secondary_context_lists_referenced_files_with_summaries():
-    spec = WikiPageSpec(
-        title="Core",
-        purpose="p",
-        files=["a.py"],
-        secondary_files=["shared/utils.py", "shared/io.py"],
-    )
-    summaries = {
-        "shared/utils.py": "class Helper: ...",
-        "shared/io.py": "def read(path): ...",
-    }
-    text = _format_secondary_context(spec, entity_summaries_by_file=summaries)
-    assert "Referenced modules" in text
-    assert "shared/utils.py" in text
-    assert "class Helper" in text
-    assert "shared/io.py" in text
-    assert "def read" in text
-
-
-def test_format_secondary_context_skips_files_without_summary():
-    """A secondary file missing from the summaries dict must be silently skipped."""
-    spec = WikiPageSpec(
-        title="Core",
-        purpose="p",
-        files=["a.py"],
-        secondary_files=["missing.py"],
-    )
-    text = _format_secondary_context(spec, entity_summaries_by_file={})
-    assert text == ""
-
-
-async def test_generate_page_batch_secondary_summary_fallback(
-    page_store, mock_embedding
-):
-    """Secondary files with no entities but a non-empty summary are included."""
-    from unittest.mock import patch
-
-    from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
-    from worker.pipeline.dependency_graph import DependencyGraph
-
-    fast_llm = AsyncMock()
-    _three_claims = ["claim 1", "claim 2", "claim 3"]
-    _outline = {
-        "sections": [
-            {
-                "heading": "Overview",
-                "kind": "prose+diagram",
-                "focus": "f",
-                "diagram": {"type": "flowchart", "purpose": "Flow", "source_files": []},
-            }
-        ],
-        "key_claims": _three_claims,
-    }
-
-    async def _fast_structured(*args, **kwargs):
-        schema = kwargs.get("schema", {})
-        if "verdict" in schema.get("properties", {}):
-            return {"verdict": "pass", "issues": []}
-        return _outline
-
-    fast_llm.generate_structured.side_effect = _fast_structured
-
-    llm = AsyncMock()
-    _mermaid = "```mermaid\nflowchart TD\n  A-->B\n```\n\n*Source: a.py:1-5*"
-    llm.generate.return_value = f"## Overview\n\nContent.\n\n{_mermaid}"
-
-    # A secondary file with no entities but a non-empty summary string
-    secondary_fi = FileInfo(
-        rel_path="config/settings.py",
-        entities=[],
-        summary="DB_HOST, DB_PORT, DEBUG",
-    )
-    file_analysis = FileAnalysis(files={"config/settings.py": secondary_fi})
-
-    captured: list = []
-    original_generate_page = __import__(
-        "worker.pipeline.page_generator", fromlist=["generate_page"]
-    ).generate_page
-
-    async def _spy_generate_page(*args, **kwargs):
-        captured.append(kwargs.get("entity_summaries_by_file"))
-        return await original_generate_page(*args, **kwargs)
-
-    spec = WikiPageSpec(
-        title="Core",
-        purpose="core",
-        files=[],
-        secondary_files=["config/settings.py"],
-    )
-
-    with patch(
-        "worker.pipeline.page_generator.generate_page", side_effect=_spy_generate_page
-    ):
-        await generate_page_batch(
-            specs_with_children=[(spec, None)],
-            store=page_store,
-            llm=llm,
-            fast_llm=fast_llm,
-            embedding=mock_embedding,
-            repo_name="testrepo",
-            file_analysis=file_analysis,
-            dep_graph=DependencyGraph(),
-        )
-
-    assert captured, "generate_page was not called"
-    summaries = captured[0]
-    assert summaries is not None
-    assert "config/settings.py" in summaries
-    assert summaries["config/settings.py"] == "DB_HOST, DB_PORT, DEBUG"
 
 
 def test_strip_preamble_removes_reasoning_before_first_heading():

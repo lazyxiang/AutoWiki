@@ -120,74 +120,37 @@ def test_get_affected_pages():
     )
     affected = get_affected_pages(["api/main.py", "README.md"], plan)
     assert affected.primary == {"API"}
-    assert affected.secondary == set()
     empty = get_affected_pages([], plan)
     assert empty.primary == set()
-    assert empty.secondary == set()
 
 
-def test_get_affected_pages_distinguishes_primary_from_secondary():
+def test_get_affected_pages_returns_matching_pages():
     from worker.pipeline.ingestion import AffectedPages, get_affected_pages
     from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan
 
     plan = WikiPlan(
         pages=[
-            WikiPageSpec(
-                title="Core",
-                purpose="p",
-                files=["core/a.py"],
-                secondary_files=[],
-            ),
-            WikiPageSpec(
-                title="API",
-                purpose="p",
-                files=["api/r.py"],
-                secondary_files=["core/a.py"],
-            ),
+            WikiPageSpec(title="Core", purpose="p", files=["core/a.py"]),
+            WikiPageSpec(title="API", purpose="p", files=["api/r.py"]),
         ]
     )
     result = get_affected_pages(["core/a.py"], plan)
     assert isinstance(result, AffectedPages)
     assert result.primary == {"Core"}
-    assert result.secondary == {"API"}
 
 
-def test_get_affected_pages_primary_wins_over_secondary():
+def test_get_affected_pages_multiple_pages_can_match():
     from worker.pipeline.ingestion import get_affected_pages
     from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan
 
     plan = WikiPlan(
         pages=[
-            WikiPageSpec(title="P", purpose="p", files=["x.py"], secondary_files=[]),
-            WikiPageSpec(title="Q", purpose="p", files=[], secondary_files=["x.py"]),
+            WikiPageSpec(title="P", purpose="p", files=["x.py"]),
+            WikiPageSpec(title="Q", purpose="p", files=["x.py", "y.py"]),
         ]
     )
     result = get_affected_pages(["x.py"], plan)
-    assert result.primary == {"P"}
-    assert result.secondary == {"Q"}
-
-    # Also check that if a single page has a file in both sets, primary wins
-    plan_overlap = WikiPlan(
-        pages=[
-            WikiPageSpec(
-                title="P", purpose="p", files=["x.py"], secondary_files=["x.py"]
-            ),
-        ]
-    )
-    result_overlap = get_affected_pages(["x.py"], plan_overlap)
-    assert result_overlap.primary == {"P"}
-    assert result_overlap.secondary == set()
-    assert result_overlap.primary.isdisjoint(result_overlap.secondary)
-
-
-def test_get_affected_pages_legacy_plans_without_secondary_still_work():
-    from worker.pipeline.ingestion import get_affected_pages
-    from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan
-
-    plan = WikiPlan(pages=[WikiPageSpec(title="A", purpose="p", files=["f.py"])])
-    result = get_affected_pages(["f.py"], plan)
-    assert result.primary == {"A"}
-    assert result.secondary == set()
+    assert result.primary == {"P", "Q"}
 
 
 def test_extract_readme_finds_markdown(tmp_path):

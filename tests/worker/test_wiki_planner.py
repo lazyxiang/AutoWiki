@@ -454,26 +454,22 @@ def test_validate_rejects_too_deep_hierarchy():
             {"title": "L0", "purpose": ".", "files": ["a.py"]},
             {"title": "L1", "purpose": ".", "parent": "L0", "files": ["b.py"]},
             {"title": "L2", "purpose": ".", "parent": "L1", "files": ["c.py"]},
-            {"title": "L3", "purpose": ".", "parent": "L2", "files": ["d.py"]},
-            {"title": "L4", "purpose": ".", "parent": "L3", "files": ["e.py"]},
         ]
     }
-    with pytest.raises(ValueError, match="flatten to at most 4 levels"):
+    with pytest.raises(ValueError, match="use exactly 2 levels"):
         validate_wiki_plan(raw)
 
 
-def test_validate_allows_4_level_hierarchy():
-    """Hierarchy at exactly 4 levels deep should pass."""
+def test_validate_allows_2_level_hierarchy():
+    """Hierarchy at exactly 2 levels deep should pass."""
     raw = {
         "pages": [
             {"title": "L0", "purpose": ".", "files": ["a.py"]},
             {"title": "L1", "purpose": ".", "parent": "L0", "files": ["b.py"]},
-            {"title": "L2", "purpose": ".", "parent": "L1", "files": ["c.py"]},
-            {"title": "L3", "purpose": ".", "parent": "L2", "files": ["d.py"]},
         ]
     }
     plan = validate_wiki_plan(raw)
-    assert len(plan.pages) == 4
+    assert len(plan.pages) == 2
 
 
 def test_validate_rejects_flat_plan_for_large_repo():
@@ -488,7 +484,7 @@ def test_validate_rejects_flat_plan_for_large_repo():
         ]
     }
     all_files = [f"f{i}.py" for i in range(20)] + [f"g{i}.py" for i in range(15)]
-    with pytest.raises(ValueError, match="create 2-3 levels of hierarchy"):
+    with pytest.raises(ValueError, match="add parent hierarchy"):
         validate_wiki_plan(raw, all_files=all_files)
 
 
@@ -783,104 +779,27 @@ def test_build_outline_prompt_without_anchors_unchanged():
     assert "Architectural anchors" not in prompt
 
 
-# ── Stage B: secondary_files ──────────────────────────────────────────────
-
-
-def test_wiki_page_spec_has_secondary_files():
-    """WikiPageSpec must carry an optional secondary_files list."""
-    spec = WikiPageSpec(
-        title="Core",
-        purpose="Core",
-        files=["a.py"],
-        secondary_files=["shared/utils.py"],
-    )
-    assert spec.files == ["a.py"]
-    assert spec.secondary_files == ["shared/utils.py"]
-
-
-def test_wiki_page_spec_secondary_files_default_empty():
-    spec = WikiPageSpec(title="Core", purpose="p")
-    assert spec.secondary_files == []
-
-
-def test_to_internal_json_roundtrips_secondary_files():
-    plan = WikiPlan(
-        pages=[
-            WikiPageSpec(
-                title="Core",
-                purpose="p",
-                files=["a.py"],
-                secondary_files=["b.py"],
-            )
-        ]
-    )
+def test_to_internal_json_roundtrips_files():
+    plan = WikiPlan(pages=[WikiPageSpec(title="Core", purpose="p", files=["a.py"])])
     payload = plan.to_internal_json()
     page = payload["pages"][0]
     assert page["files"] == ["a.py"]
-    assert page["secondary_files"] == ["b.py"]
+    assert "secondary_files" not in page
 
 
-def test_to_wiki_json_omits_secondary_files():
-    """wiki.json is user-facing: secondary assignment must not appear."""
-    plan = WikiPlan(
-        pages=[
-            WikiPageSpec(
-                title="Core",
-                purpose="p",
-                files=["a.py"],
-                secondary_files=["b.py"],
-            )
-        ]
-    )
+def test_to_wiki_json_omits_files():
+    """wiki.json is user-facing: file assignments must not appear."""
+    plan = WikiPlan(pages=[WikiPageSpec(title="Core", purpose="p", files=["a.py"])])
     payload = plan.to_wiki_json()
     page = payload["pages"][0]
     assert "files" not in page
-    assert "secondary_files" not in page
 
 
-def test_to_api_structure_exposes_secondary_file_count_only():
-    plan = WikiPlan(
-        pages=[
-            WikiPageSpec(
-                title="Core",
-                purpose="p",
-                files=["a.py"],
-                secondary_files=["b.py", "c.py"],
-            )
-        ]
-    )
+def test_to_api_structure_no_secondary_file_count():
+    plan = WikiPlan(pages=[WikiPageSpec(title="Core", purpose="p", files=["a.py"])])
     page = plan.to_api_structure()["pages"][0]
-    assert page["secondary_file_count"] == 2
+    assert "secondary_file_count" not in page
     assert "secondary_files" not in page
-
-
-def test_validate_wiki_plan_considers_secondary_assignment_for_orphans():
-    """A file that is secondary on some page still counts as assigned."""
-    from worker.pipeline.wiki_planner import validate_wiki_plan
-
-    raw = {
-        "pages": [
-            {
-                "title": "Overview",
-                "purpose": "top",
-                "files": ["x.py"],
-                "secondary_files": [],
-            },
-            {
-                "title": "Core",
-                "purpose": "core",
-                "files": ["core.py"],
-                "secondary_files": ["shared.py"],
-            },
-        ]
-    }
-    plan = validate_wiki_plan(raw, all_files=["x.py", "core.py", "shared.py"])
-    # ``shared.py`` must NOT be appended to Overview as an orphan because
-    # it's already referenced as secondary on Core.
-    overview = next(p for p in plan.pages if p.title == "Overview")
-    assert "shared.py" not in overview.files
-    core = next(p for p in plan.pages if p.title == "Core")
-    assert core.secondary_files == ["shared.py"]
 
 
 async def test_generate_wiki_plan_with_clone_root(mock_llm):
