@@ -307,3 +307,11 @@ async def generate_page_outline(
                     context={"page_title": spec.title, "files": len(spec.files or [])},
                 )
                 raise
+        except Exception as e:
+            log_final_failure(
+                logger,
+                stage="page_outline",
+                exc=e,
+                context={"page_title": spec.title, "files": len(spec.files or [])},
+            )
+            raise

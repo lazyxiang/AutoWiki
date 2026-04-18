@@ -41,7 +41,14 @@ except (ImportError, AttributeError):
 try:
     from google.genai import errors as _genai_errors
 
-    _TRANSIENT += [_genai_errors.ServerError, _genai_errors.ClientError]
+    _TRANSIENT += [_genai_errors.ServerError]
+except (ImportError, AttributeError):
+    pass
+
+try:
+    import httpx
+
+    _TRANSIENT += [httpx.TransportError]
 except (ImportError, AttributeError):
     pass
 
