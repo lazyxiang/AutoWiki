@@ -63,7 +63,7 @@ def test_validate_plan_reports_validation_failure(tmp_path, monkeypatch):
                 {
                     "title": "Overview",
                     "purpose": "top",
-                    "files": [f"f{i}.py" for i in range(60)],  # > 50 cap
+                    "files": [f"f{i}.py" for i in range(11)],  # > 10 cap
                     "secondary_files": [],
                 }
             ],
@@ -75,7 +75,7 @@ def test_validate_plan_reports_validation_failure(tmp_path, monkeypatch):
     result = runner.invoke(app, ["validate-plan", "bad-repo"])
     assert result.exit_code == 1
     assert "VALIDATION FAILURE" in result.output
-    assert "60 > 50 files" in result.output
+    assert "11 > 10 files" in result.output
 
 
 def test_validate_plan_missing_repo_returns_error(tmp_path, monkeypatch):

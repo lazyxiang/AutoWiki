@@ -1,251 +1,66 @@
-"""Tests for Stage 3 batched file assignment."""
+"""Tests for page-centric file selection prompt builders and batch executor."""
 
 from __future__ import annotations
 
 from worker.llm.prompt_segment import PromptSegment
 from worker.pipeline.wiki_planner import (
-    _build_batch_assignment_system,
-    _build_batch_assignment_user,
+    _build_selection_system,
+    _build_selection_user,
+    _SELECTION_SCHEMA,
+    MIN_FILES_PER_PAGE,
+    MAX_FILES_PER_PAGE,
 )
 
 
-def test_system_segment_is_cacheable():
-    """The static context (outline + file_summary + dep_info) must be cacheable."""
-    outline = [
-        {"title": "Overview", "purpose": "top"},
-        {"title": "Core", "purpose": "core"},
-    ]
-    segments = _build_batch_assignment_system(
-        outline=outline,
+def test_selection_system_segment_is_cacheable():
+    segments = _build_selection_system(
         file_summary="file summary text",
         dep_info="dep info text",
     )
     assert isinstance(segments, list)
     assert all(isinstance(s, PromptSegment) for s in segments)
-    assert any(s.cacheable for s in segments), (
-        "at least one system segment must be cacheable"
-    )
-    # Outline and file_summary content must be present
+    assert any(s.cacheable for s in segments)
     joined = "".join(s.text for s in segments)
-    assert "Overview" in joined
     assert "file summary text" in joined
     assert "dep info text" in joined
 
 
-def test_user_segment_contains_only_batch_files():
-    """The user segment must contain only the per-batch file list, not the full repo."""
-    batch = ["a.py", "b.py", "c.py"]
-    segment = _build_batch_assignment_user(batch_files=batch, outline_titles=["O", "C"])
-    assert isinstance(segment, PromptSegment)
-    assert segment.cacheable is False
-    for f in batch:
-        assert f in segment.text
-    # The outline titles are included as enum reminders
-    assert "O" in segment.text and "C" in segment.text
-    # Not cached, not containing full context
-    assert "file summary" not in segment.text
+def test_selection_system_segment_no_dep_info():
+    segments = _build_selection_system(file_summary="summary", dep_info=None)
+    joined = "".join(s.text for s in segments)
+    assert "Dependency" not in joined
 
 
-async def test_batched_assignment_collects_all_files():
-    """Each batch's assignments are merged into the final result."""
-    from unittest.mock import AsyncMock
-
-    from worker.pipeline.wiki_planner import _assign_files_in_batches
-
-    outline = [
-        {"title": "Overview", "purpose": "top"},
-        {"title": "Core", "purpose": "core"},
+def test_selection_user_segment_contains_pages_and_candidates():
+    pages_with_candidates = [
+        ("API Gateway", "Routes HTTP requests.", ["api/routes.py", "api/models.py"]),
+        ("Worker", "Background jobs.", ["worker/job.py"]),
     ]
-    all_files = [f"f{i}.py" for i in range(100)]
-
-    # LLM assigns odd → Core, even → Overview, returned per batch
-    async def fake_generate_structured(user_seg, schema, system):
-        import re
-
-        text = user_seg.text if hasattr(user_seg, "text") else str(user_seg)
-        batch = re.findall(r"- (f\d+\.py)", text)
-        assignments = [
-            {
-                "file": f,
-                "page_title": "Core" if int(f[1:-3]) % 2 else "Overview",
-            }
-            for f in batch
-        ]
-        return {"assignments": assignments}
-
-    llm = AsyncMock()
-    llm.generate_structured.side_effect = fake_generate_structured
-
-    result, _ = await _assign_files_in_batches(
-        outline=outline,
-        file_summary="fs",
-        dep_info=None,
-        all_files=all_files,
-        llm=llm,
-        system="sys",
-        on_retry=None,
-        batch_size=40,
-    )
-
-    # Every file assigned exactly once
-    flat = [f for files in result.values() for f in files]
-    assert sorted(flat) == sorted(all_files)
-    # 50 even → Overview, 50 odd → Core
-    assert len(result["Overview"]) == 50
-    assert len(result["Core"]) == 50
-    # Number of LLM calls: ceil(100 / 40) = 3
-    assert llm.generate_structured.await_count == 3
+    seg = _build_selection_user(pages_with_candidates)
+    assert isinstance(seg, PromptSegment)
+    assert seg.cacheable is False
+    assert "API Gateway" in seg.text
+    assert "Worker" in seg.text
+    assert "api/routes.py" in seg.text
+    assert "worker/job.py" in seg.text
 
 
-async def test_batched_assignment_reuses_system_segment_across_batches():
-    """The same cacheable system segment object is passed to every batch call."""
-    from unittest.mock import AsyncMock
-
-    from worker.pipeline.wiki_planner import _assign_files_in_batches
-
-    outline = [{"title": "X", "purpose": "x"}]
-    all_files = [f"a{i}.py" for i in range(50)]
-
-    calls: list[object] = []
-
-    async def capture(user_seg, schema, system):
-        calls.append(system)
-        import re
-
-        text = user_seg.text if hasattr(user_seg, "text") else str(user_seg)
-        batch = re.findall(r"- (a\d+\.py)", text)
-        return {"assignments": [{"file": f, "page_title": "X"} for f in batch]}
-
-    llm = AsyncMock()
-    llm.generate_structured.side_effect = capture
-
-    await _assign_files_in_batches(
-        outline=outline,
-        file_summary="fs",
-        dep_info="deps",
-        all_files=all_files,
-        llm=llm,
-        system="sys",
-        on_retry=None,
-        batch_size=20,
-    )
-
-    # All calls received identical system objects (same identity or same text)
-    assert len(calls) == 3
-    first = calls[0]
-    for other in calls[1:]:
-        assert first is other or first == other
+def test_selection_user_segment_includes_file_count_range():
+    pages_with_candidates = [("Core", "Core logic.", ["core/a.py"])]
+    seg = _build_selection_user(pages_with_candidates)
+    assert str(MIN_FILES_PER_PAGE) in seg.text
+    assert str(MAX_FILES_PER_PAGE) in seg.text
 
 
-async def test_batched_assignment_retries_unassigned_files():
-    """Files not assigned in the initial pass are retried in a cleanup batch."""
-    from unittest.mock import AsyncMock
-
-    from worker.pipeline.wiki_planner import _assign_files_in_batches
-
-    outline = [{"title": "X", "purpose": "x"}]
-    all_files = [f"f{i}.py" for i in range(10)]
-
-    call_count = [0]
-
-    async def fake(user_seg, schema, system):
-        call_count[0] += 1
-        import re
-
-        text = user_seg.text if hasattr(user_seg, "text") else str(user_seg)
-        batch = re.findall(r"- (f\d+\.py)", text)
-        if call_count[0] == 1:
-            # Skip half the files in the first batch
-            batch = batch[: len(batch) // 2]
-        return {"assignments": [{"file": f, "page_title": "X"} for f in batch]}
-
-    llm = AsyncMock()
-    llm.generate_structured.side_effect = fake
-
-    result, _ = await _assign_files_in_batches(
-        outline=outline,
-        file_summary="fs",
-        dep_info=None,
-        all_files=all_files,
-        llm=llm,
-        system="sys",
-        on_retry=None,
-        batch_size=20,
-    )
-
-    # All 10 files assigned despite the first batch dropping half
-    assert len(result["X"]) == 10
-    # Two calls: initial batch + cleanup batch
-    assert call_count[0] == 2
+def test_selection_user_segment_injects_last_error():
+    pages_with_candidates = [("API", "REST API.", ["api/routes.py"])]
+    seg = _build_selection_user(pages_with_candidates, last_error="Too many files on page X")
+    assert "Too many files on page X" in seg.text
+    assert "CRITICAL" in seg.text
 
 
-def test_assignment_schema_has_primary_and_secondary_fields():
-    """_ASSIGNMENT_SCHEMA must require file + primary_page and allow secondary_pages."""
-    from worker.pipeline.wiki_planner import _ASSIGNMENT_SCHEMA
-
-    item_props = _ASSIGNMENT_SCHEMA["properties"]["assignments"]["items"]
-    assert "primary_page" in item_props["properties"]
-    assert "secondary_pages" in item_props["properties"]
-    # primary_page is required; secondary_pages is optional
-    assert "primary_page" in item_props["required"]
-    assert "secondary_pages" not in item_props["required"]
-    # secondary_pages is capped at 2
-    assert item_props["properties"]["secondary_pages"]["maxItems"] == 2
-
-
-def test_batch_user_prompt_mentions_secondary_pages():
-    """The per-batch user prompt must describe both primary_page and secondary_pages."""
-    from worker.pipeline.wiki_planner import _build_batch_assignment_user
-
-    seg = _build_batch_assignment_user(
-        batch_files=["util.py"],
-        outline_titles=["Overview", "Core"],
-    )
-    assert "primary_page" in seg.text
-    assert "secondary_pages" in seg.text
-
-
-async def test_batched_assignment_collects_secondary_assignments():
-    """Secondary page assignments from LLM responses are collected in the second
-    return value of _assign_files_in_batches."""
-    from unittest.mock import AsyncMock
-
-    from worker.pipeline.wiki_planner import _assign_files_in_batches
-
-    outline = [
-        {"title": "Overview", "purpose": "top"},
-        {"title": "Core", "purpose": "core"},
-    ]
-    # shared.py is a utility referenced by both pages
-    all_files = ["main.py", "shared.py"]
-
-    async def fake(user_seg, schema, system):
-        return {
-            "assignments": [
-                {"file": "main.py", "primary_page": "Overview", "secondary_pages": []},
-                {
-                    "file": "shared.py",
-                    "primary_page": "Core",
-                    "secondary_pages": ["Overview"],
-                },
-            ]
-        }
-
-    llm = AsyncMock()
-    llm.generate_structured.side_effect = fake
-
-    primary, secondary = await _assign_files_in_batches(
-        outline=outline,
-        file_summary="fs",
-        dep_info=None,
-        all_files=all_files,
-        llm=llm,
-        system="sys",
-        on_retry=None,
-        batch_size=40,
-    )
-
-    assert "main.py" in primary["Overview"]
-    assert "shared.py" in primary["Core"]
-    # shared.py should appear in Overview's secondary list
-    assert "shared.py" in secondary.get("Overview", [])
+def test_selection_schema_has_selections_key():
+    assert "selections" in _SELECTION_SCHEMA["properties"]
+    item_props = _SELECTION_SCHEMA["properties"]["selections"]["items"]["properties"]
+    assert "page_title" in item_props
+    assert "files" in item_props
