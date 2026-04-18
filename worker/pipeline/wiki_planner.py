@@ -30,7 +30,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from worker.llm.base import LLMProvider
 from worker.llm.prompt_segment import PromptSegment
@@ -886,6 +886,57 @@ def _best_matching_page(
             best_score = score
             best_title = title
     return best_title
+
+
+def _score_file_for_page(
+    path: str,
+    page: dict,
+    file_infos: dict[str, Any],
+    dep_graph: DependencyGraph | None,
+) -> float:
+    score = 0.0
+    lower = path.lower()
+    ext = "." + lower.rsplit(".", 1)[-1] if "." in lower else ""
+
+    if ext in _CODE_EXTS:
+        score += 3.0
+    elif ext in _DOC_EXTS:
+        basename = lower.rsplit("/", 1)[-1] if "/" in lower else lower
+        if "/" not in path and basename.startswith("readme"):
+            score += 2.0 if "overview" in page["title"].lower() else -2.0
+        else:
+            score -= 2.0
+    elif ext in _CONFIG_EXTS:
+        score -= 1.5
+
+    info = file_infos.get(path)
+    if info is not None:
+        score += min(len(info.entities) * 0.4, 3.0)
+
+    if dep_graph is not None:
+        in_degree = sum(1 for deps in dep_graph.edges.values() if path in deps)
+        score += min(in_degree * 0.3, 2.0)
+
+    page_tokens = _tokenize(page["title"] + " " + page.get("purpose", ""))
+    file_tokens = _tokenize(path.replace("/", " ").replace("_", " ").replace("-", " "))
+    score += len(page_tokens & file_tokens) * 0.5
+
+    return score
+
+
+def _prefilter_candidates(
+    page: dict,
+    all_files: list[str],
+    file_infos: dict[str, Any],
+    dep_graph: DependencyGraph | None,
+    max_candidates: int = 25,
+) -> list[str]:
+    scored = [
+        (f, _score_file_for_page(f, page, file_infos, dep_graph)) for f in all_files
+    ]
+    scored = [(f, s) for f, s in scored if s > 0]
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return [f for f, _ in scored[:max_candidates]]
 
 
 def _directory_cluster_assign(

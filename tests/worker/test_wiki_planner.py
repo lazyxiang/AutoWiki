@@ -4,6 +4,8 @@ from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
 from worker.pipeline.wiki_planner import (
     WikiPageSpec,
     WikiPlan,
+    _prefilter_candidates,
+    _score_file_for_page,
     _suggest_page_range,
     generate_wiki_plan,
     validate_wiki_plan,
@@ -901,3 +903,64 @@ async def test_generate_wiki_plan_with_clone_root(mock_llm):
     # verify the plan was produced (anchors don't appear in plan output, but the
     # call must complete without error and produce a valid plan).
     assert any(p.files for p in plan.pages)
+
+
+# ---------------------------------------------------------------------------
+# _score_file_for_page and _prefilter_candidates tests
+# ---------------------------------------------------------------------------
+
+
+class FakeFileInfo:
+    def __init__(self, entities):
+        self.entities = entities
+
+
+def _fake_infos(*paths_entities):
+    return {path: FakeFileInfo(ents) for path, ents in paths_entities}
+
+
+def test_score_prefers_code_over_doc():
+    page = {"title": "API Gateway", "purpose": "Handles HTTP routing."}
+    infos = _fake_infos(("api/routes.py", ["route_a", "route_b"]), ("docs/api.md", []))
+    code_score = _score_file_for_page("api/routes.py", page, infos, None)
+    doc_score = _score_file_for_page("docs/api.md", page, infos, None)
+    assert code_score > doc_score
+
+
+def test_score_entity_density():
+    page = {"title": "Worker", "purpose": "Background jobs."}
+    sparse = _fake_infos(("worker/job.py", ["run"]))
+    dense = _fake_infos(("worker/job.py", [f"fn{i}" for i in range(15)]))
+    assert (
+        _score_file_for_page("worker/job.py", page, dense, None)
+        > _score_file_for_page("worker/job.py", page, sparse, None)
+    )
+
+
+def test_score_semantic_alignment():
+    page = {"title": "API Gateway", "purpose": "Routes requests."}
+    infos = _fake_infos(("api/gateway.py", ["route"]), ("util/helper.py", ["route"]))
+    assert (
+        _score_file_for_page("api/gateway.py", page, infos, None)
+        > _score_file_for_page("util/helper.py", page, infos, None)
+    )
+
+
+def test_prefilter_returns_at_most_max_candidates():
+    page = {"title": "Worker", "purpose": "Background jobs."}
+    all_files = [f"worker/file{i}.py" for i in range(50)]
+    infos = {f: FakeFileInfo([f"fn{i}"]) for i, f in enumerate(all_files)}
+    result = _prefilter_candidates(page, all_files, infos, None, max_candidates=10)
+    assert len(result) <= 10
+
+
+def test_prefilter_prefers_code_files():
+    page = {"title": "Auth", "purpose": "Authentication logic."}
+    all_files = ["auth/login.py", "auth/README.md", "auth/config.yaml"]
+    infos = {
+        "auth/login.py": FakeFileInfo(["authenticate"]),
+        "auth/README.md": FakeFileInfo([]),
+        "auth/config.yaml": FakeFileInfo([]),
+    }
+    result = _prefilter_candidates(page, all_files, infos, None)
+    assert result[0] == "auth/login.py"
