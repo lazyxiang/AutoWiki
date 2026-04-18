@@ -588,42 +588,37 @@ def _validate_outline_structure(
         )
 
 
-def _validate_assignments(
+def _validate_selections(
     result: dict[str, list[str]],
     outline: list[dict],
 ) -> None:
-    """Validate per-page file assignment counts.
+    """Validate per-page file selection counts.
 
-    Called inside :func:`_assign_files` after each LLM response so that
-    assignment-level errors are caught and retried in Phase 2.
+    Called inside :func:`_select_files` after each LLM response so that
+    selection-level errors are caught and retried in Phase 2.
 
     Checks:
-    - No page has more than 10 files.
-    - No non-overview page has zero files unless it is a parent.
+    - No page has more than MAX_FILES_PER_PAGE files.
+    - No non-overview, non-parent leaf page has zero files.
 
     Raises:
-        ValueError: Describing the first constraint that is violated.
+        ValueError: Describing the first constraint violated.
     """
     all_parents = {p.get("parent") for p in outline if p.get("parent")}
     for page in outline:
         title = page["title"]
         files = result.get(title, [])
         if len(files) > MAX_FILES_PER_PAGE:
-            sample = files[:3]
             raise ValueError(
-                f"VALIDATION_FAILURE: Page '{title}' is overloaded "
-                f"({len(files)} > {MAX_FILES_PER_PAGE} files). "
-                f"Example files: {sample}. "
-                "Suggestion: Split this page into 2-3 sub-pages."
+                f"VALIDATION_FAILURE: Page '{title}' has {len(files)} files "
+                f"(max {MAX_FILES_PER_PAGE}). Reduce to the most representative files."
             )
-
         is_overview = "overview" in title.lower()
         is_parent = title in all_parents
-        if not (is_overview or is_parent or len(files) > 0):
+        if not (is_overview or is_parent or files):
             raise ValueError(
-                f"VALIDATION_FAILURE: Page '{title}' has no files assigned. "
-                "Every page must either own source files or serve as a parent "
-                "category. Suggestion: Assign relevant files or remove this page."
+                f"VALIDATION_FAILURE: Page '{title}' has no files selected. "
+                "Select at least one representative source file or remove this page."
             )
 
 
@@ -1139,7 +1134,7 @@ async def _select_files(
                 last_error=last_error,
             )
             last_result = result
-            _validate_assignments(result, outline)
+            _validate_selections(result, outline)
             return result
         except ValueError as exc:
             last_error = str(exc)
@@ -1185,17 +1180,14 @@ def validate_wiki_plan(
        (duplicate titles after slug derivation).
     4. Silently drops ``parent`` references that point to unknown titles
        rather than raising an error, to tolerate minor LLM hallucinations.
-    5. Raises :exc:`ValueError` if any *critical* orphaned file (a core source
-       file under a non-test directory, or a known root-level entry point such
-       as ``main.py``/``app.py``) is not assigned to any page.  Low-priority
-       files (tests, docs, root-level configs) are silently skipped.
+    5. Logs unselected files as info (selection model: pages curate a relevant
+       subset of files; not all files need to appear on a page).
 
     Args:
         raw: Raw dict decoded from the LLM's JSON response.  Must contain a
             ``"pages"`` key whose value is a list of page dicts.
         all_files: Optional list of all relative file paths in the repository.
-            When provided, any unassigned *critical* file triggers a
-            :exc:`ValueError` so the caller can retry with feedback.
+            When provided, files not selected by any page are logged at INFO.
         existing_titles: Optional set of page titles from the *unchanged*
             portion of an existing wiki plan (used during partial incremental
             refresh so cross-slice ``parent`` references remain valid).
@@ -1205,12 +1197,11 @@ def validate_wiki_plan(
 
     Raises:
         ValueError: If ``"pages"`` key is missing, the pages list is empty,
-            any page dict is missing ``"title"`` or ``"purpose"``, two or more
-            pages share the same derived slug, or any critical source file is
-            not assigned to a page.
+            any page dict is missing ``"title"`` or ``"purpose"``, or two or
+            more pages share the same derived slug.
 
     Example:
-        Normal case — all files assigned, no orphans:
+        Normal case — all files assigned:
 
         >>> raw = {"pages": [
         ...     {"title": "Overview", "purpose": "Top level.", "files": ["main.py"]},
@@ -1218,16 +1209,6 @@ def validate_wiki_plan(
         >>> plan = validate_wiki_plan(raw, all_files=["main.py"])
         >>> plan.pages[0].title
         'Overview'
-
-        Orphan case — ``worker/core.py`` not assigned; raises ValueError:
-
-        >>> raw = {"pages": [
-        ...     {"title": "Overview", "purpose": "...", "files": ["main.py"]},
-        ... ]}
-        >>> validate_wiki_plan(raw, all_files=["main.py", "worker/core.py"])
-        Traceback (most recent call last):
-            ...
-        ValueError: VALIDATION_FAILURE: 1 core source files are missing ...
     """
     if "pages" not in raw:
         raise ValueError("Missing 'pages' key")
@@ -1270,24 +1251,15 @@ def validate_wiki_plan(
 
     # ── Semantic validation ──────────────────────────────────────────────
 
-    # Check for unassigned files (Orphans) — only critical files trigger failure
+    # Log unselected files (selection model: not all files need to be on a page)
     if all_files:
-        assigned = {f for page in pages for f in page.files}
-        assigned |= {f for page in pages for f in page.secondary_files}
-        orphans = [f for f in all_files if f not in assigned]
-        # Critical orphans: ignore tests, docs, root-configs, etc.
-        critical_orphans = [f for f in orphans if _is_high_priority_file(f)]
-        if critical_orphans:
-            sample = critical_orphans[:3]
-            raise ValueError(
-                f"VALIDATION_FAILURE: {len(critical_orphans)} core source files "
-                f"are missing from the wiki plan. Example missing files: {sample}. "
-                "Every core source file must be assigned to a primary page."
-            )
-        elif orphans:
+        selected = {f for page in pages for f in page.files}
+        selected |= {f for page in pages for f in page.secondary_files}
+        unselected = [f for f in all_files if f not in selected]
+        if unselected:
             logger.info(
-                "Skipping %d low-priority files (tests/configs/etc.) from the wiki",
-                len(orphans),
+                "%d files not selected by any page (expected in selection model)",
+                len(unselected),
             )
 
     # Max files per page

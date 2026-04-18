@@ -4,9 +4,11 @@ from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
 from worker.pipeline.wiki_planner import (
     WikiPageSpec,
     WikiPlan,
+    _heuristic_select_files,
     _prefilter_candidates,
     _score_file_for_page,
     _suggest_page_range,
+    _validate_selections,
     generate_wiki_plan,
     validate_wiki_plan,
 )
@@ -94,7 +96,8 @@ def test_validate_wiki_plan_invalid_parent_dropped():
     assert details_page.parent is None
 
 
-def test_validate_rejects_critical_orphan_files():
+def test_validate_unselected_files_do_not_raise():
+    """Selection model: unselected files are logged but never raise."""
     raw = {
         "pages": [
             {
@@ -104,16 +107,16 @@ def test_validate_rejects_critical_orphan_files():
             }
         ]
     }
-    # a/core.py is critical, should fail
-    all_files_fail = ["main.py", "a/core.py"]
-    with pytest.raises(ValueError, match="core source files are missing"):
-        validate_wiki_plan(raw, all_files=all_files_fail)
-
-    # tests/test_a.py is low-priority, should pass (ignored from plan)
-    all_files_pass = ["main.py", "tests/test_a.py"]
-    plan = validate_wiki_plan(raw, all_files=all_files_pass)
+    # a/core.py is unselected — no error in selection model
+    all_files = ["main.py", "a/core.py"]
+    plan = validate_wiki_plan(raw, all_files=all_files)
     assert len(plan.pages) == 1
-    assert "tests/test_a.py" not in plan.pages[0].files
+
+    # tests/test_a.py also unselected — should still pass
+    all_files_pass = ["main.py", "tests/test_a.py"]
+    plan2 = validate_wiki_plan(raw, all_files=all_files_pass)
+    assert len(plan2.pages) == 1
+    assert "tests/test_a.py" not in plan2.pages[0].files
 
 
 def test_wiki_page_spec_slug_unicode():
@@ -983,9 +986,6 @@ def test_prefilter_prefers_code_files():
     assert result[0] == "auth/login.py"
 
 
-from worker.pipeline.wiki_planner import _heuristic_select_files
-
-
 class FakeFileInfoH:
     def __init__(self, entities):
         self.entities = entities
@@ -1026,3 +1026,48 @@ def test_heuristic_select_files_respects_max():
     infos = {f: FakeFileInfoH([f"fn{i}"]) for i, f in enumerate(all_files)}
     result = _heuristic_select_files(outline, all_files, infos, None)
     assert len(result["Core"]) <= 10
+
+
+# ---------------------------------------------------------------------------
+# _validate_selections tests
+# ---------------------------------------------------------------------------
+
+
+def test_validate_selections_passes_normal():
+    outline = [{"title": "API", "purpose": "REST API."}]
+    result = {"API": ["api/routes.py", "api/models.py"]}
+    _validate_selections(result, outline)  # should not raise
+
+
+def test_validate_selections_fails_over_max():
+    outline = [{"title": "API", "purpose": "REST API."}]
+    result = {"API": [f"api/file{i}.py" for i in range(11)]}
+    with pytest.raises(ValueError, match="VALIDATION_FAILURE"):
+        _validate_selections(result, outline)
+
+
+def test_validate_selections_fails_empty_leaf_page():
+    outline = [{"title": "Auth", "purpose": "Login logic."}]
+    result = {"Auth": []}
+    with pytest.raises(ValueError, match="VALIDATION_FAILURE"):
+        _validate_selections(result, outline)
+
+
+def test_validate_selections_allows_empty_parent():
+    outline = [
+        {"title": "Backend", "purpose": "Parent."},
+        {"title": "Auth", "purpose": "Login.", "parent": "Backend"},
+    ]
+    result = {"Backend": [], "Auth": ["auth/login.py"]}
+    _validate_selections(result, outline)  # parent with no files is fine
+
+
+def test_validate_wiki_plan_no_orphan_check():
+    raw = {
+        "pages": [
+            {"title": "Overview", "purpose": "Top level.", "files": ["main.py"]},
+        ]
+    }
+    plan = validate_wiki_plan(raw, all_files=["main.py", "worker/core.py"])
+    assert plan.pages[0].title == "Overview"
+    # worker/core.py is unassigned — no error raised
