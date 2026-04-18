@@ -62,17 +62,6 @@ export function WikiSidebar({ pages, owner, repo, repoId }: Props) {
         </li>
         <li>
           <Link
-            href={`${basePath}/graph`}
-            className={cn(
-              "block text-sm px-2 py-1.5 rounded-lg hover:bg-slate-200/50 transition-colors",
-              pathname === `${basePath}/graph` && "bg-slate-200/50 font-medium text-primary"
-            )}
-          >
-            Module Graph
-          </Link>
-        </li>
-        <li>
-          <Link
             href={`${basePath}/research`}
             className={cn(
               "block text-sm px-2 py-1.5 rounded-lg hover:bg-slate-200/50 transition-colors",

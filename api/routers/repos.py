@@ -1,15 +1,11 @@
-"""REST endpoints for repos: submit, list, status, refresh, and wiki-plan graph.
+"""REST endpoints for repos: submit, list, status, and refresh.
 
-All routes are mounted under the ``/api/repos`` prefix.  Clients interact with
-these endpoints to submit GitHub repositories for indexing, poll their status,
-trigger incremental refreshes, and retrieve the dependency graph derived from
-the wiki plan.
+All routes are mounted under the ``/api/repos`` prefix.
 """
 
 from __future__ import annotations
 
 import hashlib
-import json as _json
 import uuid
 
 from fastapi import APIRouter, HTTPException
@@ -369,84 +365,3 @@ async def refresh_repo(repo_id: str):
     return {"repo_id": repo_id, "job_id": job_id, "status": "queued"}
 
 
-@router.get("/{repo_id}/graph")
-async def get_repo_graph(repo_id: str):
-    """Return the wiki-plan dependency graph for a repository.
-
-    Reads the internal ``ast/wiki_plan.json`` file produced by the Wiki Planner
-    pipeline stage and converts it into a nodes-and-edges structure suitable
-    for graph visualisation libraries (e.g. React Flow, D3).
-
-    Each **node** represents a logical wiki page; each **edge** represents a
-    parent–child relationship in the page hierarchy.
-
-    Args:
-        repo_id (str): The 16-character hex repository identifier.
-
-    Returns:
-        dict: A JSON object:
-
-        .. code-block:: json
-
-            {
-                "nodes": [
-                    {"id": "Overview", "label": "Overview", "file_count": 3},
-                    {"id": "API Layer", "label": "API Layer", "file_count": 5}
-                ],
-                "edges": [
-                    {"source": "Overview", "target": "API Layer"}
-                ]
-            }
-
-        ``file_count`` is the number of source files assigned to that wiki
-        page by the planner.  ``edges`` only contain entries for pages that
-        have a ``parent`` field set in the plan.
-
-    Raises:
-        HTTPException: 404 if the repository does not exist.
-        HTTPException: 404 if ``ast/wiki_plan.json`` has not been generated yet
-            (i.e. the index pipeline has not completed at least the Wiki Planner
-            stage).
-
-    Example:
-        .. code-block:: http
-
-            GET /api/repos/a1b2c3d4e5f6a7b8/graph HTTP/1.1
-
-        Response (200 OK):
-
-        .. code-block:: json
-
-            {"nodes": [{"id": "Overview", "label": "Overview",
-                        "file_count": 2}],
-             "edges": []}
-    """
-    cfg = get_config()
-    async with get_session(str(cfg.database_path)) as s:
-        repo = await s.get(Repository, repo_id)
-        if repo is None:
-            raise HTTPException(status_code=404, detail="Repository not found")
-    # The wiki plan lives under the repo's ast/ subdirectory and is written by
-    # the Wiki Planner pipeline stage after AST analysis is complete.
-    wiki_plan_path = cfg.data_dir / "repos" / repo_id / "ast" / "wiki_plan.json"
-    if not wiki_plan_path.exists():
-        raise HTTPException(
-            status_code=404, detail="Graph not available — run index first"
-        )
-    wiki_plan = _json.loads(wiki_plan_path.read_text())
-    nodes = [
-        {
-            "id": p["title"],
-            "label": p["title"],
-            # file_count may be 0 for top-level summary pages with no direct
-            # file assignments.
-            "file_count": len(p.get("files", [])),
-        }
-        for p in wiki_plan.get("pages", [])
-    ]
-    edges = [
-        {"source": p["parent"], "target": p["title"]}
-        for p in wiki_plan.get("pages", [])
-        if p.get("parent")
-    ]
-    return {"nodes": nodes, "edges": edges}

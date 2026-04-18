@@ -105,7 +105,6 @@ POST  /api/repos                              # Submit repo for indexing
 GET   /api/repos                             # List all repos
 GET   /api/repos/{repo_id}                   # Status + metadata
 POST  /api/repos/{repo_id}/refresh           # Trigger incremental refresh
-GET   /api/repos/{repo_id}/graph             # Dependency graph (nodes + edges)
 GET   /api/repos/{repo_id}/wiki              # List wiki pages
 GET   /api/repos/{repo_id}/wiki/{slug}       # Get page Markdown
 POST  /api/repos/{repo_id}/chat              # Create a new chat session
