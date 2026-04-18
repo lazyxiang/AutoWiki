@@ -473,99 +473,52 @@ def _build_outline_prompt(
     return "\n\n".join(sections)
 
 
-def _build_assignment_prompt(
-    outline: list[dict],
-    file_summary: str,
-    dep_info: str | None = None,
-    all_files: list[str] | None = None,
-) -> str:
-    """Build the Phase 2 prompt: assign every file to exactly one page."""
-    sections = []
-
-    outline_str = json.dumps(outline, indent=2)
-    sections.append(f"Wiki page structure:\n{outline_str}")
-    sections.append(f"File summaries:\n{file_summary}")
-
-    if dep_info:
-        sections.append(f"Dependency relationships:\n{dep_info}")
-
-    total = len(all_files) if all_files else 0
-    schema_json = json.dumps(_SELECTION_SCHEMA, indent=2)
-    sections.append(
-        f"Assign ALL {total} source files to pages. Guidelines:\n"
-        "- Every file must be assigned to exactly one page\n"
-        "- Files that import each other should be on the same page when possible\n"
-        "- Assign files based on semantic purpose, not directory structure\n"
-        "- Each assignment must reference an existing page title exactly\n\n"
-        "Output JSON matching this schema:\n"
-        f"{schema_json}"
-    )
-
-    return "\n\n".join(sections)
-
-
-def _build_batch_assignment_system(
-    outline: list[dict],
+def _build_selection_system(
     file_summary: str,
     dep_info: str | None,
 ) -> list[PromptSegment]:
-    """Build the cacheable *system* portion of a batched assignment call.
-
-    The system turn contains the full repository context — outline,
-    file summaries, and dependency info — which is identical for every
-    batch in a single planning run.  Marking it cacheable lets Anthropic's
-    ``ephemeral`` cache amortise the tokens across batches so only the
-    first batch pays full cost.
-
-    Non-Anthropic providers (OpenAI, Gemini, Ollama) ignore the cache
-    hint and simply concatenate the segments into the system prompt.
-    """
-    outline_json = json.dumps(outline, indent=2)
     parts: list[str] = [
-        "You are assigning source files to wiki pages.",
+        "You are selecting representative source files for wiki pages.",
         "",
-        f"## Wiki page structure:\n{outline_json}",
-        "",
-        f"## File summaries:\n{file_summary}",
+        "## Repository file summaries:",
+        file_summary,
     ]
     if dep_info:
-        parts.append("")
-        parts.append(f"## Dependency relationships:\n{dep_info}")
+        parts += ["", "## Dependency relationships:", dep_info]
     return [PromptSegment(text="\n".join(parts), cacheable=True)]
 
 
-def _build_batch_assignment_user(
-    batch_files: list[str],
-    outline_titles: list[str],
+def _build_selection_user(
+    pages_with_candidates: list[tuple[str, str, list[str]]],
     last_error: str | None = None,
 ) -> PromptSegment:
-    """Build the per-batch *user* segment.
-
-    Contains only the batch-specific content — the file list to assign and
-    a reminder of valid page titles — so the system segment's cache stays
-    valid across batches.
-    """
-    titles_str = ", ".join(f'"{t}"' for t in outline_titles)
-    files_str = "\n".join(f"- {f}" for f in batch_files)
     schema_json = json.dumps(_SELECTION_SCHEMA, indent=2)
+    pages_str = "\n\n".join(
+        f'Page: "{title}"\nPurpose: {purpose}\nCandidates:\n'
+        + "\n".join(f"  - {f}" for f in candidates)
+        for title, purpose, candidates in pages_with_candidates
+    )
     text = (
-        f"Assign each of the following {len(batch_files)} files to the "
-        f"wiki page whose purpose best matches it. Each assignment has a "
-        f"required ``primary_page`` and an optional ``secondary_pages`` "
-        f"list (at most 2 entries).\n\n"
-        f"``primary_page`` MUST exactly match one of: {titles_str}.\n"
-        f"``secondary_pages`` entries (if any) must also match one of "
-        f"those titles, and must NOT equal ``primary_page``.\n\n"
-        f"Files to assign:\n{files_str}\n\n"
+        f"For each wiki page below, select the "
+        f"{MIN_FILES_PER_PAGE}–{MAX_FILES_PER_PAGE} "
+        "source code files from its candidate list that best represent "
+        "the page's content.\n\n"
         "Rules:\n"
-        "- Every listed file must have a primary_page.\n"
-        "- Use secondary_pages sparingly — only for genuinely shared "
-        "utilities referenced from two or three distinct subsystems.\n"
-        "- Files that import each other usually share the same primary_page.\n\n"
+        "- Strongly prefer code files (.py, .ts, .go, .rs, .java, etc.) over "
+        ".md / .yaml / .json files\n"
+        "- Include only files that contain substantial relevant code "
+        "(functions, classes, core logic)\n"
+        "- Configuration files only when central to understanding "
+        "this page's architecture\n"
+        "- README.md only on a top-level Overview page\n"
+        "- Target 5–8 files per page; fewer is fine when fewer candidates "
+        "are relevant\n"
+        "- You may select fewer than 3 only when genuinely fewer relevant "
+        "files exist\n\n"
+        f"Pages:\n{pages_str}\n\n"
     )
     if last_error:
         text += f"CRITICAL: Previous attempt failed with error: {last_error}\n\n"
-
     text += f"Output JSON matching this schema:\n{schema_json}"
     return PromptSegment(text=text, cacheable=False)
 
