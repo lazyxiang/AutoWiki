@@ -45,7 +45,7 @@ The existing `secondary_files` field and its page-generator injection ("Referenc
 | `worker/jobs.py` | Load `all_repo_files` from plan JSON; use it in refresh comparison (lines 833–848, 932–935) |
 | `tests/test_wiki_planner.py` | New tests for scoring, pre-filter, selection validation, fallback, serialization |
 
-No changes to `page_generator.py`, `page_draft.py`, `page_outline.py`, `ingestion.py`, or `fixture_recorder.py`.
+No changes to `page_generator.py`, `page_draft.py`, `page_outline.py`, or `ingestion.py`.
 
 ---
 
