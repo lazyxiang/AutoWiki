@@ -1,6 +1,4 @@
-import json
 import os
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 
@@ -74,37 +72,3 @@ async def test_refresh_repo_returns_job(client):
     body = resp2.json()
     assert "job_id" in body
     assert body["status"] == "queued"
-
-
-async def test_get_graph_returns_nodes(client):
-    with patch("api.routers.repos.enqueue_full_index", new_callable=AsyncMock):
-        resp = await client.post(
-            "/api/repos", json={"url": "https://github.com/psf/requests"}
-        )
-    repo_id = resp.json()["repo_id"]
-
-    data_dir = os.environ["AUTOWIKI_DATA_DIR"]
-    ast_dir = Path(data_dir) / "repos" / repo_id / "ast"
-    ast_dir.mkdir(parents=True)
-    (ast_dir / "wiki_plan.json").write_text(
-        json.dumps(
-            {
-                "repo_notes": [{"content": ""}],
-                "pages": [
-                    {"title": "API", "purpose": "API layer.", "files": ["api/main.py"]},
-                    {
-                        "title": "Worker",
-                        "purpose": "Worker layer.",
-                        "files": ["worker/jobs.py"],
-                    },
-                ],
-            }
-        )
-    )
-
-    resp2 = await client.get(f"/api/repos/{repo_id}/graph")
-    assert resp2.status_code == 200
-    body = resp2.json()
-    assert "nodes" in body
-    assert len(body["nodes"]) == 2
-    assert body["nodes"][0]["id"] in ("API", "Worker")

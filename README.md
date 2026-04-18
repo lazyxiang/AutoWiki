@@ -11,7 +11,7 @@ Self-hosted, open-source AI-powered wiki generator for GitHub repositories. Poin
 5. Asks an LLM to generate a logical page hierarchy with file assignments (two-phase: outline then file assignment)
 6. Generates wiki pages bottom-up through a 4-pass pipeline — outline, draft, fact-check, and targeted revision — using a fast model for cheap passes and the main model for quality passes
 
-The result is served via a REST API and displayed in a Next.js web UI with sidebar navigation, interactive dependency diagrams, and a conversational Q&A chat interface.
+The result is served via a REST API and displayed in a Next.js web UI with sidebar navigation and a conversational Q&A chat interface.
 
 ---
 
@@ -194,7 +194,6 @@ POST  /api/repos                                      Submit a repo for indexing
 GET   /api/repos                                      List all repos
 GET   /api/repos/{repo_id}                            Repo status and metadata
 POST  /api/repos/{repo_id}/refresh                    Trigger incremental refresh → {job_id}
-GET   /api/repos/{repo_id}/graph                      Dependency graph (nodes + edges)
 GET   /api/repos/{repo_id}/wiki                       List wiki pages (ordered)
 GET   /api/repos/{repo_id}/wiki/{slug}                Get a wiki page (Markdown + metadata)
 POST  /api/repos/{repo_id}/chat                       Create a new chat session → {session_id}
@@ -340,7 +339,7 @@ POST /api/repos {"url": "github.com/owner/repo"}
 Worker picks up job:
   Stage 1  clone/fetch → files[]            progress 5→20
   Stage 2  AST parse  → FileAnalysis        progress   →35
-  Stage 3  dep graph  → DependencyGraph     progress   →45
+  Stage 3  dep graph  → DependencyGraph     progress   →45  (internal; no API surface)
   Stage 4  embed+index → FAISSStore         progress   →55  (skipped with --reuse-index)
   Stage 5  two-phase LLM plan → WikiPlan    progress   →70
   Stage 6  bottom-up batch LLM → WikiPages  progress   →100

@@ -148,21 +148,6 @@ export async function refreshRepo(repoId: string): Promise<{ repo_id: string; jo
 }
 
 /**
- * Fetches the module dependency graph for a repository.
- * 
- * @param repoId - The repository ID.
- * @returns Nodes and edges for visualization.
- */
-export async function getRepoGraph(repoId: string): Promise<{
-  nodes: Array<{ id: string; label: string; file_count: number }>;
-  edges: Array<{ source: string; target: string }>;
-}> {
-  const res = await fetch(`${API_URL}/api/repos/${repoId}/graph`);
-  if (!res.ok) throw new Error(`Failed to get graph: ${res.status}`);
-  return res.json();
-}
-
-/**
  * Represents a repository in the AutoWiki system.
  */
 export interface Repository {
