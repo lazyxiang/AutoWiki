@@ -35,7 +35,6 @@ from worker.embedding import make_embedding_provider
 from worker.llm import make_fast_llm_provider, make_llm_provider
 from worker.pipeline.ast_analysis import FileAnalysis, analyze_all_files
 from worker.pipeline.dependency_graph import build_dependency_graph
-from worker.pipeline.fixture_recorder import FixtureRecorder, is_recording_enabled
 from worker.pipeline.ingestion import (
     clone_or_fetch,
     extract_readme,
@@ -514,11 +513,6 @@ async def run_full_index(
 
         # Stage 5: Wiki Planner — LLM generates logical page tree (WikiPlan)
         logger.info("Stage 5: Wiki Planner starting")
-        fixture_recorder = (
-            FixtureRecorder(root=repo_data_dir / "fixtures")
-            if is_recording_enabled()
-            else None
-        )
         plan = await generate_wiki_plan(
             file_analysis,
             repo_name=name,
@@ -530,7 +524,6 @@ async def run_full_index(
             fast_llm=fast_llm,
             user_steering=user_steering,
             clone_root=clone_root,
-            fixture_recorder=fixture_recorder,
         )
         logger.info(
             "Wiki plan generated: %d pages planned for %s", len(plan.pages), name
@@ -1045,11 +1038,6 @@ async def run_refresh_index(
         unaffected_titles = {
             p.title for p in old_plan.pages if p.title not in affected_page_titles
         }
-        fixture_recorder = (
-            FixtureRecorder(root=repo_data_dir / "fixtures")
-            if is_recording_enabled()
-            else None
-        )
         plan = await generate_wiki_plan(
             affected_file_analysis,
             repo_name=name,
@@ -1062,7 +1050,6 @@ async def run_refresh_index(
             fast_llm=fast_llm,
             user_steering=user_steering,
             clone_root=clone_root,
-            fixture_recorder=fixture_recorder,
         )
         logger.info(
             "Wiki plan generated: %d pages updated for %s", len(plan.pages), name

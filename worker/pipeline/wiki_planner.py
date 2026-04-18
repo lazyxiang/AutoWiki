@@ -41,7 +41,6 @@ from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retr
 if TYPE_CHECKING:
     from worker.pipeline.ast_analysis import FileAnalysis
     from worker.pipeline.dependency_graph import DependencyGraph
-    from worker.pipeline.fixture_recorder import FixtureRecorder
     from worker.pipeline.user_steering import UserSteering
 
 logger = logging.getLogger("worker.planner")
@@ -1365,7 +1364,6 @@ async def generate_wiki_plan(
     fast_llm: LLMProvider | None = None,
     user_steering: UserSteering | None = None,
     clone_root: Path | None = None,
-    fixture_recorder: FixtureRecorder | None = None,
 ) -> WikiPlan:
     """Generate a hierarchical wiki plan using two-phase LLM planning.
 
@@ -1377,10 +1375,9 @@ async def generate_wiki_plan(
       (titles, purposes, parent relationships) and immediately validates
       structural constraints. Failure here is critical and stops the task.
 
-    * **Phase 2** (:func:`_assign_files`) — Assigns source files to pages and
-      validates per-page constraints. Failure triggers a heuristic recovery
-      that preserves the validated outline while ensuring all core files are
-      assigned.
+    * **Phase 2** (:func:`_select_files`) — Selects representative source files
+      for each page (5–8 target, 3–10 range) and validates per-page constraints.
+      Failure triggers heuristic recovery via :func:`_heuristic_select_files`.
 
     * **Final** — Combines outline + assignments into a :class:`WikiPlan`.
       If validation fails even after heuristic recovery, a
@@ -1489,9 +1486,6 @@ async def generate_wiki_plan(
         logger.error("Phase 1 unexpected failure: %s", exc)
         raise WikiPlannerError(f"Outline generation failed: {exc}") from exc
 
-    if fixture_recorder is not None:
-        await fixture_recorder.record_outline(outline)
-
     # Phase 2: Select representative files for each page (fast_llm for selection task)
     try:
         primary_assignments = await _select_files(
@@ -1525,9 +1519,6 @@ async def generate_wiki_plan(
             outline, all_files, file_analysis.files, dep_graph, partial
         )
 
-    if fixture_recorder is not None:
-        await fixture_recorder.record_assignments(primary_assignments, {})
-
     # Final: combine and normalise (handles orphan files, safety-net checks)
     raw = {
         "pages": [
@@ -1550,8 +1541,6 @@ async def generate_wiki_plan(
             page_range=page_range,
         )
         plan.all_repo_files = list(all_files)
-        if fixture_recorder is not None:
-            await fixture_recorder.record_wiki_plan(plan.to_internal_json())
         return plan
     except ValueError as exc:
         logger.error("Final wiki plan validation failed after recovery: %s", exc)

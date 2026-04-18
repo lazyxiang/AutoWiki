@@ -828,6 +828,8 @@ Expected: all pass.
 
 ## Stage B — Multi-page File Assignment (Layer C2)
 
+> **Partial supersession (PR #23):** The `_ASSIGNMENT_SCHEMA` with `{file, primary_page, secondary_pages}` described in this stage was replaced in PR #23 by `_SELECTION_SCHEMA` (`{page_title, files}`) — a page-centric model where the LLM selects files per page instead of routing files to pages. `WikiPageSpec.secondary_files` is retained and the page generator still injects "Referenced modules" context when it is non-empty, but Phase 2 now always produces `secondary_files=[]`. The `AffectedPages` / `stale_secondary.json` deferred refresh logic remains in place and can be activated by future work that repopulates `secondary_files`.
+
 **Objective:** Allow a single source file to appear on more than one wiki page (e.g. a shared utility referenced in both an "Overview" and a "Core Pipeline" deep-dive). The LLM returns `{file, primary_page, secondary_pages: [...≤2]}` per file. `WikiPageSpec` carries `files` (primary) and `secondary_files` (shared). Incremental refresh regenerates primary-affected pages eagerly and secondary-affected pages lazily (marked "stale" but not regenerated in the same refresh cycle). The page generator treats primary files as "owned" and secondary files as "referenced" context, concatenating their summaries into the prompt without listing them in the source-files table.
 
 ### Task B1: Evolve `WikiPageSpec` and `WikiPlan` serialisation
@@ -1654,6 +1656,10 @@ Expected: clean.
    - Directory locality score per page (fraction of primary files in the top directory).
 
 The command does **not** consume fixtures, replay planner stages, or compute orphan/coverage percentages. It is read-only and makes no writes.
+
+> **Implementation notes (post-PR #22/23):** The fixture recorder was subsequently removed — the `validate-plan` CLI reads `ast/wiki_plan.json` directly and provides all needed diagnostics without a separate fixtures directory. `worker/pipeline/fixture_recorder.py` no longer exists.
+
+> **Design correction (Task C1):** This task described a **synchronous** `FixtureRecorder`. The actual PR #22 implementation used **async** methods backed by `asyncio.get_running_loop().run_in_executor()` to avoid blocking the event loop. The sync design in Step 3 below was never the shipped implementation.
 
 ### Task C1: Fixture recorder
 
