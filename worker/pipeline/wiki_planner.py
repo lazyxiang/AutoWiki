@@ -645,7 +645,7 @@ def _validate_assignments(
     assignment-level errors are caught and retried in Phase 2.
 
     Checks:
-    - No page has more than 50 files.
+    - No page has more than 10 files.
     - No non-overview page has zero files unless it is a parent.
 
     Raises:
