@@ -318,7 +318,7 @@ Import statements are extracted from each file using language-specific regex pat
 Source files are split into overlapping chunks with LangChain's `RecursiveCharacterTextSplitter`, embedded in batches by the configured embedding provider, and stored in a FAISS `IndexFlatIP` (inner-product / cosine similarity). Entity-aware chunking keeps whole functions/classes together when possible. Pass `--reuse-index` to skip this stage and reuse an existing index.
 
 **Stage 5 — Wiki planning** (`worker/pipeline/wiki_planner.py`)
-A two-phase LLM process: Phase 1 generates the page hierarchy (titles, purposes, parent relationships) informed by architectural anchors (directory tree, package docstrings, README headings); Phase 2 assigns every source file to a primary page and up to two secondary pages. Each phase validates its output and self-retries with feedback. On final failure, `_assign_files` falls back to a locality-preserving directory-cluster heuristic. The output is saved as `wiki.json` (user-facing) and `wiki_plan.json` (internal, with file mappings and `secondary_files` for incremental refresh). Use `autowiki validate-plan <repo>` to inspect the plan offline.
+A two-phase LLM process: Phase 1 generates the page hierarchy (titles, purposes, parent relationships) informed by architectural anchors (directory tree, package docstrings, README headings); Phase 2 selects 5–8 representative source files per page (max 10) rather than assigning every file to one page. Each phase validates its output and self-retries with feedback; on final failure, `_heuristic_select_files` preserves valid pages and fills the remainder via scoring. The output is saved as `wiki.json` (user-facing) and `wiki_plan.json` (internal, with file mappings and `all_repo_files` for correct refresh coverage). Use `autowiki validate-plan <repo>` to inspect the plan offline.
 
 **Stage 6 — Page generation** (`worker/pipeline/page_generator.py`)
 Pages are generated bottom-up (leaf pages first, parent pages last) through a 4-pass pipeline per page:
@@ -364,6 +364,7 @@ WS /ws/jobs/{job_id}                 → streams {progress, status} every second
 - **Phase 3** ✅ — Deep Research mode: multi-step RAG investigation with LLM planner, per-step AST context, synthesized Markdown report; REST + WebSocket API; `autowiki research` CLI command (PR #20)
 - **Phase 4** ✅ — User-steered wiki structure via `.autowiki/wiki.json`: override page hierarchy, assign modules to pages, inject repo/page notes into generation (PR #20)
 - **Phase 4.5** ✅ — Planner robustness hardening (PR #22): architectural anchors in Phase-1 outline prompt (Layer C1), multi-page file assignment with `secondary_files` (Layer C2), `autowiki validate-plan` offline diagnostic CLI, feedback-retry loop in `_assign_files`, various bug fixes (Gemini JSON, Mermaid, Docker)
+- **Phase 4.6** ✅ — Page-centric file selection (PR #23): Phase 2 replaced from file-centric assignment to page-centric selection (5–8 files per page); scoring-based pre-filter + fallback (`_score_file_for_page`, `_heuristic_select_files`); `WikiPlan.all_repo_files` for correct refresh coverage; orphan enforcement removed
 - **Phase 5** — GitLab/Bitbucket, hybrid search, MCP server
 
 ---

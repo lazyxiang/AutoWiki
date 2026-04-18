@@ -61,7 +61,7 @@ Stage 1  Ingestion          shallow clone, file filtering, commit SHA
 Stage 2  AST Analysis       single-pass Tree-Sitter → FileAnalysis (entities, counts)
 Stage 3  Dependency Graph   file-level import edges → connected-component clusters
 Stage 4  RAG Indexer        LangChain chunking → FAISS IndexFlatIP; skippable with --reuse-index
-Stage 5  Wiki Planner       two-phase LLM: Phase 1 outline (titles/hierarchy), Phase 2 file assignment
+Stage 5  Wiki Planner       two-phase LLM: Phase 1 outline (titles/hierarchy), Phase 2 file selection (5-8 per page)
 Stage 6  Page Generator     bottom-up, 4-pass per page: outline → draft → fact-check → revision
 ```
 
@@ -126,6 +126,12 @@ superseded.
 | `docs/superpowers/plans/2026-04-15-wiki-planner-robustness.md` | Complete | Implementation plan for investigation-recommended fixes applied in pre-PR #22 commits |
 | `docs/superpowers/plans/2026-04-16-deferred-wiki-planner-robustness.md` | **Complete (PR #22)** | Layer C1 outline anchors, Layer C2 `secondary_files` multi-page assignment, `autowiki validate-plan` offline harness, fixture recorder |
 
+### Phase 4.6 — Page-centric File Selection
+
+| Document | Status | Introduced |
+|----------|--------|------------|
+| `docs/superpowers/plans/2026-04-17-page-centric-file-selection.md` | **Complete (PR #23)** | Phase 2 changed from file-centric assignment to page-centric selection (5–8 files per page); scoring-based pre-filter + fallback (`_score_file_for_page`, `_heuristic_select_files`); `WikiPlan.all_repo_files` for correct refresh coverage |
+
 ---
 
 ## 5. Tracing a Feature End-to-End
@@ -144,11 +150,11 @@ superseded.
 
 4. **Stage 5 — Planner** (`worker/pipeline/wiki_planner.py`):
    - Phase 1: `_build_outline_prompt()` (with architectural anchors from `outline_anchors.py`) → LLM call → `_validate_outline_structure()`; self-retries with feedback up to `max_retries` times
-   - Phase 2: `_assign_files_in_batches()` (40-file chunks, cacheable system prompt) → `_validate_assignments()`; self-retries with feedback; on final failure falls back to `_directory_cluster_assign()` (locality-preserving heuristic)
+   - Phase 2: `_select_files_in_batches()` (12-page batches, cacheable system prompt) → `_validate_assignments()`; self-retries with feedback; on final failure falls back to `_heuristic_select_files()` (scoring-based heuristic)
    - Result: a `WikiPlan` (list of `WikiPageSpec`, each with title, purpose, `files`, `secondary_files`, parent)
-   - Optional fixture recording: `AUTOWIKI_RECORD_PLANNER_FIXTURES=1` dumps `outline.json`, `assignments.json`, `wiki_plan.json`
+   - Correction: Phase 2 now selects 5–8 representative files per page (max 10) rather than assigning every file to one page. `WikiPlan.all_repo_files` is persisted to enable correct file-diff detection during incremental refresh.
    - Offline diagnostics: `autowiki validate-plan <repo>` reads `ast/wiki_plan.json`
-   - Design rationale: `docs/superpowers/specs/2026-04-08-wiki-planner-improvements-design.md` §5
+   - Design rationale: `docs/superpowers/specs/2026-04-08-wiki-planner-improvements-design.md` §5 and `docs/superpowers/plans/2026-04-17-page-centric-file-selection.md`.
 
 5. **Stage 6 — Page Generator** (`worker/pipeline/page_generator.py`):
    - `compute_generation_order(plan)` returns pages deepest-first (leaves before parents)
