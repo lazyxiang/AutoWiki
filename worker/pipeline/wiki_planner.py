@@ -30,7 +30,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from worker.llm.base import LLMProvider
 from worker.llm.prompt_segment import PromptSegment
@@ -41,13 +41,37 @@ from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retr
 if TYPE_CHECKING:
     from worker.pipeline.ast_analysis import FileAnalysis
     from worker.pipeline.dependency_graph import DependencyGraph
-    from worker.pipeline.fixture_recorder import FixtureRecorder
     from worker.pipeline.user_steering import UserSteering
 
 logger = logging.getLogger("worker.planner")
 
-#: Maximum number of files allowed on a single wiki page to ensure focus.
-MAX_FILES_PER_PAGE = 50
+#: Hard maximum and soft minimum for representative files per wiki page.
+MAX_FILES_PER_PAGE = 10
+MIN_FILES_PER_PAGE = 3
+
+_CODE_EXTS: frozenset[str] = frozenset(
+    {
+        ".py",
+        ".ts",
+        ".tsx",
+        ".js",
+        ".jsx",
+        ".go",
+        ".rs",
+        ".java",
+        ".cpp",
+        ".c",
+        ".cs",
+        ".rb",
+        ".swift",
+        ".kt",
+        ".scala",
+    }
+)
+_DOC_EXTS: frozenset[str] = frozenset({".md", ".rst", ".txt", ".adoc"})
+_CONFIG_EXTS: frozenset[str] = frozenset(
+    {".json", ".yaml", ".yml", ".toml", ".ini", ".env", ".cfg"}
+)
 
 
 class WikiPlannerError(Exception):
@@ -182,6 +206,7 @@ class WikiPlan:
 
     repo_notes: list[dict] = field(default_factory=lambda: [{"content": ""}])
     pages: list[WikiPageSpec] = field(default_factory=list)
+    all_repo_files: list[str] = field(default_factory=list)
 
     def to_wiki_json(self) -> dict:
         """Serialise to the user-facing ``wiki.json`` format.
@@ -237,6 +262,7 @@ class WikiPlan:
         """
         return {
             "repo_notes": self.repo_notes,
+            "all_repo_files": self.all_repo_files,
             "pages": [
                 {
                     "title": p.title,
@@ -307,27 +333,25 @@ _OUTLINE_SCHEMA = {
     "required": ["pages"],
 }
 
-_ASSIGNMENT_SCHEMA = {
+_SELECTION_SCHEMA = {
     "type": "object",
     "properties": {
-        "assignments": {
+        "selections": {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {
-                    "file": {"type": "string"},
-                    "primary_page": {"type": "string"},
-                    "secondary_pages": {
+                    "page_title": {"type": "string"},
+                    "files": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "maxItems": 2,
                     },
                 },
-                "required": ["file", "primary_page"],
+                "required": ["page_title", "files"],
             },
         }
     },
-    "required": ["assignments"],
+    "required": ["selections"],
 }
 
 _SYSTEM = (
@@ -353,8 +377,9 @@ _SYSTEM = (
     "5. Create a clear hierarchy: top-level pages for major "
     "subsystems, child pages for details\n\n"
     "Each page should have a clear PURPOSE — it should "
-    "explain a concept, component, or workflow. Every source "
-    "file must be assigned to exactly one page.\n\n"
+    "explain a concept, component, or workflow. Pages are "
+    "represented by 5\u20138 of their most representative source "
+    "code files \u2014 full coverage of every file is not required.\n\n"
     "Output ONLY valid JSON."
 )
 
@@ -428,9 +453,9 @@ def _build_outline_prompt(
     sections.append(
         "Create a hierarchical wiki plan. Guidelines:\n"
         f"- Create between {min_pages} and {max_pages} pages. Prefer more granular "
-        "pages over broad ones — a focused page covering 3-5 related files is better "
-        "than a sprawling page covering 15+. Each page should have a clear, single "
-        "responsibility.\n"
+        "pages over broad ones \u2014 a focused page covering 5\u20138 representative "
+        "code files is better than a sprawling page covering 20+. Each page should "
+        "have a clear, single responsibility.\n"
         "- Each page MUST have: title (descriptive, concept-oriented) and "
         "purpose (1-2 sentences explaining WHAT the page covers and WHY a "
         "developer would read it)\n"
@@ -449,99 +474,52 @@ def _build_outline_prompt(
     return "\n\n".join(sections)
 
 
-def _build_assignment_prompt(
-    outline: list[dict],
-    file_summary: str,
-    dep_info: str | None = None,
-    all_files: list[str] | None = None,
-) -> str:
-    """Build the Phase 2 prompt: assign every file to exactly one page."""
-    sections = []
-
-    outline_str = json.dumps(outline, indent=2)
-    sections.append(f"Wiki page structure:\n{outline_str}")
-    sections.append(f"File summaries:\n{file_summary}")
-
-    if dep_info:
-        sections.append(f"Dependency relationships:\n{dep_info}")
-
-    total = len(all_files) if all_files else 0
-    schema_json = json.dumps(_ASSIGNMENT_SCHEMA, indent=2)
-    sections.append(
-        f"Assign ALL {total} source files to pages. Guidelines:\n"
-        "- Every file must be assigned to exactly one page\n"
-        "- Files that import each other should be on the same page when possible\n"
-        "- Assign files based on semantic purpose, not directory structure\n"
-        "- Each assignment must reference an existing page title exactly\n\n"
-        "Output JSON matching this schema:\n"
-        f"{schema_json}"
-    )
-
-    return "\n\n".join(sections)
-
-
-def _build_batch_assignment_system(
-    outline: list[dict],
+def _build_selection_system(
     file_summary: str,
     dep_info: str | None,
 ) -> list[PromptSegment]:
-    """Build the cacheable *system* portion of a batched assignment call.
-
-    The system turn contains the full repository context — outline,
-    file summaries, and dependency info — which is identical for every
-    batch in a single planning run.  Marking it cacheable lets Anthropic's
-    ``ephemeral`` cache amortise the tokens across batches so only the
-    first batch pays full cost.
-
-    Non-Anthropic providers (OpenAI, Gemini, Ollama) ignore the cache
-    hint and simply concatenate the segments into the system prompt.
-    """
-    outline_json = json.dumps(outline, indent=2)
     parts: list[str] = [
-        "You are assigning source files to wiki pages.",
+        "You are selecting representative source files for wiki pages.",
         "",
-        f"## Wiki page structure:\n{outline_json}",
-        "",
-        f"## File summaries:\n{file_summary}",
+        "## Repository file summaries:",
+        file_summary,
     ]
     if dep_info:
-        parts.append("")
-        parts.append(f"## Dependency relationships:\n{dep_info}")
+        parts += ["", "## Dependency relationships:", dep_info]
     return [PromptSegment(text="\n".join(parts), cacheable=True)]
 
 
-def _build_batch_assignment_user(
-    batch_files: list[str],
-    outline_titles: list[str],
+def _build_selection_user(
+    pages_with_candidates: list[tuple[str, str, list[str]]],
     last_error: str | None = None,
 ) -> PromptSegment:
-    """Build the per-batch *user* segment.
-
-    Contains only the batch-specific content — the file list to assign and
-    a reminder of valid page titles — so the system segment's cache stays
-    valid across batches.
-    """
-    titles_str = ", ".join(f'"{t}"' for t in outline_titles)
-    files_str = "\n".join(f"- {f}" for f in batch_files)
-    schema_json = json.dumps(_ASSIGNMENT_SCHEMA, indent=2)
+    schema_json = json.dumps(_SELECTION_SCHEMA, indent=2)
+    pages_str = "\n\n".join(
+        f'Page: "{title}"\nPurpose: {purpose}\nCandidates:\n'
+        + "\n".join(f"  - {f}" for f in candidates)
+        for title, purpose, candidates in pages_with_candidates
+    )
     text = (
-        f"Assign each of the following {len(batch_files)} files to the "
-        f"wiki page whose purpose best matches it. Each assignment has a "
-        f"required ``primary_page`` and an optional ``secondary_pages`` "
-        f"list (at most 2 entries).\n\n"
-        f"``primary_page`` MUST exactly match one of: {titles_str}.\n"
-        f"``secondary_pages`` entries (if any) must also match one of "
-        f"those titles, and must NOT equal ``primary_page``.\n\n"
-        f"Files to assign:\n{files_str}\n\n"
+        f"For each wiki page below, select the "
+        f"{MIN_FILES_PER_PAGE}–{MAX_FILES_PER_PAGE} "
+        "source code files from its candidate list that best represent "
+        "the page's content.\n\n"
         "Rules:\n"
-        "- Every listed file must have a primary_page.\n"
-        "- Use secondary_pages sparingly — only for genuinely shared "
-        "utilities referenced from two or three distinct subsystems.\n"
-        "- Files that import each other usually share the same primary_page.\n\n"
+        "- Strongly prefer code files (.py, .ts, .go, .rs, .java, etc.) over "
+        ".md / .yaml / .json files\n"
+        "- Include only files that contain substantial relevant code "
+        "(functions, classes, core logic)\n"
+        "- Configuration files only when central to understanding "
+        "this page's architecture\n"
+        "- README.md only on a top-level Overview page\n"
+        "- Target 5–8 files per page; fewer is fine when fewer candidates "
+        "are relevant\n"
+        "- You may select fewer than 3 only when genuinely fewer relevant "
+        "files exist\n\n"
+        f"Pages:\n{pages_str}\n\n"
     )
     if last_error:
         text += f"CRITICAL: Previous attempt failed with error: {last_error}\n\n"
-
     text += f"Output JSON matching this schema:\n{schema_json}"
     return PromptSegment(text=text, cacheable=False)
 
@@ -611,42 +589,37 @@ def _validate_outline_structure(
         )
 
 
-def _validate_assignments(
+def _validate_selections(
     result: dict[str, list[str]],
     outline: list[dict],
 ) -> None:
-    """Validate per-page file assignment counts.
+    """Validate per-page file selection counts.
 
-    Called inside :func:`_assign_files` after each LLM response so that
-    assignment-level errors are caught and retried in Phase 2.
+    Called inside :func:`_select_files` after each LLM response so that
+    selection-level errors are caught and retried in Phase 2.
 
     Checks:
-    - No page has more than 50 files.
-    - No non-overview page has zero files unless it is a parent.
+    - No page has more than MAX_FILES_PER_PAGE files.
+    - No non-overview, non-parent leaf page has zero files.
 
     Raises:
-        ValueError: Describing the first constraint that is violated.
+        ValueError: Describing the first constraint violated.
     """
     all_parents = {p.get("parent") for p in outline if p.get("parent")}
     for page in outline:
         title = page["title"]
         files = result.get(title, [])
         if len(files) > MAX_FILES_PER_PAGE:
-            sample = files[:3]
             raise ValueError(
-                f"VALIDATION_FAILURE: Page '{title}' is overloaded "
-                f"({len(files)} > {MAX_FILES_PER_PAGE} files). "
-                f"Example files: {sample}. "
-                "Suggestion: Split this page into 2-3 sub-pages."
+                f"VALIDATION_FAILURE: Page '{title}' has {len(files)} files "
+                f"(max {MAX_FILES_PER_PAGE}). Reduce to the most representative files."
             )
-
         is_overview = "overview" in title.lower()
         is_parent = title in all_parents
-        if not (is_overview or is_parent or len(files) > 0):
+        if not (is_overview or is_parent or files):
             raise ValueError(
-                f"VALIDATION_FAILURE: Page '{title}' has no files assigned. "
-                "Every page must either own source files or serve as a parent "
-                "category. Suggestion: Assign relevant files or remove this page."
+                f"VALIDATION_FAILURE: Page '{title}' has no files selected. "
+                "Select at least one representative source file or remove this page."
             )
 
 
@@ -864,6 +837,57 @@ def _best_matching_page(
     return best_title
 
 
+def _score_file_for_page(
+    path: str,
+    page: dict,
+    file_infos: dict[str, Any],
+    dep_graph: DependencyGraph | None,
+) -> float:
+    score = 0.0
+    lower = path.lower()
+    ext = "." + lower.rsplit(".", 1)[-1] if "." in lower else ""
+
+    if ext in _CODE_EXTS:
+        score += 3.0
+    elif ext in _DOC_EXTS:
+        basename = lower.rsplit("/", 1)[-1] if "/" in lower else lower
+        if "/" not in path and basename.startswith("readme"):
+            score += 2.0 if "overview" in page["title"].lower() else -2.0
+        else:
+            score -= 2.0
+    elif ext in _CONFIG_EXTS:
+        score -= 1.5
+
+    info = file_infos.get(path)
+    if info is not None:
+        score += min(len(info.entities) * 0.4, 3.0)
+
+    if dep_graph is not None:
+        in_degree = sum(1 for deps in dep_graph.edges.values() if path in deps)
+        score += min(in_degree * 0.3, 2.0)
+
+    page_tokens = _tokenize(page["title"] + " " + page.get("purpose", ""))
+    file_tokens = _tokenize(path.replace("/", " ").replace("_", " ").replace("-", " "))
+    score += len(page_tokens & file_tokens) * 0.5
+
+    return score
+
+
+def _prefilter_candidates(
+    page: dict,
+    all_files: list[str],
+    file_infos: dict[str, Any],
+    dep_graph: DependencyGraph | None,
+    max_candidates: int = 25,
+) -> list[str]:
+    scored = [
+        (f, _score_file_for_page(f, page, file_infos, dep_graph)) for f in all_files
+    ]
+    scored = [(f, s) for f, s in scored if s > 0]
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return [f for f, _ in scored[:max_candidates]]
+
+
 def _directory_cluster_assign(
     outline: list[dict],
     all_files: list[str],
@@ -944,224 +968,161 @@ def _directory_cluster_assign(
     return result
 
 
-def _heuristic_recovery_assignment(
+def _heuristic_select_files(
     outline: list[dict],
     all_files: list[str],
-    partial_assignments: dict[str, list[str]] | None = None,
+    file_infos: dict[str, Any],
+    dep_graph: DependencyGraph | None,
+    partial_selections: dict[str, list[str]] | None = None,
 ) -> dict[str, list[str]]:
-    """Heuristic file assignment used as a fallback for Phase 2 (Assignment).
+    """Score-based file selection used as Phase 2 fallback.
 
-    This function attempts to maintain a high-quality wiki even when the
-    LLM fails to assign files. It preserves any 'valid' assignments from a
-    partial LLM result (pages that are not empty and not overloaded) and
-    fills the gaps using directory clustering for the remaining files.
-
-    Args:
-        outline: The validated Phase 1 wiki outline.
-        all_files: The full list of files in the repository.
-        partial_assignments: Optional partial results from a failed Phase 2
-            LLM attempt.
-
-    Returns:
-        Mapping from page title to list of assigned files.
+    Preserves valid partial selections from a failed LLM attempt, then fills
+    remaining pages by pre-filtering to ~25 candidates and selecting the
+    top-scoring files up to MAX_FILES_PER_PAGE.
     """
-    valid_assignments: dict[str, list[str]] = {}
-    assigned_files: set[str] = set()
+    result: dict[str, list[str]] = {}
 
-    # 1. Take what we can from LLM's partial output (only keep valid pages)
-    if partial_assignments:
-        all_parents = {p.get("parent") for p in outline if p.get("parent")}
+    if partial_selections:
         for page in outline:
             title = page["title"]
-            files = partial_assignments.get(title, [])
-            # Simple validity check for a single page
-            is_valid = (
-                0 < len(files) <= MAX_FILES_PER_PAGE
-                or "overview" in title.lower()
-                or title in all_parents
-            )
-            if is_valid:
-                valid_assignments[title] = list(files)
-                assigned_files.update(files)
+            files = partial_selections.get(title, [])
+            if 0 < len(files) <= MAX_FILES_PER_PAGE:
+                result[title] = list(files)
 
-    # 2. Heuristic assignment for everything else (Orphans + Overloaded)
-    # Respect MAX_FILES_PER_PAGE when merging residue into existing buckets;
-    # overflow goes to the overview/first page as a last resort.
-    remainder = [f for f in all_files if f not in assigned_files]
-    overflow: list[str] = []
-    if remainder:
-        recovery = _directory_cluster_assign(outline, remainder)
-        for title, files in recovery.items():
-            bucket = valid_assignments.setdefault(title, [])
-            capacity = MAX_FILES_PER_PAGE - len(bucket)
-            if capacity >= len(files):
-                bucket.extend(files)
-            else:
-                bucket.extend(files[: max(capacity, 0)])
-                overflow.extend(files[max(capacity, 0) :])
-    if overflow:
-        fallback = next(
-            (p["title"] for p in outline if "overview" in p["title"].lower()),
-            outline[0]["title"] if outline else None,
+    for page in outline:
+        title = page["title"]
+        if title in result:
+            continue
+        candidates = _prefilter_candidates(
+            page, all_files, file_infos, dep_graph, max_candidates=25
         )
-        if fallback:
-            bucket = valid_assignments.setdefault(fallback, [])
-            cap = MAX_FILES_PER_PAGE - len(bucket)
-            bucket.extend(overflow[: max(cap, 0)])
+        if not candidates:
+            result[title] = []
+            continue
+        scored = sorted(
+            candidates,
+            key=lambda f: _score_file_for_page(f, page, file_infos, dep_graph),
+            reverse=True,
+        )
+        target = min(MAX_FILES_PER_PAGE, max(MIN_FILES_PER_PAGE, len(scored)))
+        result[title] = scored[:target]
 
-    # Final safety: deduplicate and ensure every title exists
     for p in outline:
-        title = p["title"]
-        if title not in valid_assignments:
-            valid_assignments[title] = []
-        else:
-            valid_assignments[title] = list(dict.fromkeys(valid_assignments[title]))
+        result.setdefault(p["title"], [])
 
-    return valid_assignments
+    return result
 
 
-_BATCH_SIZE_DEFAULT = 40
+_PAGE_BATCH_SIZE = 12  # pages per LLM selection call
 
 
-async def _assign_files_in_batches(
+async def _select_files_in_batches(
     outline: list[dict],
     file_summary: str,
     dep_info: str | None,
     all_files: list[str],
+    file_infos: dict[str, Any],
+    dep_graph: DependencyGraph | None,
     llm: LLMProvider,
     system: str,
     on_retry: OnRetryCallback | None,
-    batch_size: int = _BATCH_SIZE_DEFAULT,
-    max_cleanup_retries: int = 2,
     last_error: str | None = None,
-) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
-    """Phase 2 execution: Assign every file to an existing outline.
+) -> dict[str, list[str]]:
+    """Phase 2: Ask the LLM to select representative files for each page.
 
-    Splits the repository into batches and assigns each file in parallel
-    using the provided LLM and cacheable system segment. Partial results
-    are merged across batches.
+    Pages are batched (_PAGE_BATCH_SIZE at a time).  Each page receives a
+    pre-filtered candidate list (~25 files) so the LLM works with focused
+    context.  The first batch runs serially to warm the Anthropic prompt cache;
+    remaining batches run in parallel.
     """
     import asyncio
 
+    all_files_set = set(all_files)
     valid_titles = [p["title"] for p in outline]
-    valid_titles_set = set(valid_titles)
     result: dict[str, list[str]] = {t: [] for t in valid_titles}
-    secondary: dict[str, list[str]] = {t: [] for t in valid_titles}
-    assigned: set[str] = set()
 
-    # Build the cacheable system segment ONCE and reuse across all batches.
     stage_system_seg = PromptSegment(text=system, cacheable=False)
-    context_segs = _build_batch_assignment_system(
-        outline=outline,
-        file_summary=file_summary,
-        dep_info=dep_info,
-    )
-    system_segments: list[PromptSegment] = [stage_system_seg, *context_segs]
+    context_segs = _build_selection_system(file_summary, dep_info)
+    system_segs: list[PromptSegment] = [stage_system_seg, *context_segs]
 
-    async def _run_batch(batch: list[str]) -> None:
-        user_segment = _build_batch_assignment_user(
-            batch_files=batch,
-            outline_titles=valid_titles,
-            last_error=last_error,
-        )
+    async def _run_page_batch(batch_pages: list[dict]) -> None:
+        pages_with_candidates = [
+            (
+                p["title"],
+                p.get("purpose", ""),
+                _prefilter_candidates(p, all_files, file_infos, dep_graph),
+            )
+            for p in batch_pages
+        ]
+        user_seg = _build_selection_user(pages_with_candidates, last_error)
         try:
             raw = await async_retry(
                 llm.generate_structured,
-                [user_segment],
-                schema=_ASSIGNMENT_SCHEMA,
-                system=system_segments,
+                [user_seg],
+                schema=_SELECTION_SCHEMA,
+                system=system_segs,
                 transient_exceptions=TRANSIENT_EXCEPTIONS,
                 on_retry=on_retry,
             )
         except Exception as exc:
             log_validation_retry(
                 logger,
-                stage="wiki_planner.assign_files.batch",
+                stage="wiki_planner.select_files.batch",
                 attempt=1,
                 max_retries=1,
                 exc=exc,
-                context={"batch_size": len(batch)},
+                context={"batch_pages": len(batch_pages)},
             )
             return
-        for a in raw.get("assignments", []):
-            f = a.get("file", "")
-            primary_title = a.get("primary_page", "") or a.get("page_title", "")
-            secondaries = a.get("secondary_pages", []) or []
-            if f not in batch or f in assigned:
+        title_to_page = {p["title"]: p for p in batch_pages}
+        candidate_files_by_title = {
+            title: set(candidates)
+            for title, _purpose, candidates in pages_with_candidates
+        }
+        for sel in raw.get("selections", []):
+            title = sel.get("page_title", "")
+            files = sel.get("files", [])
+            if title not in title_to_page:
                 continue
-            if primary_title not in valid_titles_set:
-                continue
-            result[primary_title].append(f)
-            assigned.add(f)
-            for sec in secondaries[:2]:
-                if sec in valid_titles_set and sec != primary_title:
-                    secondary[sec].append(f)
+            valid = [
+                f
+                for f in files
+                if f in all_files_set and f in candidate_files_by_title[title]
+            ]
+            page_dict = title_to_page[title]
+            valid.sort(
+                key=lambda f: _score_file_for_page(f, page_dict, file_infos, dep_graph),
+                reverse=True,
+            )
+            result[title] = valid[:MAX_FILES_PER_PAGE]
 
-    # Initial pass: batch every file.
-    # Run the first batch serially to warm the cache, then the rest in parallel.
-    batches: list[list[str]] = [
-        all_files[i : i + batch_size] for i in range(0, len(all_files), batch_size)
+    batches: list[list[dict]] = [
+        outline[i : i + _PAGE_BATCH_SIZE]
+        for i in range(0, len(outline), _PAGE_BATCH_SIZE)
     ]
     if batches:
-        await _run_batch(batches[0])
+        await _run_page_batch(batches[0])  # serial first batch warms cache
     if len(batches) > 1:
-        await asyncio.gather(*(_run_batch(b) for b in batches[1:]))
+        await asyncio.gather(*(_run_page_batch(b) for b in batches[1:]))
 
-    # Cleanup rounds for unassigned files
-    for attempt in range(1, max_cleanup_retries + 1):
-        unassigned = [f for f in all_files if f not in assigned]
-        if not unassigned:
-            break
-        log_validation_retry(
-            logger,
-            stage="wiki_planner.assign_files.cleanup",
-            attempt=attempt,
-            max_retries=max_cleanup_retries,
-            exc=ValueError(f"{len(unassigned)} files unassigned after batches"),
-            context={"unassigned": len(unassigned), "total": len(all_files)},
-        )
-        cleanup_batches = [
-            unassigned[i : i + batch_size]
-            for i in range(0, len(unassigned), batch_size)
-        ]
-        for b in cleanup_batches:
-            await _run_batch(b)
-
-    # Anything still unassigned → directory clustering residue
-    unassigned = [f for f in all_files if f not in assigned]
-    if unassigned:
-        log_final_failure(
-            logger,
-            stage="wiki_planner.assign_files.residue",
-            exc=ValueError(
-                f"{len(unassigned)} files still unassigned after cleanup; "
-                "routing residue to directory clustering"
-            ),
-            context={"residue": len(unassigned)},
-        )
-        residue_assignment = _directory_cluster_assign(outline, unassigned)
-        for title, files in residue_assignment.items():
-            result[title].extend(files)
-
-    return result, secondary
+    return result
 
 
-async def _assign_files(
+async def _select_files(
     outline: list[dict],
     file_summary: str,
     dep_info: str | None,
     all_files: list[str],
+    file_infos: dict[str, Any],
+    dep_graph: DependencyGraph | None,
     llm: LLMProvider,
     system: str,
     on_retry: OnRetryCallback | None,
     max_retries: int = 3,
     fast_llm: LLMProvider | None = None,
-) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
-    """Phase 2 execution: Assign every file via batched LLM calls with feedback.
-
-    Validation failures trigger retries where the validation error is passed
-    back to the LLM as feedback in the prompt.
-    """
+) -> dict[str, list[str]]:
+    """Phase 2: Select representative files for each page with retry + feedback."""
     preferred_llm = fast_llm or llm
     last_error: str | None = None
     last_result: dict[str, list[str]] | None = None
@@ -1169,48 +1130,42 @@ async def _assign_files(
     for attempt in range(1, max_retries + 1):
         current_llm = preferred_llm if attempt == 1 else llm
         try:
-            result, secondary = await _assign_files_in_batches(
+            result = await _select_files_in_batches(
                 outline=outline,
                 file_summary=file_summary,
                 dep_info=dep_info,
                 all_files=all_files,
+                file_infos=file_infos,
+                dep_graph=dep_graph,
                 llm=current_llm,
                 system=system,
                 on_retry=on_retry,
                 last_error=last_error,
             )
             last_result = result
-            _validate_assignments(result, outline)
-            return result, secondary
+            _validate_selections(result, outline)
+            return result
         except ValueError as exc:
             last_error = str(exc)
             if attempt < max_retries:
                 log_validation_retry(
                     logger,
-                    stage="wiki_planner.assign_files",
+                    stage="wiki_planner.select_files",
                     attempt=attempt,
                     max_retries=max_retries,
                     exc=exc,
-                    context={
-                        "outline_pages": len(outline),
-                        "total_files": len(all_files),
-                    },
+                    context={"outline_pages": len(outline)},
                 )
             else:
                 log_final_failure(
                     logger,
-                    stage="wiki_planner.assign_files",
+                    stage="wiki_planner.select_files",
                     exc=exc,
-                    context={
-                        "outline_pages": len(outline),
-                        "total_files": len(all_files),
-                    },
+                    context={"outline_pages": len(outline)},
                 )
 
-    # Final fallback if all LLM attempts fail: throw error with partial result
-    # to trigger heuristic recovery.
     raise ValueError(
-        f"Failed to assign files after {max_retries} attempts",
+        f"Failed to select files after {max_retries} attempts",
         last_error,
         last_result,
     )
@@ -1234,17 +1189,14 @@ def validate_wiki_plan(
        (duplicate titles after slug derivation).
     4. Silently drops ``parent`` references that point to unknown titles
        rather than raising an error, to tolerate minor LLM hallucinations.
-    5. Raises :exc:`ValueError` if any *critical* orphaned file (a core source
-       file under a non-test directory, or a known root-level entry point such
-       as ``main.py``/``app.py``) is not assigned to any page.  Low-priority
-       files (tests, docs, root-level configs) are silently skipped.
+    5. Logs unselected files as info (selection model: pages curate a relevant
+       subset of files; not all files need to appear on a page).
 
     Args:
         raw: Raw dict decoded from the LLM's JSON response.  Must contain a
             ``"pages"`` key whose value is a list of page dicts.
         all_files: Optional list of all relative file paths in the repository.
-            When provided, any unassigned *critical* file triggers a
-            :exc:`ValueError` so the caller can retry with feedback.
+            When provided, files not selected by any page are logged at INFO.
         existing_titles: Optional set of page titles from the *unchanged*
             portion of an existing wiki plan (used during partial incremental
             refresh so cross-slice ``parent`` references remain valid).
@@ -1254,12 +1206,11 @@ def validate_wiki_plan(
 
     Raises:
         ValueError: If ``"pages"`` key is missing, the pages list is empty,
-            any page dict is missing ``"title"`` or ``"purpose"``, two or more
-            pages share the same derived slug, or any critical source file is
-            not assigned to a page.
+            any page dict is missing ``"title"`` or ``"purpose"``, or two or
+            more pages share the same derived slug.
 
     Example:
-        Normal case — all files assigned, no orphans:
+        Normal case — all files assigned:
 
         >>> raw = {"pages": [
         ...     {"title": "Overview", "purpose": "Top level.", "files": ["main.py"]},
@@ -1267,16 +1218,6 @@ def validate_wiki_plan(
         >>> plan = validate_wiki_plan(raw, all_files=["main.py"])
         >>> plan.pages[0].title
         'Overview'
-
-        Orphan case — ``worker/core.py`` not assigned; raises ValueError:
-
-        >>> raw = {"pages": [
-        ...     {"title": "Overview", "purpose": "...", "files": ["main.py"]},
-        ... ]}
-        >>> validate_wiki_plan(raw, all_files=["main.py", "worker/core.py"])
-        Traceback (most recent call last):
-            ...
-        ValueError: VALIDATION_FAILURE: 1 core source files are missing ...
     """
     if "pages" not in raw:
         raise ValueError("Missing 'pages' key")
@@ -1319,24 +1260,15 @@ def validate_wiki_plan(
 
     # ── Semantic validation ──────────────────────────────────────────────
 
-    # Check for unassigned files (Orphans) — only critical files trigger failure
+    # Log unselected files (selection model: not all files need to be on a page)
     if all_files:
-        assigned = {f for page in pages for f in page.files}
-        assigned |= {f for page in pages for f in page.secondary_files}
-        orphans = [f for f in all_files if f not in assigned]
-        # Critical orphans: ignore tests, docs, root-configs, etc.
-        critical_orphans = [f for f in orphans if _is_high_priority_file(f)]
-        if critical_orphans:
-            sample = critical_orphans[:3]
-            raise ValueError(
-                f"VALIDATION_FAILURE: {len(critical_orphans)} core source files "
-                f"are missing from the wiki plan. Example missing files: {sample}. "
-                "Every core source file must be assigned to a primary page."
-            )
-        elif orphans:
+        selected = {f for page in pages for f in page.files}
+        selected |= {f for page in pages for f in page.secondary_files}
+        unselected = [f for f in all_files if f not in selected]
+        if unselected:
             logger.info(
-                "Skipping %d low-priority files (tests/configs/etc.) from the wiki",
-                len(orphans),
+                "%d files not selected by any page (expected in selection model)",
+                len(unselected),
             )
 
     # Max files per page
@@ -1440,7 +1372,6 @@ async def generate_wiki_plan(
     fast_llm: LLMProvider | None = None,
     user_steering: UserSteering | None = None,
     clone_root: Path | None = None,
-    fixture_recorder: FixtureRecorder | None = None,
 ) -> WikiPlan:
     """Generate a hierarchical wiki plan using two-phase LLM planning.
 
@@ -1452,10 +1383,9 @@ async def generate_wiki_plan(
       (titles, purposes, parent relationships) and immediately validates
       structural constraints. Failure here is critical and stops the task.
 
-    * **Phase 2** (:func:`_assign_files`) — Assigns source files to pages and
-      validates per-page constraints. Failure triggers a heuristic recovery
-      that preserves the validated outline while ensuring all core files are
-      assigned.
+    * **Phase 2** (:func:`_select_files`) — Selects representative source files
+      for each page (5–8 target, 3–10 range) and validates per-page constraints.
+      Failure triggers heuristic recovery via :func:`_heuristic_select_files`.
 
     * **Final** — Combines outline + assignments into a :class:`WikiPlan`.
       If validation fails even after heuristic recovery, a
@@ -1564,16 +1494,15 @@ async def generate_wiki_plan(
         logger.error("Phase 1 unexpected failure: %s", exc)
         raise WikiPlannerError(f"Outline generation failed: {exc}") from exc
 
-    if fixture_recorder is not None:
-        await fixture_recorder.record_outline(outline)
-
-    # Phase 2: Assign files + validate assignments (fast_llm for classification task)
+    # Phase 2: Select representative files for each page (fast_llm for selection task)
     try:
-        primary_assignments, secondary_assignments = await _assign_files(
+        primary_assignments = await _select_files(
             outline=outline,
             file_summary=file_summary,
             dep_info=dep_info,
             all_files=all_files,
+            file_infos=file_analysis.files,
+            dep_graph=dep_graph,
             llm=llm,
             system=system,
             on_retry=on_retry,
@@ -1589,19 +1518,17 @@ async def generate_wiki_plan(
             partial = exc.args[2]
 
         recovery_type = "partial heuristic" if partial else "full heuristic"
-        logger.warning(
-            "Phase 2 LLM assignment failed: %s — falling back to %s recovery",
-            exc,
-            recovery_type,
+        log_final_failure(
+            logger,
+            stage="wiki_planner.select_files.recovery",
+            exc=exc,
+            context={
+                "recovery_type": recovery_type,
+                "outline_pages": len(outline),
+            },
         )
-        primary_assignments = _heuristic_recovery_assignment(
-            outline, all_files, partial
-        )
-        secondary_assignments = {p["title"]: [] for p in outline}
-
-    if fixture_recorder is not None:
-        await fixture_recorder.record_assignments(
-            primary_assignments, secondary_assignments
+        primary_assignments = _heuristic_select_files(
+            outline, all_files, file_analysis.files, dep_graph, partial
         )
 
     # Final: combine and normalise (handles orphan files, safety-net checks)
@@ -1612,7 +1539,7 @@ async def generate_wiki_plan(
                 "purpose": p["purpose"],
                 "parent": p.get("parent"),
                 "files": primary_assignments.get(p["title"], []),
-                "secondary_files": secondary_assignments.get(p["title"], []),
+                "secondary_files": [],
             }
             for p in outline
         ]
@@ -1625,8 +1552,7 @@ async def generate_wiki_plan(
             clusters=clusters,
             page_range=page_range,
         )
-        if fixture_recorder is not None:
-            await fixture_recorder.record_wiki_plan(plan.to_internal_json())
+        plan.all_repo_files = list(all_files)
         return plan
     except ValueError as exc:
         logger.error("Final wiki plan validation failed after recovery: %s", exc)

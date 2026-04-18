@@ -1662,6 +1662,14 @@ git commit -m "feat(planner): implement batched file assignment with cache reuse
 
 ### Task 10: Route `_assign_files` through `_assign_files_in_batches`
 
+> **Design correction (PR #22):** The implementation shipped in PR #22 differs from the Step 3 design below in two important ways:
+>
+> 1. **Retry loop with feedback, not two-shot:** The shipped `_assign_files` uses a `for attempt in range(1, max_retries + 1)` loop, passing the previous validation error as `last_error` to `_assign_files_in_batches` on each retry (prompt feedback). The two-attempt design (fast LLM → main LLM) in Step 3 was superseded.
+>
+> 2. **Fallback via heuristic recovery in `generate_wiki_plan`, not direct clustering:** On final failure, `_assign_files` raises `ValueError(msg, last_error, last_result)` carrying the partial assignments as a third argument. `generate_wiki_plan` catches this and calls `_heuristic_recovery_assignment(outline, all_files, partial)`, which preserves valid pages from the partial LLM result and routes only the remainder through `_directory_cluster_assign`. The direct `return _directory_cluster_assign(outline, all_files)` fallback at the bottom of `_assign_files` was not the final design.
+>
+> **Further change (PR #23):** `_assign_files` and `_assign_files_in_batches` were subsequently replaced entirely by `_select_files` and `_select_files_in_batches` — a page-centric selection model where the LLM picks 5–8 representative files per page rather than assigning every file to exactly one page. `_heuristic_recovery_assignment` was replaced by `_heuristic_select_files` (scoring-based). The file-centric `_ASSIGNMENT_SCHEMA` was replaced by `_SELECTION_SCHEMA` (`{page_title, files}`).
+
 **Files:**
 - Modify: `worker/pipeline/wiki_planner.py:579-659` (`_assign_files`)
 - Test: `tests/worker/test_wiki_planner.py`
