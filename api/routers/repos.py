@@ -363,5 +363,3 @@ async def refresh_repo(repo_id: str):
         repo_id, job_id, owner, name, wiki_language=wiki_language
     )
     return {"repo_id": repo_id, "job_id": job_id, "status": "queued"}
-
-
