@@ -1071,3 +1071,15 @@ def test_validate_wiki_plan_no_orphan_check():
     plan = validate_wiki_plan(raw, all_files=["main.py", "worker/core.py"])
     assert plan.pages[0].title == "Overview"
     # worker/core.py is unassigned — no error raised
+
+
+def test_wiki_plan_all_repo_files_roundtrip():
+    plan = WikiPlan(
+        pages=[WikiPageSpec(title="Overview", purpose="Top level.", files=["main.py"])],
+        all_repo_files=["main.py", "worker/core.py", "tests/test_core.py"],
+    )
+    data = plan.to_internal_json()
+    assert data["all_repo_files"] == ["main.py", "worker/core.py", "tests/test_core.py"]
+    # wiki.json (user-facing) should NOT include all_repo_files
+    wiki_data = plan.to_wiki_json()
+    assert "all_repo_files" not in wiki_data

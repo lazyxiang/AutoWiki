@@ -207,6 +207,7 @@ class WikiPlan:
 
     repo_notes: list[dict] = field(default_factory=lambda: [{"content": ""}])
     pages: list[WikiPageSpec] = field(default_factory=list)
+    all_repo_files: list[str] = field(default_factory=list)
 
     def to_wiki_json(self) -> dict:
         """Serialise to the user-facing ``wiki.json`` format.
@@ -262,6 +263,7 @@ class WikiPlan:
         """
         return {
             "repo_notes": self.repo_notes,
+            "all_repo_files": self.all_repo_files,
             "pages": [
                 {
                     "title": p.title,
