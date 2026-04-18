@@ -1507,7 +1507,6 @@ async def generate_wiki_plan(
             max_retries=max_retries,
             fast_llm=fast_llm,
         )
-        secondary_assignments = {p["title"]: [] for p in outline}
     except Exception as exc:
         # Phase 2 failure — trigger heuristic recovery while keeping the outline.
         # If it's a ValueError with 3 args (msg, last_error, last_result),
@@ -1525,12 +1524,9 @@ async def generate_wiki_plan(
         primary_assignments = _heuristic_select_files(
             outline, all_files, file_analysis.files, dep_graph, partial
         )
-        secondary_assignments = {p["title"]: [] for p in outline}
 
     if fixture_recorder is not None:
-        await fixture_recorder.record_assignments(
-            primary_assignments, secondary_assignments
-        )
+        await fixture_recorder.record_assignments(primary_assignments, {})
 
     # Final: combine and normalise (handles orphan files, safety-net checks)
     raw = {
@@ -1540,7 +1536,7 @@ async def generate_wiki_plan(
                 "purpose": p["purpose"],
                 "parent": p.get("parent"),
                 "files": primary_assignments.get(p["title"], []),
-                "secondary_files": secondary_assignments.get(p["title"], []),
+                "secondary_files": [],
             }
             for p in outline
         ]
@@ -1553,6 +1549,7 @@ async def generate_wiki_plan(
             clusters=clusters,
             page_range=page_range,
         )
+        plan.all_repo_files = list(all_files)
         if fixture_recorder is not None:
             await fixture_recorder.record_wiki_plan(plan.to_internal_json())
         return plan
