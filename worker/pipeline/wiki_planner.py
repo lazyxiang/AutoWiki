@@ -1048,148 +1048,107 @@ def _heuristic_recovery_assignment(
     return valid_assignments
 
 
-_BATCH_SIZE_DEFAULT = 40
+_PAGE_BATCH_SIZE = 12  # pages per LLM selection call
 
 
-async def _assign_files_in_batches(
+async def _select_files_in_batches(
     outline: list[dict],
     file_summary: str,
     dep_info: str | None,
     all_files: list[str],
+    file_infos: dict[str, Any],
+    dep_graph: DependencyGraph | None,
     llm: LLMProvider,
     system: str,
     on_retry: OnRetryCallback | None,
-    batch_size: int = _BATCH_SIZE_DEFAULT,
-    max_cleanup_retries: int = 2,
     last_error: str | None = None,
-) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
-    """Phase 2 execution: Assign every file to an existing outline.
+) -> dict[str, list[str]]:
+    """Phase 2: Ask the LLM to select representative files for each page.
 
-    Splits the repository into batches and assigns each file in parallel
-    using the provided LLM and cacheable system segment. Partial results
-    are merged across batches.
+    Pages are batched (_PAGE_BATCH_SIZE at a time).  Each page receives a
+    pre-filtered candidate list (~25 files) so the LLM works with focused
+    context.  The first batch runs serially to warm the Anthropic prompt cache;
+    remaining batches run in parallel.
     """
     import asyncio
 
+    all_files_set = set(all_files)
     valid_titles = [p["title"] for p in outline]
-    valid_titles_set = set(valid_titles)
     result: dict[str, list[str]] = {t: [] for t in valid_titles}
-    secondary: dict[str, list[str]] = {t: [] for t in valid_titles}
-    assigned: set[str] = set()
 
-    # Build the cacheable system segment ONCE and reuse across all batches.
     stage_system_seg = PromptSegment(text=system, cacheable=False)
-    context_segs = _build_batch_assignment_system(
-        outline=outline,
-        file_summary=file_summary,
-        dep_info=dep_info,
-    )
-    system_segments: list[PromptSegment] = [stage_system_seg, *context_segs]
+    context_segs = _build_selection_system(file_summary, dep_info)
+    system_segs: list[PromptSegment] = [stage_system_seg, *context_segs]
 
-    async def _run_batch(batch: list[str]) -> None:
-        user_segment = _build_batch_assignment_user(
-            batch_files=batch,
-            outline_titles=valid_titles,
-            last_error=last_error,
-        )
+    async def _run_page_batch(batch_pages: list[dict]) -> None:
+        pages_with_candidates = [
+            (
+                p["title"],
+                p.get("purpose", ""),
+                _prefilter_candidates(p, all_files, file_infos, dep_graph),
+            )
+            for p in batch_pages
+        ]
+        user_seg = _build_selection_user(pages_with_candidates, last_error)
         try:
             raw = await async_retry(
                 llm.generate_structured,
-                [user_segment],
+                [user_seg],
                 schema=_SELECTION_SCHEMA,
-                system=system_segments,
+                system=system_segs,
                 transient_exceptions=TRANSIENT_EXCEPTIONS,
                 on_retry=on_retry,
             )
         except Exception as exc:
             log_validation_retry(
                 logger,
-                stage="wiki_planner.assign_files.batch",
+                stage="wiki_planner.select_files.batch",
                 attempt=1,
                 max_retries=1,
                 exc=exc,
-                context={"batch_size": len(batch)},
+                context={"batch_pages": len(batch_pages)},
             )
             return
-        for a in raw.get("assignments", []):
-            f = a.get("file", "")
-            primary_title = a.get("primary_page", "") or a.get("page_title", "")
-            secondaries = a.get("secondary_pages", []) or []
-            if f not in batch or f in assigned:
+        title_to_page = {p["title"]: p for p in batch_pages}
+        for sel in raw.get("selections", []):
+            title = sel.get("page_title", "")
+            files = sel.get("files", [])
+            if title not in result:
                 continue
-            if primary_title not in valid_titles_set:
-                continue
-            result[primary_title].append(f)
-            assigned.add(f)
-            for sec in secondaries[:2]:
-                if sec in valid_titles_set and sec != primary_title:
-                    secondary[sec].append(f)
+            valid = [f for f in files if f in all_files_set][:MAX_FILES_PER_PAGE]
+            page_dict = title_to_page.get(title, {})
+            valid.sort(
+                key=lambda f: _score_file_for_page(f, page_dict, file_infos, dep_graph),
+                reverse=True,
+            )
+            result[title] = valid
 
-    # Initial pass: batch every file.
-    # Run the first batch serially to warm the cache, then the rest in parallel.
-    batches: list[list[str]] = [
-        all_files[i : i + batch_size] for i in range(0, len(all_files), batch_size)
+    batches: list[list[dict]] = [
+        outline[i : i + _PAGE_BATCH_SIZE]
+        for i in range(0, len(outline), _PAGE_BATCH_SIZE)
     ]
     if batches:
-        await _run_batch(batches[0])
+        await _run_page_batch(batches[0])  # serial first batch warms cache
     if len(batches) > 1:
-        await asyncio.gather(*(_run_batch(b) for b in batches[1:]))
+        await asyncio.gather(*(_run_page_batch(b) for b in batches[1:]))
 
-    # Cleanup rounds for unassigned files
-    for attempt in range(1, max_cleanup_retries + 1):
-        unassigned = [f for f in all_files if f not in assigned]
-        if not unassigned:
-            break
-        log_validation_retry(
-            logger,
-            stage="wiki_planner.assign_files.cleanup",
-            attempt=attempt,
-            max_retries=max_cleanup_retries,
-            exc=ValueError(f"{len(unassigned)} files unassigned after batches"),
-            context={"unassigned": len(unassigned), "total": len(all_files)},
-        )
-        cleanup_batches = [
-            unassigned[i : i + batch_size]
-            for i in range(0, len(unassigned), batch_size)
-        ]
-        for b in cleanup_batches:
-            await _run_batch(b)
-
-    # Anything still unassigned → directory clustering residue
-    unassigned = [f for f in all_files if f not in assigned]
-    if unassigned:
-        log_final_failure(
-            logger,
-            stage="wiki_planner.assign_files.residue",
-            exc=ValueError(
-                f"{len(unassigned)} files still unassigned after cleanup; "
-                "routing residue to directory clustering"
-            ),
-            context={"residue": len(unassigned)},
-        )
-        residue_assignment = _directory_cluster_assign(outline, unassigned)
-        for title, files in residue_assignment.items():
-            result[title].extend(files)
-
-    return result, secondary
+    return result
 
 
-async def _assign_files(
+async def _select_files(
     outline: list[dict],
     file_summary: str,
     dep_info: str | None,
     all_files: list[str],
+    file_infos: dict[str, Any],
+    dep_graph: DependencyGraph | None,
     llm: LLMProvider,
     system: str,
     on_retry: OnRetryCallback | None,
     max_retries: int = 3,
     fast_llm: LLMProvider | None = None,
-) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
-    """Phase 2 execution: Assign every file via batched LLM calls with feedback.
-
-    Validation failures trigger retries where the validation error is passed
-    back to the LLM as feedback in the prompt.
-    """
+) -> dict[str, list[str]]:
+    """Phase 2: Select representative files for each page with retry + feedback."""
     preferred_llm = fast_llm or llm
     last_error: str | None = None
     last_result: dict[str, list[str]] | None = None
@@ -1197,11 +1156,13 @@ async def _assign_files(
     for attempt in range(1, max_retries + 1):
         current_llm = preferred_llm if attempt == 1 else llm
         try:
-            result, secondary = await _assign_files_in_batches(
+            result = await _select_files_in_batches(
                 outline=outline,
                 file_summary=file_summary,
                 dep_info=dep_info,
                 all_files=all_files,
+                file_infos=file_infos,
+                dep_graph=dep_graph,
                 llm=current_llm,
                 system=system,
                 on_retry=on_retry,
@@ -1209,36 +1170,28 @@ async def _assign_files(
             )
             last_result = result
             _validate_assignments(result, outline)
-            return result, secondary
+            return result
         except ValueError as exc:
             last_error = str(exc)
             if attempt < max_retries:
                 log_validation_retry(
                     logger,
-                    stage="wiki_planner.assign_files",
+                    stage="wiki_planner.select_files",
                     attempt=attempt,
                     max_retries=max_retries,
                     exc=exc,
-                    context={
-                        "outline_pages": len(outline),
-                        "total_files": len(all_files),
-                    },
+                    context={"outline_pages": len(outline)},
                 )
             else:
                 log_final_failure(
                     logger,
-                    stage="wiki_planner.assign_files",
+                    stage="wiki_planner.select_files",
                     exc=exc,
-                    context={
-                        "outline_pages": len(outline),
-                        "total_files": len(all_files),
-                    },
+                    context={"outline_pages": len(outline)},
                 )
 
-    # Final fallback if all LLM attempts fail: throw error with partial result
-    # to trigger heuristic recovery.
     raise ValueError(
-        f"Failed to assign files after {max_retries} attempts",
+        f"Failed to select files after {max_retries} attempts",
         last_error,
         last_result,
     )
@@ -1595,19 +1548,22 @@ async def generate_wiki_plan(
     if fixture_recorder is not None:
         await fixture_recorder.record_outline(outline)
 
-    # Phase 2: Assign files + validate assignments (fast_llm for classification task)
+    # Phase 2: Select representative files for each page (fast_llm for selection task)
     try:
-        primary_assignments, secondary_assignments = await _assign_files(
+        primary_assignments = await _select_files(
             outline=outline,
             file_summary=file_summary,
             dep_info=dep_info,
             all_files=all_files,
+            file_infos=file_analysis.files,
+            dep_graph=dep_graph,
             llm=llm,
             system=system,
             on_retry=on_retry,
             max_retries=max_retries,
             fast_llm=fast_llm,
         )
+        secondary_assignments = {p["title"]: [] for p in outline}
     except Exception as exc:
         # Phase 2 failure — trigger heuristic recovery while keeping the outline.
         # If it's a ValueError with 3 args (msg, last_error, last_result),
@@ -1618,7 +1574,7 @@ async def generate_wiki_plan(
 
         recovery_type = "partial heuristic" if partial else "full heuristic"
         logger.warning(
-            "Phase 2 LLM assignment failed: %s — falling back to %s recovery",
+            "Phase 2 LLM selection failed: %s — falling back to %s recovery",
             exc,
             recovery_type,
         )

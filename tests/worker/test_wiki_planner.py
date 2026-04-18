@@ -331,15 +331,15 @@ async def test_generate_outline(mock_llm):
 
 
 async def test_assign_files(mock_llm):
-    """_assign_files returns a dict mapping page titles to file lists."""
-    from worker.pipeline.wiki_planner import _assign_files
+    """_select_files returns a dict mapping page titles to file lists."""
+    from worker.pipeline.wiki_planner import _select_files
 
     mock_llm.generate_structured.side_effect = None
     mock_llm.generate_structured.return_value = {
-        "assignments": [
-            {"file": "main.py", "page_title": "Overview"},
-            {"file": "api.py", "page_title": "API"},
-            {"file": "worker.py", "page_title": "Worker"},
+        "selections": [
+            {"page_title": "Overview", "files": ["main.py"]},
+            {"page_title": "API", "files": ["api.py"]},
+            {"page_title": "Worker", "files": ["worker.py"]},
         ]
     }
     outline = [
@@ -347,13 +347,15 @@ async def test_assign_files(mock_llm):
         {"title": "API", "purpose": "REST API."},
         {"title": "Worker", "purpose": "Jobs."},
     ]
-    result, _ = await _assign_files(
+    result = await _select_files(
         outline=outline,
         file_summary="main.py: ...\napi.py: ...\nworker.py: ...",
         dep_info=None,
         all_files=["main.py", "api.py", "worker.py"],
+        file_infos={},
+        dep_graph=None,
         llm=mock_llm,
-        system="Assign files.",
+        system="Select files.",
         on_retry=None,
     )
     assert result["Overview"] == ["main.py"]
@@ -362,28 +364,30 @@ async def test_assign_files(mock_llm):
 
 
 async def test_assign_files_orphans_distributed(mock_llm):
-    """Files assigned to unknown pages get redistributed."""
-    from worker.pipeline.wiki_planner import _assign_files
+    """Files not in any valid page are silently ignored (page-centric model)."""
+    from worker.pipeline.wiki_planner import _select_files
 
     mock_llm.generate_structured.side_effect = None
     mock_llm.generate_structured.return_value = {
-        "assignments": [
-            {"file": "main.py", "page_title": "Overview"},
-            {"file": "orphan.py", "page_title": "NonExistent"},
+        "selections": [
+            {"page_title": "Overview", "files": ["main.py"]},
+            # "orphan.py" omitted — page-centric model doesn't need to assign it
         ]
     }
     outline = [{"title": "Overview", "purpose": "Top."}]
-    result, _ = await _assign_files(
+    result = await _select_files(
         outline=outline,
         file_summary="main.py: ...\norphan.py: ...",
         dep_info=None,
         all_files=["main.py", "orphan.py"],
+        file_infos={},
+        dep_graph=None,
         llm=mock_llm,
-        system="Assign.",
+        system="Select.",
         on_retry=None,
     )
-    # orphan.py should be assigned to Overview (first page)
-    assert "orphan.py" in result["Overview"]
+    # page-centric: Overview gets main.py; orphan.py is simply not selected
+    assert "main.py" in result["Overview"]
 
 
 def test_validate_rejects_page_over_50_files():
@@ -470,8 +474,10 @@ def test_validate_allows_4_level_hierarchy():
 
 
 def test_validate_rejects_flat_plan_for_large_repo():
-    page1_files = [f"f{i}.py" for i in range(20)]
-    page2_files = [f"g{i}.py" for i in range(15)]
+    # Use ≤10 files per page to avoid the "overloaded" check;
+    # enough total files (35) to trigger the hierarchy check.
+    page1_files = [f"f{i}.py" for i in range(10)]
+    page2_files = [f"g{i}.py" for i in range(10)]
     raw = {
         "pages": [
             {"title": "Page1", "purpose": ".", "files": page1_files},
@@ -484,10 +490,20 @@ def test_validate_rejects_flat_plan_for_large_repo():
 
 
 def test_validate_rejects_too_few_pages():
-    many_files = [f"f{i}.py" for i in range(25)]
+    # Use ≤10 files per page to avoid the "overloaded" check;
+    # supply enough pages to exercise the too-few-pages validation.
     raw = {
         "pages": [
-            {"title": "Overview", "purpose": ".", "files": many_files},
+            {
+                "title": "Overview",
+                "purpose": ".",
+                "files": [f"f{i}.py" for i in range(5)],
+            },
+            {
+                "title": "Core",
+                "purpose": ".",
+                "files": [f"g{i}.py" for i in range(5)],
+            },
         ]
     }
     with pytest.raises(ValueError, match="create more granular pages"):
@@ -555,12 +571,12 @@ async def test_generate_wiki_plan_two_phase(mock_llm):
                 {"title": "Utilities", "purpose": "Utility helpers."},
             ]
         },
-        # Phase 2: file assignment
+        # Phase 2: file selection
         {
-            "assignments": [
-                {"file": "main.py", "page_title": "Overview"},
-                {"file": "models.py", "page_title": "Models"},
-                {"file": "utils.py", "page_title": "Utilities"},
+            "selections": [
+                {"page_title": "Overview", "files": ["main.py"]},
+                {"page_title": "Models", "files": ["models.py"]},
+                {"page_title": "Utilities", "files": ["utils.py"]},
             ]
         },
     ]
@@ -582,32 +598,34 @@ async def test_generate_wiki_plan_two_phase(mock_llm):
 
 
 async def test_assign_files_logs_each_validation_failure_and_feedback(caplog):
-    """_assign_files must log each retry AND throw on final failure.
+    """_select_files must log each retry AND throw on final failure.
 
     With max_retries=2, the batched path does 2 attempts before throwing.
     """
     import logging
     from unittest.mock import AsyncMock
 
-    from worker.pipeline.wiki_planner import _assign_files
+    from worker.pipeline.wiki_planner import _select_files
 
     outline = [
         {"title": "Overview", "purpose": "top"},
         {"title": "Core", "purpose": "core"},
     ]
-    # stuffed assignment: only Overview has files, Core is empty (fails validation)
-    stuffed = {"assignments": [{"file": "main.py", "primary_page": "Overview"}]}
+    # stuffed selection: only Overview has files, Core is empty (fails validation)
+    stuffed = {"selections": [{"page_title": "Overview", "files": ["main.py"]}]}
     llm = AsyncMock()
     # Two batched calls will both return a stuffed response that fails validation.
     llm.generate_structured.side_effect = [stuffed, stuffed]
 
     with caplog.at_level(logging.WARNING, logger="worker.planner"):
-        with pytest.raises(ValueError, match="Failed to assign files"):
-            await _assign_files(
+        with pytest.raises(ValueError, match="Failed to select files"):
+            await _select_files(
                 outline=outline,
                 file_summary="files",
                 dep_info=None,
                 all_files=["main.py"],
+                file_infos={},
+                dep_graph=None,
                 llm=llm,
                 system="sys",
                 on_retry=None,
@@ -617,14 +635,14 @@ async def test_assign_files_logs_each_validation_failure_and_feedback(caplog):
     retry_logs = [
         r
         for r in caplog.records
-        if "wiki_planner.assign_files" in r.getMessage()
+        if "wiki_planner.select_files" in r.getMessage()
         and "attempt" in r.getMessage()
         and r.levelno == logging.WARNING
     ]
     fallback_logs = [
         r
         for r in caplog.records
-        if "wiki_planner.assign_files" in r.getMessage()
+        if "wiki_planner.select_files" in r.getMessage()
         and "all retries exhausted" in r.getMessage()
         and r.levelno == logging.ERROR
     ]
@@ -695,7 +713,7 @@ async def test_generate_wiki_plan_phase2_recovery(mock_llm):
 
 
 async def test_assign_files_uses_batched_path(monkeypatch):
-    """_assign_files must delegate to _assign_files_in_batches."""
+    """_select_files must delegate to _select_files_in_batches."""
     from unittest.mock import AsyncMock
 
     from worker.pipeline import wiki_planner as wp
@@ -705,21 +723,22 @@ async def test_assign_files_uses_batched_path(monkeypatch):
     async def fake_batched(**kwargs):
         called["hit"] = True
         titles = [page["title"] for page in kwargs["outline"]]
-        files = list(kwargs["all_files"])
-        return {titles[0]: [files[0]], titles[1]: [files[1]]}, {}
+        return {titles[0]: ["a.py"], titles[1]: ["b.py"]}
 
-    monkeypatch.setattr(wp, "_assign_files_in_batches", fake_batched)
+    monkeypatch.setattr(wp, "_select_files_in_batches", fake_batched)
 
     llm = AsyncMock()
     outline = [
         {"title": "One", "purpose": "p1"},
         {"title": "Two", "purpose": "p2"},
     ]
-    result, _ = await wp._assign_files(
+    result = await wp._select_files(
         outline=outline,
         file_summary="fs",
         dep_info=None,
         all_files=["a.py", "b.py"],
+        file_infos={},
+        dep_graph=None,
         llm=llm,
         system="sys",
         on_retry=None,
@@ -881,10 +900,10 @@ async def test_generate_wiki_plan_with_clone_root(mock_llm):
             ]
         },
         {
-            "assignments": [
-                {"file": "main.py", "primary_page": "Overview"},
-                {"file": "models.py", "primary_page": "Models"},
-                {"file": "utils.py", "primary_page": "Utils"},
+            "selections": [
+                {"page_title": "Overview", "files": ["main.py"]},
+                {"page_title": "Models", "files": ["models.py"]},
+                {"page_title": "Utils", "files": ["utils.py"]},
             ]
         },
     ]
@@ -931,19 +950,17 @@ def test_score_entity_density():
     page = {"title": "Worker", "purpose": "Background jobs."}
     sparse = _fake_infos(("worker/job.py", ["run"]))
     dense = _fake_infos(("worker/job.py", [f"fn{i}" for i in range(15)]))
-    assert (
-        _score_file_for_page("worker/job.py", page, dense, None)
-        > _score_file_for_page("worker/job.py", page, sparse, None)
-    )
+    assert _score_file_for_page(
+        "worker/job.py", page, dense, None
+    ) > _score_file_for_page("worker/job.py", page, sparse, None)
 
 
 def test_score_semantic_alignment():
     page = {"title": "API Gateway", "purpose": "Routes requests."}
     infos = _fake_infos(("api/gateway.py", ["route"]), ("util/helper.py", ["route"]))
-    assert (
-        _score_file_for_page("api/gateway.py", page, infos, None)
-        > _score_file_for_page("util/helper.py", page, infos, None)
-    )
+    assert _score_file_for_page(
+        "api/gateway.py", page, infos, None
+    ) > _score_file_for_page("util/helper.py", page, infos, None)
 
 
 def test_prefilter_returns_at_most_max_candidates():

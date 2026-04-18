@@ -39,12 +39,12 @@ def mock_llm():
                     },
                 ]
             },
-            # Phase 2: file assignment
+            # Phase 2: file selection
             {
-                "assignments": [
-                    {"file": "main.py", "page_title": "Overview"},
-                    {"file": "models.py", "page_title": "Models"},
-                    {"file": "utils.py", "page_title": "Utils"},
+                "selections": [
+                    {"page_title": "Overview", "files": ["main.py"]},
+                    {"page_title": "Models", "files": ["models.py"]},
+                    {"page_title": "Utils", "files": ["utils.py"]},
                 ]
             },
         ]
@@ -99,15 +99,15 @@ def mock_fast_llm():
         "key_claims": ["Claim one", "Claim two", "Claim three"],
     }
     _fact_check_pass = {"verdict": "pass", "issues": []}
-    _assignment_pass = {"assignments": []}
+    _selection_pass = {"selections": []}
 
     _call_counter = [0]
 
     async def _structured_side_effect(*args, **kwargs):
         schema = kwargs.get("schema", {})
         props = schema.get("properties", {})
-        if "assignments" in props:
-            return _assignment_pass
+        if "selections" in props:
+            return _selection_pass
         if "verdict" in props:
             return _fact_check_pass
         if "sections" in props:
