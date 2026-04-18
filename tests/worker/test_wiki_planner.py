@@ -981,3 +981,48 @@ def test_prefilter_prefers_code_files():
     }
     result = _prefilter_candidates(page, all_files, infos, None)
     assert result[0] == "auth/login.py"
+
+
+from worker.pipeline.wiki_planner import _heuristic_select_files
+
+
+class FakeFileInfoH:
+    def __init__(self, entities):
+        self.entities = entities
+
+
+def test_heuristic_select_files_picks_code_over_docs():
+    outline = [{"title": "Auth", "purpose": "Authentication logic."}]
+    all_files = ["auth/login.py", "auth/README.md", "auth/config.yaml"]
+    infos = {
+        "auth/login.py": FakeFileInfoH(["authenticate", "logout"]),
+        "auth/README.md": FakeFileInfoH([]),
+        "auth/config.yaml": FakeFileInfoH([]),
+    }
+    result = _heuristic_select_files(outline, all_files, infos, None)
+    assert "auth/login.py" in result["Auth"]
+    assert "auth/README.md" not in result["Auth"]
+
+
+def test_heuristic_select_files_uses_partial_llm_selections():
+    outline = [
+        {"title": "API", "purpose": "REST endpoints."},
+        {"title": "DB", "purpose": "Database models."},
+    ]
+    all_files = ["api/routes.py", "db/models.py"]
+    infos = {
+        "api/routes.py": FakeFileInfoH(["get", "post"]),
+        "db/models.py": FakeFileInfoH(["User", "Session"]),
+    }
+    partial = {"API": ["api/routes.py"]}
+    result = _heuristic_select_files(outline, all_files, infos, None, partial)
+    assert result["API"] == ["api/routes.py"]
+    assert "db/models.py" in result["DB"]
+
+
+def test_heuristic_select_files_respects_max():
+    outline = [{"title": "Core", "purpose": "Core logic."}]
+    all_files = [f"core/module{i}.py" for i in range(30)]
+    infos = {f: FakeFileInfoH([f"fn{i}"]) for i, f in enumerate(all_files)}
+    result = _heuristic_select_files(outline, all_files, infos, None)
+    assert len(result["Core"]) <= 10

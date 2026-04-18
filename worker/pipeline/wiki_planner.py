@@ -972,80 +972,50 @@ def _directory_cluster_assign(
     return result
 
 
-def _heuristic_recovery_assignment(
+def _heuristic_select_files(
     outline: list[dict],
     all_files: list[str],
-    partial_assignments: dict[str, list[str]] | None = None,
+    file_infos: dict[str, Any],
+    dep_graph: DependencyGraph | None,
+    partial_selections: dict[str, list[str]] | None = None,
 ) -> dict[str, list[str]]:
-    """Heuristic file assignment used as a fallback for Phase 2 (Assignment).
+    """Score-based file selection used as Phase 2 fallback.
 
-    This function attempts to maintain a high-quality wiki even when the
-    LLM fails to assign files. It preserves any 'valid' assignments from a
-    partial LLM result (pages that are not empty and not overloaded) and
-    fills the gaps using directory clustering for the remaining files.
-
-    Args:
-        outline: The validated Phase 1 wiki outline.
-        all_files: The full list of files in the repository.
-        partial_assignments: Optional partial results from a failed Phase 2
-            LLM attempt.
-
-    Returns:
-        Mapping from page title to list of assigned files.
+    Preserves valid partial selections from a failed LLM attempt, then fills
+    remaining pages by pre-filtering to ~25 candidates and selecting the
+    top-scoring files up to MAX_FILES_PER_PAGE.
     """
-    valid_assignments: dict[str, list[str]] = {}
-    assigned_files: set[str] = set()
+    result: dict[str, list[str]] = {}
 
-    # 1. Take what we can from LLM's partial output (only keep valid pages)
-    if partial_assignments:
-        all_parents = {p.get("parent") for p in outline if p.get("parent")}
+    if partial_selections:
         for page in outline:
             title = page["title"]
-            files = partial_assignments.get(title, [])
-            # Simple validity check for a single page
-            is_valid = (
-                0 < len(files) <= MAX_FILES_PER_PAGE
-                or "overview" in title.lower()
-                or title in all_parents
-            )
-            if is_valid:
-                valid_assignments[title] = list(files)
-                assigned_files.update(files)
+            files = partial_selections.get(title, [])
+            if 0 < len(files) <= MAX_FILES_PER_PAGE:
+                result[title] = list(files)
 
-    # 2. Heuristic assignment for everything else (Orphans + Overloaded)
-    # Respect MAX_FILES_PER_PAGE when merging residue into existing buckets;
-    # overflow goes to the overview/first page as a last resort.
-    remainder = [f for f in all_files if f not in assigned_files]
-    overflow: list[str] = []
-    if remainder:
-        recovery = _directory_cluster_assign(outline, remainder)
-        for title, files in recovery.items():
-            bucket = valid_assignments.setdefault(title, [])
-            capacity = MAX_FILES_PER_PAGE - len(bucket)
-            if capacity >= len(files):
-                bucket.extend(files)
-            else:
-                bucket.extend(files[: max(capacity, 0)])
-                overflow.extend(files[max(capacity, 0) :])
-    if overflow:
-        fallback = next(
-            (p["title"] for p in outline if "overview" in p["title"].lower()),
-            outline[0]["title"] if outline else None,
+    for page in outline:
+        title = page["title"]
+        if title in result:
+            continue
+        candidates = _prefilter_candidates(
+            page, all_files, file_infos, dep_graph, max_candidates=25
         )
-        if fallback:
-            bucket = valid_assignments.setdefault(fallback, [])
-            cap = MAX_FILES_PER_PAGE - len(bucket)
-            bucket.extend(overflow[: max(cap, 0)])
+        if not candidates:
+            result[title] = []
+            continue
+        scored = sorted(
+            candidates,
+            key=lambda f: _score_file_for_page(f, page, file_infos, dep_graph),
+            reverse=True,
+        )
+        target = min(MAX_FILES_PER_PAGE, max(MIN_FILES_PER_PAGE, len(scored)))
+        result[title] = scored[:target]
 
-    # Final safety: deduplicate and ensure every title exists
     for p in outline:
-        title = p["title"]
-        if title not in valid_assignments:
-            valid_assignments[title] = []
-        else:
-            valid_assignments[title] = list(dict.fromkeys(valid_assignments[title]))
+        result.setdefault(p["title"], [])
 
-    return valid_assignments
+    return result
 
 
 _PAGE_BATCH_SIZE = 12  # pages per LLM selection call
@@ -1578,8 +1548,8 @@ async def generate_wiki_plan(
             exc,
             recovery_type,
         )
-        primary_assignments = _heuristic_recovery_assignment(
-            outline, all_files, partial
+        primary_assignments = _heuristic_select_files(
+            outline, all_files, file_analysis.files, dep_graph, partial
         )
         secondary_assignments = {p["title"]: [] for p in outline}
 
