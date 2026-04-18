@@ -1083,3 +1083,78 @@ def test_wiki_plan_all_repo_files_roundtrip():
     # wiki.json (user-facing) should NOT include all_repo_files
     wiki_data = plan.to_wiki_json()
     assert "all_repo_files" not in wiki_data
+
+
+async def test_generate_wiki_plan_uses_selection_model(mock_llm):
+    """Phase 2 should produce page-centric selections, not exhaustive assignments."""
+    from unittest.mock import AsyncMock
+
+    # Build a minimal FileAnalysis with 4 files
+    file_analysis = FileAnalysis(
+        files={
+            "api/routes.py": FileInfo(
+                rel_path="api/routes.py",
+                entities=[
+                    {"name": "get_user", "kind": "function", "line": 1},
+                    {"name": "create_user", "kind": "function", "line": 10},
+                ],
+                summary="get_user, create_user",
+            ),
+            "api/models.py": FileInfo(
+                rel_path="api/models.py",
+                entities=[
+                    {"name": "User", "kind": "function", "line": 1},
+                    {"name": "Session", "kind": "function", "line": 20},
+                ],
+                summary="User, Session",
+            ),
+            "worker/job.py": FileInfo(
+                rel_path="worker/job.py",
+                entities=[{"name": "run_job", "kind": "function", "line": 1}],
+                summary="run_job",
+            ),
+            "tests/test_api.py": FileInfo(
+                rel_path="tests/test_api.py",
+                entities=[{"name": "test_get_user", "kind": "function", "line": 1}],
+                summary="test_get_user",
+            ),
+        }
+    )
+
+    # Phase 1: outline response — must have >= 3 pages for the small-repo validator
+    outline_response = {
+        "pages": [
+            {"title": "Overview", "purpose": "Project overview."},
+            {"title": "API", "purpose": "REST endpoints.", "parent": "Overview"},
+            {"title": "Worker", "purpose": "Background jobs.", "parent": "Overview"},
+        ]
+    }
+    # Phase 2: selection response — tests/test_api.py intentionally omitted
+    selection_response = {
+        "selections": [
+            {"page_title": "Overview", "files": ["api/routes.py"]},
+            {"page_title": "API", "files": ["api/routes.py", "api/models.py"]},
+            {"page_title": "Worker", "files": ["worker/job.py"]},
+        ]
+    }
+    mock_llm.generate_structured = AsyncMock(
+        side_effect=[outline_response, selection_response]
+    )
+
+    plan = await generate_wiki_plan(
+        file_analysis=file_analysis,
+        repo_name="test-repo",
+        llm=mock_llm,
+    )
+
+    assert isinstance(plan, WikiPlan)
+    api_page = next(p for p in plan.pages if p.title == "API")
+    assert "api/routes.py" in api_page.files
+    assert "api/models.py" in api_page.files
+    worker_page = next(p for p in plan.pages if p.title == "Worker")
+    assert "worker/job.py" in worker_page.files
+    # tests/test_api.py is not selected — this is the key difference from the old model
+    all_selected = {f for p in plan.pages for f in p.files}
+    assert "tests/test_api.py" not in all_selected
+    # all_repo_files should contain ALL analyzed files
+    assert set(plan.all_repo_files) == set(file_analysis.files.keys())

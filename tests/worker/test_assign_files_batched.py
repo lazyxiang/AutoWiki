@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from worker.llm.prompt_segment import PromptSegment
 from worker.pipeline.wiki_planner import (
+    _SELECTION_SCHEMA,
+    MAX_FILES_PER_PAGE,
+    MIN_FILES_PER_PAGE,
     _build_selection_system,
     _build_selection_user,
-    _SELECTION_SCHEMA,
-    MIN_FILES_PER_PAGE,
-    MAX_FILES_PER_PAGE,
 )
 
 
@@ -54,7 +54,9 @@ def test_selection_user_segment_includes_file_count_range():
 
 def test_selection_user_segment_injects_last_error():
     pages_with_candidates = [("API", "REST API.", ["api/routes.py"])]
-    seg = _build_selection_user(pages_with_candidates, last_error="Too many files on page X")
+    seg = _build_selection_user(
+        pages_with_candidates, last_error="Too many files on page X"
+    )
     assert "Too many files on page X" in seg.text
     assert "CRITICAL" in seg.text
 
