@@ -253,6 +253,91 @@ class TestSanitizeMermaidBlocks:
 # ── Edge cases ───────────────────────────────────────────────────────
 
 
+class TestUndirectedEdgeNormalisation:
+    """--|"label"| should be converted to -->|"label"|."""
+
+    def test_undirected_labeled_edge_converted(self):
+        result = sanitize_mermaid('E --|"fail"| F')
+        assert 'E -->|"fail"| F' == result
+
+    def test_directed_edge_unchanged(self):
+        result = sanitize_mermaid('E -->|"fail"| F')
+        assert 'E -->|"fail"| F' == result
+
+    def test_triple_dash_unchanged(self):
+        result = sanitize_mermaid('A ---|"label"| B')
+        assert 'A ---|"label"| B' == result
+
+    def test_unquoted_undirected_edge_converted_and_quoted(self):
+        # --|fail (x)| — undirected + special char in label
+        result = sanitize_mermaid("E --|fail (x)| F")
+        assert '-->|"fail (x)"|' in result
+
+    def test_full_decision_diagram(self):
+        diagram = (
+            "flowchart TD\n"
+            "    D --> E{Issue?}\n"
+            '    E --|"fail"| F["Revision"]\n'
+            '    E --|"pass"| G\n'
+        )
+        result = sanitize_mermaid(diagram)
+        assert '-->|"fail"|' in result
+        assert '-->|"pass"|' in result
+
+
+class TestEmbeddedCodeFenceRemoval:
+    """Lines starting with ``` inside Mermaid content should be dropped."""
+
+    def test_embedded_fence_line_removed(self):
+        diagram = "flowchart TD\n    A --> B\n```mermaid extra content\n    B --> C\n"
+        result = sanitize_mermaid(diagram)
+        assert "```" not in result
+        assert "A --> B" in result
+        assert "B --> C" in result
+
+    def test_plain_triple_backtick_removed(self):
+        diagram = "flowchart TD\n    A --> B\n```\n    B --> C"
+        result = sanitize_mermaid(diagram)
+        assert "```" not in result
+
+
+class TestSanitizeMermaidBlocksClosingFence:
+    """Closing ``` must appear alone at the start of a line.
+
+    The key regression: a line like  ```mermaid 块| NodeScanner[...]  starts
+    with  ```  but has trailing text, so the old lazy  \\n(```)  pattern closed
+    the block there, cutting off the rest of the diagram.  The new pattern
+    requires  ^(```)[ \\t]*$  (nothing after the backticks).
+    """
+
+    def test_backtick_in_node_label_mid_line_not_premature_close(self):
+        # ``` appears INSIDE a node label, NOT at line start — always fine.
+        md = (
+            "```mermaid\n"
+            "flowchart TD\n"
+            '    A["识别 ```mermaid 代码块"] --> B\n'
+            "    B --> C\n"
+            "```\n"
+        )
+        result = sanitize_mermaid_blocks(md)
+        assert "B --> C" in result
+
+    def test_fence_with_trailing_text_not_premature_close(self):
+        # ``` at start of a line but with extra text (```mermaid 块| …).
+        # Old regex closed the block here; new regex skips it.
+        md = (
+            "```mermaid\n"
+            "flowchart TD\n"
+            "    A --> B\n"
+            "```mermaid 块| extra\n"
+            "    B --> C\n"
+            "```\n"
+        )
+        result = sanitize_mermaid_blocks(md)
+        assert "A --> B" in result
+        assert "B --> C" in result
+
+
 class TestEdgeCases:
     def test_empty_string(self):
         assert sanitize_mermaid("") == ""

@@ -17,6 +17,7 @@ import DOMPurify from "dompurify";
 function MermaidBlock({ children }: { children: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const outerRef = useRef<HTMLDivElement>(null);
   const id = useId().replace(/:/g, "_");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [svgContent, setSvgContent] = useState<string>("");
@@ -91,9 +92,22 @@ function MermaidBlock({ children }: { children: string }) {
           }
         }
       } catch (e) {
-        console.error("Mermaid render error:", e);
-        if (ref.current) {
-          ref.current.textContent = children;
+        console.error(
+          "[AutoWiki] Mermaid render failed — hiding diagram and preceding heading.\n" +
+          "Error:", e,
+          "\nDiagram source:\n" + children.trim(),
+        );
+        if (outerRef.current) {
+          outerRef.current.style.display = "none";
+          // Also hide the immediately preceding heading so an orphaned section
+          // title is not left floating above hidden content.
+          let prev: ChildNode | null = outerRef.current.previousSibling;
+          while (prev && prev.nodeType === Node.TEXT_NODE && !prev.textContent?.trim()) {
+            prev = prev.previousSibling;
+          }
+          if (prev instanceof HTMLElement && /^H[1-6]$/i.test(prev.tagName)) {
+            prev.style.display = "none";
+          }
         }
       }
     })();
@@ -138,7 +152,7 @@ function MermaidBlock({ children }: { children: string }) {
   };
 
   return (
-    <>
+    <div ref={outerRef}>
       <div className="group relative my-6">
         {/* overflow-hidden on the outer wrapper is only for rounded-corner clipping.
             The inner ref div uses overflow-x-auto so wide diagrams scroll rather
@@ -215,7 +229,7 @@ function MermaidBlock({ children }: { children: string }) {
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }
 

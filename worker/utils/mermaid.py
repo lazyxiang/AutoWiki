@@ -40,6 +40,12 @@ _DOUBLE_CURLY_RE = re.compile(r"(\b\w+\{\{)([^\"]+)(\}\})")
 # Excludes already-quoted labels (label starting with `"`)
 _EDGE_LABEL_RE = re.compile(r"(\|)([^\"|][^|]*?)(\|)")
 
+# ── Edge-type normalisation ─────────────────────────────────────────
+# LLMs sometimes emit  --|"label"|  (undirected line) instead of
+# -->|"label"|  (directed arrow).  Convert  --\|  that is not already
+# preceded by  >  or  -  (so  -->|  and  ---|  are left untouched).
+_UNDIRECTED_LABELED_EDGE_RE = re.compile(r"(?<![->])--(\|)")
+
 # ── Block-opener patterns by diagram type ────────────────────────────
 # Maps the lowercased diagram-type keyword to the regex that matches
 # block-opening keywords for that diagram type.
@@ -201,6 +207,13 @@ def sanitize_mermaid(text: str) -> str:
     for line in lines:
         stripped = line.strip()
 
+        # Drop lines that look like embedded code-fence markers (e.g. ```mermaid …
+        # inside a node label that the LLM accidentally split across a fence).
+        # Mermaid has no syntax that starts with a backtick, so these are always
+        # artefacts of malformed LLM output.
+        if stripped.startswith("```"):
+            continue
+
         # Count block openings to maintain depth.
         if block_opener.match(stripped):
             block_depth += 1
@@ -211,6 +224,8 @@ def sanitize_mermaid(text: str) -> str:
                 # Orphaned `end` — no open block to close; drop the line.
                 continue
 
+        # Normalise undirected labelled edges: --|"…"| → -->|"…"|
+        line = _UNDIRECTED_LABELED_EDGE_RE.sub(r"-->|", line)
         # Sanitise edge labels first (|...|)
         line = _EDGE_LABEL_RE.sub(_edge_replacer, line)
         # Handle double-bracket shapes before single-bracket ones
@@ -252,9 +267,13 @@ def sanitize_mermaid_blocks(markdown: str) -> str:
         # sanitize_mermaid strips fences, so re-wrap
         return f"{fence_open}\n{sanitized_body}\n{fence_close}"
 
+    # The closing ``` must appear alone at the start of a line (with optional
+    # trailing whitespace) so that triple-backticks embedded mid-line inside a
+    # node label (e.g. `识别 ```mermaid 代码块`) do not prematurely terminate
+    # the block.
     return re.sub(
-        r"(```mermaid)\s*\n(.*?)\n(```)",
+        r"^(```mermaid[ \t]*)\n(.*?)\n^(```)[ \t]*$",
         _replace_block,
         markdown,
-        flags=re.DOTALL,
+        flags=re.DOTALL | re.MULTILINE,
     )
