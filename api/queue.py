@@ -57,6 +57,7 @@ async def enqueue_full_index(
     name: str,
     wiki_language: str = "en",
     reuse_index: bool = False,
+    reuse_plan: bool = False,
 ) -> str:
     """Enqueue a full six-stage wiki generation job for a repository.
 
@@ -76,6 +77,9 @@ async def enqueue_full_index(
         reuse_index (bool): When ``True``, preserve any existing FAISS index
             and skip Stage 4 (RAG Indexer) if the index file is present.
             Defaults to ``False``.
+        reuse_plan (bool): When ``True``, load the existing
+            ``ast/wiki_plan.json`` and skip Stage 5 (Wiki Planner) if the
+            plan file is present.  Defaults to ``False``.
 
     Returns:
         str: The ``job_id`` passed in, returned as-is so callers can use this
@@ -99,6 +103,7 @@ async def enqueue_full_index(
         name=name,
         wiki_language=wiki_language,
         reuse_index=reuse_index,
+        reuse_plan=reuse_plan,
     )
     return job_id
 

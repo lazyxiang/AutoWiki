@@ -13,12 +13,20 @@ def index_cmd(
             "Useful for iterating on wiki structure without incurring embedding costs."
         ),
     ),
+    reuse_plan: bool = typer.Option(
+        False,
+        "--reuse-plan",
+        help=(
+            "Skip wiki planning if a plan already exists for this repo. "
+            "Useful for iterating on page generation without replanning."
+        ),
+    ),
 ):
     """Index a GitHub repository."""
     try:
         resp = httpx.post(
             f"{api_url}/api/repos",
-            json={"url": url, "reuse_index": reuse_index},
+            json={"url": url, "reuse_index": reuse_index, "reuse_plan": reuse_plan},
             timeout=10,
         )
         resp.raise_for_status()

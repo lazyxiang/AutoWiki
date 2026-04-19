@@ -4,50 +4,53 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { RefreshButton } from "./RefreshButton";
 
-/**
- * Metadata for a single wiki page.
- */
 interface Page {
-  /** The URL slug of the page. */
   slug: string;
-  /** The display title of the page. */
   title: string;
-  /** The slug of the parent page, if any. */
   parent_slug: string | null;
-  /** Whether the page was steered via .autowiki/wiki.json. */
   has_user_notes?: boolean;
 }
 
-/**
- * Props for the WikiSidebar component.
- */
 interface Props {
-  /** List of wiki pages to display. */
   pages: Page[];
-  /** The owner of the repository. */
   owner: string;
-  /** The name of the repository. */
   repo: string;
-  /** The ID of the repository. */
   repoId: string;
+  lastCommit?: string;
+  indexedAt?: string;
 }
 
-/**
- * Navigation sidebar for the wiki.
- * Displays structural links to all generated pages and utility links (Chat, Graph).
- */
-export function WikiSidebar({ pages, owner, repo, repoId }: Props) {
+function formatIndexedAt(isoDate: string, sha: string): string | null {
+  if (!isoDate) return null;
+  const date = new Date(isoDate);
+  if (Number.isNaN(date.getTime())) return null;
+  const formatted = date.toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+  const short = sha ? ` (${sha.slice(0, 7)})` : "";
+  return `Last indexed: ${formatted}${short}`;
+}
+
+export function WikiSidebar({ pages, owner, repo, repoId, lastCommit = "", indexedAt = "" }: Props) {
   const pathname = usePathname();
   const basePath = `/${owner}/${repo}`;
+  const indexedLine = formatIndexedAt(indexedAt, lastCommit);
 
   return (
     <nav className="w-64 shrink-0 border-r h-full overflow-y-auto p-4 bg-slate-50/50">
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-1">
         <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider truncate mr-2">
           {owner}/{repo}
         </p>
         <RefreshButton owner={owner} repo={repo} repoId={repoId} />
       </div>
+      {indexedLine && (
+        <p className="text-secondary pb-1 text-xs">{indexedLine}</p>
+      )}
+      <div className="mt-3" />
       <ul className="space-y-1 mb-4">
         <li>
           <Link

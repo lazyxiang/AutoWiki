@@ -37,11 +37,16 @@ class IndexRequest(BaseModel):
             for this repository and skip Stage 4 (RAG embedding) if the
             index is already present.  Useful for iterating on wiki structure
             without re-embedding the entire codebase.  Defaults to ``False``.
+        reuse_plan (bool): When ``True``, load the existing
+            ``ast/wiki_plan.json`` and skip Stage 5 (Wiki Planner) if the
+            plan file is present.  Useful for iterating on page generation
+            without re-running LLM planning.  Defaults to ``False``.
     """
 
     url: str
     wiki_language: str = "en"
     reuse_index: bool = False
+    reuse_plan: bool = False
 
 
 @router.post("", status_code=202)
@@ -157,6 +162,7 @@ async def submit_repo(req: IndexRequest):
             name,
             wiki_language=req.wiki_language,
             reuse_index=req.reuse_index,
+            reuse_plan=req.reuse_plan,
         )
     except Exception:
         # If Redis is unavailable, mark the job failed immediately so the
@@ -207,7 +213,7 @@ async def list_repos():
         .. code-block:: json
 
             {"repos": [{"id": "a1b2c3d4", "owner": "acme", "name": "core",
-                        "status": "ready"}]}
+                        "status": "ready", "last_commit": "d64759a"}]}
     """
     cfg = get_config()
     async with get_session(str(cfg.database_path)) as s:
@@ -226,6 +232,7 @@ async def list_repos():
                 "default_branch": r.default_branch or "main",
                 "indexed_at": r.indexed_at.isoformat() if r.indexed_at else None,
                 "wiki_language": r.wiki_language or "en",
+                "last_commit": r.last_commit or "",
             }
             for r in repos
         ]
@@ -270,7 +277,8 @@ async def get_repo(repo_id: str):
 
             {"id": "a1b2c3d4e5f6a7b8", "owner": "octocat",
              "name": "hello-world", "status": "ready",
-             "indexed_at": "2024-01-15T12:34:56+00:00"}
+             "indexed_at": "2024-01-15T12:34:56+00:00",
+             "last_commit": "d64759a"}
     """
     cfg = get_config()
     async with get_session(str(cfg.database_path)) as s:
@@ -288,6 +296,7 @@ async def get_repo(repo_id: str):
             "default_branch": repo.default_branch or "main",
             "indexed_at": repo.indexed_at.isoformat() if repo.indexed_at else None,
             "wiki_language": repo.wiki_language or "en",
+            "last_commit": repo.last_commit or "",
         }
 
 

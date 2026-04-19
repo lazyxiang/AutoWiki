@@ -13,20 +13,27 @@ const API_URL =
 
 /**
  * Submits a repository URL for indexing.
- * 
+ *
  * @param url - The GitHub repository URL.
- * @param wikiLanguage - The language for wiki generation (default: "en").
+ * @param options.wikiLanguage - Language for wiki generation (default: "en").
+ * @param options.reuseIndex - Skip Stage 4 and reuse the existing FAISS index (default: false).
+ * @param options.reusePlan - Skip Stage 5 and reuse the existing wiki plan (default: false).
  * @returns A promise resolving to the repository ID, job ID, and status.
  */
 export async function submitRepo(
   url: string,
-  wikiLanguage: string = "en",
-  reuseIndex: boolean = false,
+  options: { wikiLanguage?: string; reuseIndex?: boolean; reusePlan?: boolean } = {},
 ) {
+  const { wikiLanguage = "en", reuseIndex = false, reusePlan = false } = options;
   const res = await fetch(`${API_URL}/api/repos`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url, wiki_language: wikiLanguage, reuse_index: reuseIndex }),
+    body: JSON.stringify({
+      url,
+      wiki_language: wikiLanguage,
+      reuse_index: reuseIndex,
+      reuse_plan: reusePlan,
+    }),
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json() as Promise<{ repo_id: string; job_id: string; status: string }>;
@@ -68,6 +75,7 @@ export async function getRepo(repoId: string): Promise<Repository> {
     indexed_at: indexedAt,
     indexed_at_formatted: repo.indexed_at_formatted || (indexedAt ? new Date(indexedAt).toLocaleString() : "Never"),
     wiki_language: repo.wiki_language || "en",
+    last_commit: repo.last_commit || "",
   };
 }
 /**
@@ -162,6 +170,7 @@ export interface Repository {
   indexed_at: string;
   indexed_at_formatted: string;
   wiki_language: string;
+  last_commit?: string;
 }
 
 /**
@@ -179,6 +188,7 @@ interface RepoRaw {
   indexed_at?: string;
   indexed_at_formatted?: string;
   wiki_language?: string;
+  last_commit?: string;
 }
 
 /**
@@ -258,6 +268,7 @@ export async function getRepositories(): Promise<Repository[]> {
       indexed_at: indexedAt,
       indexed_at_formatted: repo.indexed_at_formatted || (indexedAt ? new Date(indexedAt).toLocaleString() : "Never"),
       wiki_language: repo.wiki_language || "en",
+      last_commit: repo.last_commit || "",
     };
   });
 }
