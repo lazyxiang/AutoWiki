@@ -40,6 +40,25 @@ _DOUBLE_CURLY_RE = re.compile(r"(\b\w+\{\{)([^\"]+)(\}\})")
 # Excludes already-quoted labels (label starting with `"`)
 _EDGE_LABEL_RE = re.compile(r"(\|)([^\"|][^|]*?)(\|)")
 
+# -- Edge-type normalisation -----------------------------------------
+# LLMs sometimes emit  --|"label"|  (undirected line) instead of
+# -->|"label"|  (directed arrow).  Convert  --\|  that is not already
+# preceded by  >  or  -  (so  -->|  and  ---|  are left untouched).
+_UNDIRECTED_LABELED_EDGE_RE = re.compile(r"(?<![->])--(\|)")
+
+# ── Block-opener patterns by diagram type ────────────────────────────
+# Maps the lowercased diagram-type keyword to the regex that matches
+# block-opening keywords for that diagram type.
+_BLOCK_OPENERS_BY_TYPE: dict[str, re.Pattern[str]] = {
+    "flowchart": re.compile(r"^subgraph\b", re.I),
+    "graph": re.compile(r"^subgraph\b", re.I),
+    "sequencediagram": re.compile(r"^(rect|alt|opt|loop|par|critical|break)\b", re.I),
+    # stateDiagram-v2 uses `{ }` braces for composite states — no `end` keyword.
+    # Simple `state "Label" as Id` declarations must not be balanced with `end`.
+    "statediagram": re.compile(r"a^"),
+}
+_FALLBACK_BLOCK_OPENER = re.compile(r"^subgraph\b", re.I)
+
 
 def _is_compound_shape(label: str) -> bool:
     """Return True if *label* is the interior of a compound Mermaid shape.
@@ -131,10 +150,18 @@ def sanitize_mermaid(text: str) -> str:
     - Compound shapes like ``[(text)]``, ``([text])``, ``((text))``,
       ``{{text}}`` are preserved; only the inner text is quoted when
       it contains special characters.
-    - Orphaned ``end`` keywords (an ``end`` with no matching ``subgraph``
-      opening at the same nesting level) are removed; the LLM sometimes
-      emits a node definition followed by ``end`` instead of a proper
-      ``subgraph ... end`` block.
+    - Orphaned ``end`` keywords (an ``end`` with no matching block-opener
+      at the same nesting level) are removed.  The block-opener pattern is
+      diagram-type-aware:
+
+      - ``flowchart`` / ``graph`` → ``subgraph``
+      - ``sequenceDiagram`` → ``rect``, ``alt``, ``opt``, ``loop``,
+        ``par``, ``critical``, ``break``
+      - ``stateDiagram`` → ``state``
+      - Unrecognised diagram types fall back to ``subgraph``.
+
+    - Unclosed blocks (LLM forgot a closing ``end``) are recovered by
+      appending the missing ``end`` lines after the diagram body.
 
     Already-quoted labels are left unchanged.
 
@@ -165,22 +192,46 @@ def sanitize_mermaid(text: str) -> str:
     lines = text.split("\n")
     result: list[str] = []
 
-    # Track subgraph depth so orphaned `end` keywords can be dropped.
-    subgraph_depth = 0
+    # Detect diagram type from the first non-empty line.
+    block_opener = _FALLBACK_BLOCK_OPENER
+    for line in lines:
+        first = line.strip().lower()
+        if first:
+            for dtype, pattern in _BLOCK_OPENERS_BY_TYPE.items():
+                if first.startswith(dtype):
+                    block_opener = pattern
+                    break
+            break
+
+    # Track block depth so orphaned `end` keywords can be dropped.
+    block_depth = 0
 
     for line in lines:
         stripped = line.strip()
 
-        # Count subgraph openings to maintain depth.
-        if re.match(r"subgraph\b", stripped):
-            subgraph_depth += 1
+        # Strip embedded code-fence markers that LLMs sometimes emit before a
+        # node definition, e.g.  ```mermaid text| NodeScanner["..."]
+        # Strip the  ```...|  prefix and keep any Mermaid content that follows.
+        # If nothing remains (plain  ```  or  ```mermaid  with no pipe), drop.
+        if stripped.startswith("```"):
+            remainder = re.sub(r"^```[^|]*\|?\s*", "", stripped)
+            if not remainder:
+                continue
+            line = remainder
+            stripped = remainder
+
+        # Count block openings to maintain depth.
+        if block_opener.match(stripped):
+            block_depth += 1
         elif stripped == "end":
-            if subgraph_depth > 0:
-                subgraph_depth -= 1
+            if block_depth > 0:
+                block_depth -= 1
             else:
-                # Orphaned `end` — no open subgraph to close; drop the line.
+                # Orphaned `end` — no open block to close; drop the line.
                 continue
 
+        # Normalise undirected labelled edges: --|"..."| to -->|"..."|
+        line = _UNDIRECTED_LABELED_EDGE_RE.sub(r"-->|", line)
         # Sanitise edge labels first (|...|)
         line = _EDGE_LABEL_RE.sub(_edge_replacer, line)
         # Handle double-bracket shapes before single-bracket ones
@@ -191,6 +242,10 @@ def sanitize_mermaid(text: str) -> str:
         line = _ROUND_RE.sub(_node_replacer, line)
         line = _CURLY_RE.sub(_node_replacer, line)
         result.append(line)
+
+    # Append missing end keywords for unclosed blocks.
+    for _ in range(block_depth):
+        result.append("end")
 
     return "\n".join(result)
 
@@ -218,9 +273,13 @@ def sanitize_mermaid_blocks(markdown: str) -> str:
         # sanitize_mermaid strips fences, so re-wrap
         return f"{fence_open}\n{sanitized_body}\n{fence_close}"
 
+    # The closing ``` must appear alone at the start of a line (with optional
+    # trailing whitespace) so that triple-backticks embedded mid-line inside a
+    # node label (e.g. `detect ```mermaid code block`) do not prematurely terminate
+    # the block.
     return re.sub(
-        r"(```mermaid)\s*\n(.*?)\n(```)",
+        r"^(```mermaid[ \t]*)\n(.*?)\n^(```)[ \t]*$",
         _replace_block,
         markdown,
-        flags=re.DOTALL,
+        flags=re.DOTALL | re.MULTILINE,
     )

@@ -21,6 +21,13 @@ const DOUBLE_CURLY_RE = /(\b\w+\{\{)([^"]+)(\}\})/g;
 /** Edge label pattern: matches |label| where label is not already quoted. */
 const EDGE_LABEL_RE = /(\|)([^"|][^|]*?)(\|)/g;
 
+/**
+ * Matches undirected labelled edges: --|  that is not already  -->|  or  ---|.
+ * Negative lookbehind excludes  >  and  -  so existing directed arrows and
+ * plain undirected lines are left untouched.
+ */
+const UNDIRECTED_EDGE_RE = /(?<![->])--\|/g;
+
 const COMPOUND_PAIRS: Record<string, string> = { "(": ")", "[": "]", "{": "}" };
 
 function isCompoundShape(label: string): boolean {
@@ -67,13 +74,24 @@ function edgeReplacer(_match: string, open: string, label: string, close: string
  * contain special characters (parentheses, pipes, braces, angle brackets).
  */
 export function sanitizeMermaid(text: string): string {
-  return text.split("\n").map(line => {
-    line = line.replace(EDGE_LABEL_RE, edgeReplacer);
-    line = line.replace(DOUBLE_ROUND_RE, doubleBracketReplacer);
-    line = line.replace(DOUBLE_CURLY_RE, doubleBracketReplacer);
-    line = line.replace(SQUARE_RE, nodeReplacer);
-    line = line.replace(ROUND_RE, nodeReplacer);
-    line = line.replace(CURLY_RE, nodeReplacer);
-    return line;
-  }).join("\n");
+  return text.split("\n")
+    .flatMap(line => {
+      // Strip embedded code-fence markers, e.g. ```mermaid text| NodeScanner["..."]
+      // Keep any Mermaid content that follows the | separator; drop plain ```.
+      if (line.trim().startsWith("```")) {
+        const remainder = line.trim().replace(/^```[^|]*\|?\s*/, "");
+        return remainder ? [remainder] : [];
+      }
+      return [line];
+    })
+    .map(line => {
+      line = line.replace(UNDIRECTED_EDGE_RE, "-->|");
+      line = line.replace(EDGE_LABEL_RE, edgeReplacer);
+      line = line.replace(DOUBLE_ROUND_RE, doubleBracketReplacer);
+      line = line.replace(DOUBLE_CURLY_RE, doubleBracketReplacer);
+      line = line.replace(SQUARE_RE, nodeReplacer);
+      line = line.replace(ROUND_RE, nodeReplacer);
+      line = line.replace(CURLY_RE, nodeReplacer);
+      return line;
+    }).join("\n");
 }

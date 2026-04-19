@@ -311,7 +311,9 @@ _REVISION_SYSTEM = (
     "page title heading (e.g. # Page Title).\n"
     "Keep the total revised page within 2,000–6,000 words; do not expand "
     "sections that are not listed in the issues.\n"
-    "Output the complete revised Markdown page."
+    "Output the complete revised Markdown page.\n"
+    "Never embed fenced code blocks (no ```python, ```js, etc.). The ONLY "
+    "fenced blocks allowed are ```mermaid for diagrams.\n"
 )
 
 _DIAGRAM_REVISION_SYSTEM = (

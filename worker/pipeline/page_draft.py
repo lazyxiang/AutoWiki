@@ -63,6 +63,58 @@ DRAFT_SYSTEM = (
 )
 
 
+def _summarize_child_page(content: str, title: str) -> str:
+    """Return a structured summary of a child page for use in parent prompts.
+
+    Extracts headings, diagram markers, and a brief intro excerpt so the parent
+    LLM knows exactly what is already covered and does not regenerate it.
+    """
+    headings: list[str] = []
+    diagrams: list[str] = []
+    intro: str = ""
+
+    _HEADING_PREFIXES = ("# ", "## ", "### ", "#### ", "##### ", "###### ")
+    _HEADING_EXACT = {"#", "##", "###", "####", "#####", "######"}
+    in_fence = False
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        if stripped in _HEADING_EXACT or stripped.startswith(_HEADING_PREFIXES):
+            if len(headings) < 20:
+                headings.append(stripped)
+        elif stripped.startswith("**Diagram:"):
+            if len(diagrams) < 10:
+                diagrams.append(stripped)
+        elif stripped and not intro:
+            intro = stripped[:200]
+
+    def _clip(value: str, limit: int) -> str:
+        return value if len(value) <= limit else value[: limit - 3].rstrip() + "..."
+
+    heading_items = [_clip(h, 120) for h in headings]
+    diagram_items = [_clip(d, 160) for d in diagrams]
+    sections_str = ", ".join(heading_items) if heading_items else "(none)"
+    # Diagrams are placed before the potentially-verbose sections list so they
+    # survive the 2000-char hard cap.
+    parts = [f'### Child: "{title}"']
+    if diagram_items:
+        parts.append("Diagrams already in this page:")
+        parts.extend(f"  - {d}" for d in diagram_items)
+    else:
+        parts.append("Diagrams already in this page: (none)")
+    parts.append(f"Sections covered: {sections_str}")
+    parts.append(f"Intro: {_clip(intro, 200)}")
+
+    summary = "\n".join(parts)
+    if len(summary) > 2000:
+        summary = summary[:1997].rstrip() + "..."
+    return summary
+
+
 def build_draft_prompt(
     spec: WikiPageSpec,
     outline: PageOutline,
@@ -128,23 +180,18 @@ def build_draft_prompt(
     )
 
     if child_contents:
-        child_sections = []
-        for child in child_contents:
-            # Truncate child content to avoid unbounded parent prompts
-            _max_child = 1000
-            excerpt = child.content[:_max_child]
-            if len(child.content) > _max_child:
-                excerpt += "\n... (truncated)"
-            child_sections.append(f'### Child: "{child.title}"\n{excerpt}')
+        child_summaries = [
+            _summarize_child_page(child.content, child.title)
+            for child in child_contents
+        ]
         cached_parts.append(
             "## Child Pages (already generated)\n"
-            "The following child pages have been written. Your role is to "
-            "SYNTHESIZE and CONNECT — provide the high-level narrative, "
-            "explain how these components relate, and add context that "
-            "individual pages cannot provide. Do NOT repeat details covered "
-            "in child pages; reference them instead.\n\n"
-            + "\n\n".join(child_sections)
-            + "\n"
+            "The following child pages have been written. "
+            "The sections and diagrams listed below are ALREADY covered — "
+            "do NOT recreate these diagrams or restate these sections. "
+            "Your role is to SYNTHESIZE and CONNECT: provide the high-level narrative, "
+            "explain how these components relate, and add architectural context that "
+            "individual pages cannot provide.\n\n" + "\n\n".join(child_summaries) + "\n"
         )
 
     # ── Variable tail: outline + instructions ──

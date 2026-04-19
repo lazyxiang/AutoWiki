@@ -253,6 +253,104 @@ class TestSanitizeMermaidBlocks:
 # ── Edge cases ───────────────────────────────────────────────────────
 
 
+class TestUndirectedEdgeNormalisation:
+    """--|"label"| should be converted to -->|"label"|."""
+
+    def test_undirected_labeled_edge_converted(self):
+        result = sanitize_mermaid('E --|"fail"| F')
+        assert 'E -->|"fail"| F' == result
+
+    def test_directed_edge_unchanged(self):
+        result = sanitize_mermaid('E -->|"fail"| F')
+        assert 'E -->|"fail"| F' == result
+
+    def test_triple_dash_unchanged(self):
+        result = sanitize_mermaid('A ---|"label"| B')
+        assert 'A ---|"label"| B' == result
+
+    def test_unquoted_undirected_edge_converted_and_quoted(self):
+        # --|fail (x)| -- undirected edge with special char in label
+        result = sanitize_mermaid("E --|fail (x)| F")
+        assert '-->|"fail (x)"|' in result
+
+    def test_full_decision_diagram(self):
+        diagram = (
+            "flowchart TD\n"
+            "    D --> E{Issue?}\n"
+            '    E --|"fail"| F["Revision"]\n'
+            '    E --|"pass"| G\n'
+        )
+        result = sanitize_mermaid(diagram)
+        assert '-->|"fail"|' in result
+        assert '-->|"pass"|' in result
+
+
+class TestEmbeddedCodeFenceRemoval:
+    """Lines starting with ``` are stripped of their prefix; content after | is kept."""
+
+    def test_plain_fence_dropped(self):
+        diagram = "flowchart TD\n    A --> B\n```\n    B --> C"
+        result = sanitize_mermaid(diagram)
+        assert "```" not in result
+
+    def test_fence_without_pipe_dropped(self):
+        diagram = "flowchart TD\n    A --> B\n```mermaid extra content\n    B --> C\n"
+        result = sanitize_mermaid(diagram)
+        assert "```" not in result
+        assert "A --> B" in result
+        assert "B --> C" in result
+
+    def test_fence_with_pipe_keeps_node_definition(self):
+        # ```mermaid text| NodeScanner["..."] -- node definition after | is kept.
+        diagram = (
+            "flowchart TD\n"
+            "    A --> B\n"
+            '```mermaid text| NodeScanner["label"]\n'
+            "    NodeScanner --> C\n"
+        )
+        result = sanitize_mermaid(diagram)
+        assert "```" not in result
+        assert 'NodeScanner["label"]' in result
+        assert "NodeScanner --> C" in result
+
+
+class TestSanitizeMermaidBlocksClosingFence:
+    """Closing ``` must appear alone at the start of a line.
+
+    The key regression: a line like  ```mermaid text| NodeScanner[...]  starts
+    with  ```  but has trailing text, so the old lazy  \\n(```)  pattern closed
+    the block there, cutting off the rest of the diagram.  The new pattern
+    requires  ^(```)[ \\t]*$  (nothing after the backticks).
+    """
+
+    def test_backtick_in_node_label_mid_line_not_premature_close(self):
+        # ``` appears INSIDE a node label mid-line, not at line start -- always fine.
+        md = (
+            "```mermaid\n"
+            "flowchart TD\n"
+            '    A["detect ```mermaid code block"] --> B\n'
+            "    B --> C\n"
+            "```\n"
+        )
+        result = sanitize_mermaid_blocks(md)
+        assert "B --> C" in result
+
+    def test_fence_with_trailing_text_not_premature_close(self):
+        # ``` at start of a line but with extra text (```mermaid text| ...).
+        # Old regex closed the block here; new regex skips it.
+        md = (
+            "```mermaid\n"
+            "flowchart TD\n"
+            "    A --> B\n"
+            "```mermaid text| extra\n"
+            "    B --> C\n"
+            "```\n"
+        )
+        result = sanitize_mermaid_blocks(md)
+        assert "A --> B" in result
+        assert "B --> C" in result
+
+
 class TestEdgeCases:
     def test_empty_string(self):
         assert sanitize_mermaid("") == ""
@@ -331,3 +429,91 @@ class TestOrphanedEnd:
         result = sanitize_mermaid(diagram)
         assert result.count("end") == 1
         assert "subgraph Auth" in result
+
+
+class TestSequenceDiagramEndHandling:
+    """sequenceDiagram block-openers (rect/alt/opt/loop/par/critical/break) need end."""
+
+    def test_rect_end_preserved(self):
+        """A sequenceDiagram with a single rect...end block keeps the end."""
+        diagram = (
+            "sequenceDiagram\n"
+            "    participant A\n"
+            "    participant B\n"
+            "    rect rgb(200, 220, 255)\n"
+            "        A->>B: Hello\n"
+            "    end"
+        )
+        result = sanitize_mermaid(diagram)
+        assert "end" in [line.strip() for line in result.splitlines()]
+
+    def test_alt_else_end_preserved(self):
+        """A sequenceDiagram with alt...else...end keeps end and passes else through."""
+        diagram = (
+            "sequenceDiagram\n"
+            "    A->>B: Request\n"
+            "    alt success\n"
+            "        B->>A: 200 OK\n"
+            "    else failure\n"
+            "        B->>A: 500 Error\n"
+            "    end"
+        )
+        result = sanitize_mermaid(diagram)
+        lines = [line.strip() for line in result.splitlines()]
+        assert "end" in lines
+        assert any(line.startswith("else") for line in lines)
+
+    def test_unclosed_rect_balanced(self):
+        """A sequenceDiagram with an unclosed rect gets an end appended."""
+        diagram = (
+            "sequenceDiagram\n"
+            "    participant A\n"
+            "    rect rgb(200, 220, 255)\n"
+            "        A->>A: Internal"
+        )
+        result = sanitize_mermaid(diagram)
+        assert result.strip().endswith("end")
+
+    def test_nested_rect_both_ends_preserved(self):
+        """Two nested rect blocks in a sequenceDiagram preserve both end lines."""
+        diagram = (
+            "sequenceDiagram\n"
+            "    rect rgb(200, 220, 255)\n"
+            "        rect rgb(255, 200, 200)\n"
+            "            A->>B: Nested\n"
+            "        end\n"
+            "    end"
+        )
+        result = sanitize_mermaid(diagram)
+        assert result.count("end") == 2
+
+    def test_flowchart_orphaned_end_still_dropped(self):
+        """Regression: a flowchart with a stray end (no subgraph) still drops it."""
+        diagram = (
+            "flowchart LR\n"
+            '    NodeA["Session Request"]\n'
+            "        NodeA --> NodeB\n"
+            "    end\n"
+            '    NodeC["Cleanup"]'
+        )
+        result = sanitize_mermaid(diagram)
+        assert "end" not in [line.strip() for line in result.splitlines()]
+
+
+class TestStateDiagramEndHandling:
+    """stateDiagram-v2 uses braces for composite states, not end keywords."""
+
+    def test_state_declaration_does_not_append_end(self):
+        """Simple state declarations must not be balanced with end."""
+        diagram = (
+            "stateDiagram-v2\n"
+            '    state "Pending Review" as Pending\n'
+            "    [*] --> Pending"
+        )
+        assert sanitize_mermaid(diagram) == diagram
+
+    def test_orphaned_end_in_state_diagram_dropped(self):
+        """An orphaned end in a stateDiagram (no open block) is dropped."""
+        diagram = "stateDiagram-v2\n    [*] --> Active\n    end\n    Active --> [*]"
+        result = sanitize_mermaid(diagram)
+        assert "end" not in [line.strip() for line in result.splitlines()]

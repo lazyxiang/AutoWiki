@@ -211,6 +211,52 @@ describe("full diagram — edge label issue", () => {
   });
 });
 
+// -- Undirected edge normalisation -----------------------------------
+
+describe("undirected edge normalisation", () => {
+  it("converts --|label| to -->|label|", () => {
+    expect(sanitizeMermaid('E --|"fail"| F')).toBe('E -->|"fail"| F');
+  });
+
+  it("leaves -->|label| unchanged", () => {
+    expect(sanitizeMermaid('E -->|"fail"| F')).toBe('E -->|"fail"| F');
+  });
+
+  it("leaves ---|label| unchanged", () => {
+    expect(sanitizeMermaid('A ---|"label"| B')).toBe('A ---|"label"| B');
+  });
+
+  it("converts and quotes unquoted undirected edge with special chars", () => {
+    const result = sanitizeMermaid("E --|fail (x)| F");
+    expect(result).toContain('-->|"fail (x)"|');
+  });
+});
+
+// -- Embedded code-fence removal -------------------------------------
+
+describe("embedded code-fence removal", () => {
+  it("drops plain triple-backtick lines", () => {
+    const input = "flowchart TD\n    A --> B\n```\n    B --> C";
+    expect(sanitizeMermaid(input)).not.toContain("```");
+  });
+
+  it("drops fence line with no pipe separator", () => {
+    const input = "flowchart TD\n    A --> B\n```mermaid extra\n    B --> C";
+    const result = sanitizeMermaid(input);
+    expect(result).not.toContain("```");
+    expect(result).toContain("A --> B");
+    expect(result).toContain("B --> C");
+  });
+
+  it("keeps node definition after pipe in fence line", () => {
+    const input = 'flowchart TD\n    A --> B\n```mermaid text| NodeScanner["label"]\n    NodeScanner --> C';
+    const result = sanitizeMermaid(input);
+    expect(result).not.toContain("```");
+    expect(result).toContain('NodeScanner["label"]');
+    expect(result).toContain("NodeScanner --> C");
+  });
+});
+
 // ── Edge cases ───────────────────────────────────────────────────────
 
 describe("edge cases", () => {
