@@ -21,6 +21,7 @@ final draft.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -353,7 +354,13 @@ async def generate_page_batch(
             repo_notes=repo_notes,
         )
 
-    sem = asyncio.Semaphore(4)
+    try:
+        _concurrency = int(os.getenv("AUTOWIKI_PAGE_CONCURRENCY", "4"))
+        if _concurrency < 1:
+            _concurrency = 4
+    except ValueError:
+        _concurrency = 4
+    sem = asyncio.Semaphore(_concurrency)
 
     async def _bounded(
         spec: WikiPageSpec, children: list[PageResult] | None

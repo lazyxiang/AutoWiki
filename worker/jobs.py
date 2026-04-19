@@ -336,6 +336,10 @@ async def run_full_index(
             and skip Stage 4 (RAG Indexer) if the index file is present.
             Useful for iterating on wiki structure without re-embedding.
             Defaults to ``False``.
+        reuse_plan (bool): When ``True``, skip Stage 5 (Wiki Planner) and
+            load ``ast/wiki_plan.json`` directly if it exists.  User-edited
+            ``page_notes`` from ``wiki/wiki.json`` are preserved.
+            Defaults to ``False``.
 
     Returns:
         None
@@ -525,6 +529,20 @@ async def run_full_index(
                 None, wiki_plan_path.read_text
             )
             plan_data = json.loads(plan_raw)
+            # Preserve user-edited page_notes from wiki.json
+            # (not stored in wiki_plan.json)
+            saved_page_notes: dict[str, list[dict]] = {}
+            wiki_json_path = wiki_dir / "wiki.json"
+            if wiki_json_path.exists():
+                try:
+                    wj_raw = await asyncio.get_running_loop().run_in_executor(
+                        None, wiki_json_path.read_text
+                    )
+                    for wp in json.loads(wj_raw).get("pages", []):
+                        if "title" in wp and "page_notes" in wp:
+                            saved_page_notes[wp["title"]] = wp["page_notes"]
+                except Exception:
+                    pass
             plan = WikiPlan(
                 repo_notes=plan_data.get("repo_notes", [{"content": ""}]),
                 all_repo_files=plan_data.get("all_repo_files", []),
@@ -534,6 +552,7 @@ async def run_full_index(
                         purpose=p.get("purpose", ""),
                         parent=p.get("parent"),
                         files=p.get("files", []),
+                        page_notes=saved_page_notes.get(p["title"], [{"content": ""}]),
                     )
                     for p in plan_data.get("pages", [])
                 ],

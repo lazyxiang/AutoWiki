@@ -213,7 +213,7 @@ async def list_repos():
         .. code-block:: json
 
             {"repos": [{"id": "a1b2c3d4", "owner": "acme", "name": "core",
-                        "status": "ready"}]}
+                        "status": "ready", "last_commit": "d64759a"}]}
     """
     cfg = get_config()
     async with get_session(str(cfg.database_path)) as s:
@@ -277,7 +277,8 @@ async def get_repo(repo_id: str):
 
             {"id": "a1b2c3d4e5f6a7b8", "owner": "octocat",
              "name": "hello-world", "status": "ready",
-             "indexed_at": "2024-01-15T12:34:56+00:00"}
+             "indexed_at": "2024-01-15T12:34:56+00:00",
+             "last_commit": "d64759a"}
     """
     cfg = get_config()
     async with get_session(str(cfg.database_path)) as s:

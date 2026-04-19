@@ -13,17 +13,18 @@ const API_URL =
 
 /**
  * Submits a repository URL for indexing.
- * 
+ *
  * @param url - The GitHub repository URL.
- * @param wikiLanguage - The language for wiki generation (default: "en").
+ * @param options.wikiLanguage - Language for wiki generation (default: "en").
+ * @param options.reuseIndex - Skip Stage 4 and reuse the existing FAISS index (default: false).
+ * @param options.reusePlan - Skip Stage 5 and reuse the existing wiki plan (default: false).
  * @returns A promise resolving to the repository ID, job ID, and status.
  */
 export async function submitRepo(
   url: string,
-  wikiLanguage: string = "en",
-  reuseIndex: boolean = false,
-  reusePlan: boolean = false,
+  options: { wikiLanguage?: string; reuseIndex?: boolean; reusePlan?: boolean } = {},
 ) {
+  const { wikiLanguage = "en", reuseIndex = false, reusePlan = false } = options;
   const res = await fetch(`${API_URL}/api/repos`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

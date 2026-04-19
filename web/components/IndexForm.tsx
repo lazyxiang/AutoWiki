@@ -22,7 +22,7 @@ export function IndexForm({ wikiLanguage = "en", reuseIndex = false, reusePlan =
     setLoading(true);
     setError("");
     try {
-      const { repo_id, job_id } = await submitRepo(url, wikiLanguage, reuseIndex, reusePlan);
+      const { repo_id, job_id } = await submitRepo(url, { wikiLanguage, reuseIndex, reusePlan });
       const match = url.replace(/^https?:\/\//, "").match(/github\.com\/([^/]+)\/([^/]+)/);
       const owner = match?.[1] ?? "";
       const repo = match?.[2]?.replace(/\.git$/, "") ?? "";

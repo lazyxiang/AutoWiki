@@ -23,10 +23,12 @@ interface Props {
 function formatIndexedAt(isoDate: string, sha: string): string | null {
   if (!isoDate) return null;
   const date = new Date(isoDate);
+  if (Number.isNaN(date.getTime())) return null;
   const formatted = date.toLocaleDateString("en-GB", {
     day: "numeric",
     month: "long",
     year: "numeric",
+    timeZone: "UTC",
   });
   const short = sha ? ` (${sha.slice(0, 7)})` : "";
   return `Last indexed: ${formatted}${short}`;
