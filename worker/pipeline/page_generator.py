@@ -353,7 +353,7 @@ async def generate_page_batch(
             repo_notes=repo_notes,
         )
 
-    sem = asyncio.Semaphore(2)
+    sem = asyncio.Semaphore(4)
 
     async def _bounded(
         spec: WikiPageSpec, children: list[PageResult] | None
