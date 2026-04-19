@@ -68,6 +68,7 @@ export async function getRepo(repoId: string): Promise<Repository> {
     indexed_at: indexedAt,
     indexed_at_formatted: repo.indexed_at_formatted || (indexedAt ? new Date(indexedAt).toLocaleString() : "Never"),
     wiki_language: repo.wiki_language || "en",
+    last_commit: repo.last_commit || "",
   };
 }
 /**
@@ -162,6 +163,7 @@ export interface Repository {
   indexed_at: string;
   indexed_at_formatted: string;
   wiki_language: string;
+  last_commit?: string;
 }
 
 /**
@@ -179,6 +181,7 @@ interface RepoRaw {
   indexed_at?: string;
   indexed_at_formatted?: string;
   wiki_language?: string;
+  last_commit?: string;
 }
 
 /**
@@ -258,6 +261,7 @@ export async function getRepositories(): Promise<Repository[]> {
       indexed_at: indexedAt,
       indexed_at_formatted: repo.indexed_at_formatted || (indexedAt ? new Date(indexedAt).toLocaleString() : "Never"),
       wiki_language: repo.wiki_language || "en",
+      last_commit: repo.last_commit || "",
     };
   });
 }
