@@ -13,6 +13,12 @@ Self-hosted, open-source AI-powered wiki generator for GitHub repositories. Poin
 
 The result is served via a REST API and displayed in a Next.js web UI with sidebar navigation and a conversational Q&A chat interface.
 
+## Documentation
+
+- [Configuration](docs/configuration.md)
+- [CLI](docs/cli.md)
+- [API](docs/api.md)
+
 ---
 
 ## Quick start
@@ -100,8 +106,6 @@ GOOGLE_API_KEY=AIzaSy... docker-compose up
 ```
 
 Persistent data (SQLite, FAISS index, clones, wiki Markdown) is stored in the `autowiki_data` Docker volume.
-
----
 
 ## Development
 

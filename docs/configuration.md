@@ -7,7 +7,7 @@ AutoWiki resolves config in this order (highest wins):
 3. `~/.autowiki/autowiki.yml`
 4. Built-in defaults
 
-### Key environment variables
+## Key environment variables
 
 | Variable | Default | Description |
 |---|---|---|
@@ -26,7 +26,7 @@ AutoWiki resolves config in this order (highest wins):
 | `DATABASE_PATH` | `~/.autowiki/autowiki.db` | SQLite database path |
 | `AUTOWIKI_DATA_DIR` | `~/.autowiki` | Root directory for clones, indexes, and wiki files |
 
-### YAML config file
+## YAML config file
 
 ```yaml
 # autowiki.yml (or ~/.autowiki/autowiki.yml)
