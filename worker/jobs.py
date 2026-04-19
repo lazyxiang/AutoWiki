@@ -545,7 +545,7 @@ async def run_full_index(
                     pass
             plan = WikiPlan(
                 repo_notes=plan_data.get("repo_notes", [{"content": ""}]),
-                all_repo_files=plan_data.get("all_repo_files", []),
+                all_repo_files=sorted(file_analysis.files.keys()),
                 pages=[
                     WikiPageSpec(
                         title=p["title"],
