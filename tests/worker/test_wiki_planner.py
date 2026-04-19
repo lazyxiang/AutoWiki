@@ -76,12 +76,26 @@ def test_validate_wiki_plan_basic():
 
 
 def test_validate_wiki_plan_invalid_parent_dropped():
+    # Two top-level subsystems + one child with a dangling parent reference.
+    # The dangling parent is dropped (page becomes top-level), which is the
+    # behavior under test; max_depth stays 2 because Overview has a valid parent.
     raw = {
         "pages": [
             {
-                "title": "Overview",
-                "purpose": "Top level page.",
+                "title": "Core",
+                "purpose": "Core subsystem.",
                 "files": ["main.py"],
+            },
+            {
+                "title": "API",
+                "purpose": "API subsystem.",
+                "files": ["api.py"],
+            },
+            {
+                "title": "Overview",
+                "purpose": "Overview page.",
+                "parent": "Core",
+                "files": ["overview.py"],
             },
             {
                 "title": "Details",
@@ -312,9 +326,10 @@ async def test_generate_outline(mock_llm):
     mock_llm.generate_structured.side_effect = None
     mock_llm.generate_structured.return_value = {
         "pages": [
-            {"title": "Overview", "purpose": "Top-level overview."},
-            {"title": "API", "purpose": "REST API.", "parent": "Overview"},
-            {"title": "Worker", "purpose": "Background jobs.", "parent": "Overview"},
+            {"title": "Core", "purpose": "Core subsystem."},
+            {"title": "Infra", "purpose": "Infrastructure subsystem."},
+            {"title": "API", "purpose": "REST API.", "parent": "Core"},
+            {"title": "Worker", "purpose": "Background jobs.", "parent": "Infra"},
         ]
     }
     outline = await _generate_outline(
@@ -328,9 +343,9 @@ async def test_generate_outline(mock_llm):
         system="You are a planner.",
         on_retry=None,
     )
-    assert len(outline) == 3
-    assert outline[0]["title"] == "Overview"
-    assert outline[1].get("parent") == "Overview"
+    assert len(outline) == 4
+    assert outline[0]["title"] == "Core"
+    assert outline[2].get("parent") == "Core"
 
 
 async def test_assign_files(mock_llm):
@@ -437,15 +452,27 @@ def test_validate_allows_empty_parent_page():
 
 
 def test_validate_allows_empty_overview_page():
-    """Overview page with 0 files is allowed (orphans get assigned to it)."""
+    """Overview page with 0 files is allowed (parent pages need no files)."""
     raw = {
         "pages": [
             {"title": "Overview", "purpose": "Top.", "files": []},
-            {"title": "API", "purpose": "Endpoints.", "files": ["api.py"]},
+            {"title": "Backend", "purpose": "Backend subsystem.", "files": []},
+            {
+                "title": "API",
+                "purpose": "Endpoints.",
+                "parent": "Overview",
+                "files": ["api.py"],
+            },
+            {
+                "title": "Core",
+                "purpose": "Core logic.",
+                "parent": "Backend",
+                "files": ["core.py"],
+            },
         ]
     }
     plan = validate_wiki_plan(raw)
-    assert len(plan.pages) == 2
+    assert len(plan.pages) == 4
 
 
 def test_validate_rejects_too_deep_hierarchy():
@@ -454,31 +481,26 @@ def test_validate_rejects_too_deep_hierarchy():
             {"title": "L0", "purpose": ".", "files": ["a.py"]},
             {"title": "L1", "purpose": ".", "parent": "L0", "files": ["b.py"]},
             {"title": "L2", "purpose": ".", "parent": "L1", "files": ["c.py"]},
-            {"title": "L3", "purpose": ".", "parent": "L2", "files": ["d.py"]},
-            {"title": "L4", "purpose": ".", "parent": "L3", "files": ["e.py"]},
         ]
     }
-    with pytest.raises(ValueError, match="flatten to at most 4 levels"):
+    with pytest.raises(ValueError, match="use exactly 2 levels"):
         validate_wiki_plan(raw)
 
 
-def test_validate_allows_4_level_hierarchy():
-    """Hierarchy at exactly 4 levels deep should pass."""
+def test_validate_allows_2_level_hierarchy():
+    """Hierarchy at exactly 2 levels deep should pass."""
     raw = {
         "pages": [
             {"title": "L0", "purpose": ".", "files": ["a.py"]},
             {"title": "L1", "purpose": ".", "parent": "L0", "files": ["b.py"]},
-            {"title": "L2", "purpose": ".", "parent": "L1", "files": ["c.py"]},
-            {"title": "L3", "purpose": ".", "parent": "L2", "files": ["d.py"]},
         ]
     }
     plan = validate_wiki_plan(raw)
-    assert len(plan.pages) == 4
+    assert len(plan.pages) == 2
 
 
 def test_validate_rejects_flat_plan_for_large_repo():
-    # Use ≤10 files per page to avoid the "overloaded" check;
-    # enough total files (35) to trigger the hierarchy check.
+    # Any multi-page plan with all pages at top level must be rejected.
     page1_files = [f"f{i}.py" for i in range(10)]
     page2_files = [f"g{i}.py" for i in range(10)]
     raw = {
@@ -488,23 +510,26 @@ def test_validate_rejects_flat_plan_for_large_repo():
         ]
     }
     all_files = [f"f{i}.py" for i in range(20)] + [f"g{i}.py" for i in range(15)]
-    with pytest.raises(ValueError, match="create 2-3 levels of hierarchy"):
+    with pytest.raises(ValueError, match="All pages are top-level"):
         validate_wiki_plan(raw, all_files=all_files)
 
 
 def test_validate_rejects_too_few_pages():
-    # Use ≤10 files per page to avoid the "overloaded" check;
-    # supply enough pages to exercise the too-few-pages validation.
+    # Valid 2-level structure but fewer pages than the required minimum.
     raw = {
         "pages": [
+            {"title": "Core", "purpose": ".", "files": []},
+            {"title": "Infra", "purpose": ".", "files": []},
             {
-                "title": "Overview",
+                "title": "API",
                 "purpose": ".",
+                "parent": "Core",
                 "files": [f"f{i}.py" for i in range(5)],
             },
             {
-                "title": "Core",
+                "title": "Utils",
                 "purpose": ".",
+                "parent": "Infra",
                 "files": [f"g{i}.py" for i in range(5)],
             },
         ]
@@ -530,11 +555,11 @@ async def test_generate_outline_logs_each_validation_failure(caplog):
     }
     good = {
         "pages": [
-            {"title": "Overview", "purpose": "Top"},
-            {"title": "Core", "purpose": "Core logic", "parent": "Overview"},
-            {"title": "Utils", "purpose": "Helpers", "parent": "Overview"},
-            {"title": "API", "purpose": "Routes", "parent": "Overview"},
-            {"title": "Tests", "purpose": "Tests", "parent": "Overview"},
+            {"title": "Core", "purpose": "Core subsystem"},
+            {"title": "API", "purpose": "API subsystem"},
+            {"title": "Models", "purpose": "Data models", "parent": "Core"},
+            {"title": "Utils", "purpose": "Helpers", "parent": "Core"},
+            {"title": "Routes", "purpose": "HTTP routes", "parent": "API"},
         ]
     }
     llm = AsyncMock()
@@ -566,20 +591,20 @@ async def test_generate_wiki_plan_two_phase(mock_llm):
     """generate_wiki_plan uses two-phase planning."""
     # Phase 1 returns outline, Phase 2 returns assignments
     mock_llm.generate_structured.side_effect = [
-        # Phase 1: outline
+        # Phase 1: outline — 2-level hierarchy
         {
             "pages": [
-                {"title": "Overview", "purpose": "Top-level overview."},
-                {"title": "Models", "purpose": "Data models."},
-                {"title": "Utilities", "purpose": "Utility helpers."},
+                {"title": "Core", "purpose": "Core subsystem."},
+                {"title": "Infra", "purpose": "Infrastructure subsystem."},
+                {"title": "Models", "purpose": "Data models.", "parent": "Core"},
+                {"title": "Utils", "purpose": "Utility helpers.", "parent": "Infra"},
             ]
         },
         # Phase 2: file selection
         {
             "selections": [
-                {"page_title": "Overview", "files": ["main.py"]},
-                {"page_title": "Models", "files": ["models.py"]},
-                {"page_title": "Utilities", "files": ["utils.py"]},
+                {"page_title": "Models", "files": ["main.py", "models.py"]},
+                {"page_title": "Utils", "files": ["utils.py"]},
             ]
         },
     ]
@@ -592,12 +617,10 @@ async def test_generate_wiki_plan_two_phase(mock_llm):
         }
     )
     plan = await generate_wiki_plan(file_analysis, repo_name="test", llm=mock_llm)
-    assert len(plan.pages) == 3
-    assert {p.title for p in plan.pages} == {"Overview", "Models", "Utilities"}
+    assert len(plan.pages) == 4
+    assert {p.title for p in plan.pages} == {"Core", "Infra", "Models", "Utils"}
     titles = [p.title for p in plan.pages]
-    assert plan.pages[titles.index("Overview")].files == ["main.py"]
-    assert plan.pages[titles.index("Models")].files == ["models.py"]
-    assert plan.pages[titles.index("Utilities")].files == ["utils.py"]
+    assert plan.pages[titles.index("Utils")].files == ["utils.py"]
 
 
 async def test_assign_files_logs_each_validation_failure_and_feedback(caplog):
@@ -665,7 +688,12 @@ async def test_generate_wiki_plan_phase2_recovery(mock_llm):
         "pages": [
             {"title": "Worker Pipeline", "purpose": "Pipeline stages."},
             {"title": "API Layer", "purpose": "REST and WebSocket endpoints."},
-            {"title": "Overview", "purpose": "Main entrance."},
+            {
+                "title": "Pipeline Stages",
+                "purpose": "Individual stages.",
+                "parent": "Worker Pipeline",
+            },
+            {"title": "Endpoints", "purpose": "HTTP routes.", "parent": "API Layer"},
         ]
     }
     all_files = [
@@ -783,104 +811,27 @@ def test_build_outline_prompt_without_anchors_unchanged():
     assert "Architectural anchors" not in prompt
 
 
-# ── Stage B: secondary_files ──────────────────────────────────────────────
-
-
-def test_wiki_page_spec_has_secondary_files():
-    """WikiPageSpec must carry an optional secondary_files list."""
-    spec = WikiPageSpec(
-        title="Core",
-        purpose="Core",
-        files=["a.py"],
-        secondary_files=["shared/utils.py"],
-    )
-    assert spec.files == ["a.py"]
-    assert spec.secondary_files == ["shared/utils.py"]
-
-
-def test_wiki_page_spec_secondary_files_default_empty():
-    spec = WikiPageSpec(title="Core", purpose="p")
-    assert spec.secondary_files == []
-
-
-def test_to_internal_json_roundtrips_secondary_files():
-    plan = WikiPlan(
-        pages=[
-            WikiPageSpec(
-                title="Core",
-                purpose="p",
-                files=["a.py"],
-                secondary_files=["b.py"],
-            )
-        ]
-    )
+def test_to_internal_json_roundtrips_files():
+    plan = WikiPlan(pages=[WikiPageSpec(title="Core", purpose="p", files=["a.py"])])
     payload = plan.to_internal_json()
     page = payload["pages"][0]
     assert page["files"] == ["a.py"]
-    assert page["secondary_files"] == ["b.py"]
+    assert "secondary_files" not in page
 
 
-def test_to_wiki_json_omits_secondary_files():
-    """wiki.json is user-facing: secondary assignment must not appear."""
-    plan = WikiPlan(
-        pages=[
-            WikiPageSpec(
-                title="Core",
-                purpose="p",
-                files=["a.py"],
-                secondary_files=["b.py"],
-            )
-        ]
-    )
+def test_to_wiki_json_omits_files():
+    """wiki.json is user-facing: file assignments must not appear."""
+    plan = WikiPlan(pages=[WikiPageSpec(title="Core", purpose="p", files=["a.py"])])
     payload = plan.to_wiki_json()
     page = payload["pages"][0]
     assert "files" not in page
-    assert "secondary_files" not in page
 
 
-def test_to_api_structure_exposes_secondary_file_count_only():
-    plan = WikiPlan(
-        pages=[
-            WikiPageSpec(
-                title="Core",
-                purpose="p",
-                files=["a.py"],
-                secondary_files=["b.py", "c.py"],
-            )
-        ]
-    )
+def test_to_api_structure_no_secondary_file_count():
+    plan = WikiPlan(pages=[WikiPageSpec(title="Core", purpose="p", files=["a.py"])])
     page = plan.to_api_structure()["pages"][0]
-    assert page["secondary_file_count"] == 2
+    assert "secondary_file_count" not in page
     assert "secondary_files" not in page
-
-
-def test_validate_wiki_plan_considers_secondary_assignment_for_orphans():
-    """A file that is secondary on some page still counts as assigned."""
-    from worker.pipeline.wiki_planner import validate_wiki_plan
-
-    raw = {
-        "pages": [
-            {
-                "title": "Overview",
-                "purpose": "top",
-                "files": ["x.py"],
-                "secondary_files": [],
-            },
-            {
-                "title": "Core",
-                "purpose": "core",
-                "files": ["core.py"],
-                "secondary_files": ["shared.py"],
-            },
-        ]
-    }
-    plan = validate_wiki_plan(raw, all_files=["x.py", "core.py", "shared.py"])
-    # ``shared.py`` must NOT be appended to Overview as an orphan because
-    # it's already referenced as secondary on Core.
-    overview = next(p for p in plan.pages if p.title == "Overview")
-    assert "shared.py" not in overview.files
-    core = next(p for p in plan.pages if p.title == "Core")
-    assert core.secondary_files == ["shared.py"]
 
 
 async def test_generate_wiki_plan_with_clone_root(mock_llm):
@@ -897,15 +848,15 @@ async def test_generate_wiki_plan_with_clone_root(mock_llm):
     mock_llm.generate_structured.side_effect = [
         {
             "pages": [
-                {"title": "Overview", "purpose": "Top-level overview."},
-                {"title": "Models", "purpose": "Data models."},
-                {"title": "Utils", "purpose": "Utility helpers."},
+                {"title": "Core", "purpose": "Core subsystem."},
+                {"title": "Infra", "purpose": "Infrastructure."},
+                {"title": "Models", "purpose": "Data models.", "parent": "Core"},
+                {"title": "Utils", "purpose": "Utility helpers.", "parent": "Infra"},
             ]
         },
         {
             "selections": [
-                {"page_title": "Overview", "files": ["main.py"]},
-                {"page_title": "Models", "files": ["models.py"]},
+                {"page_title": "Models", "files": ["main.py", "models.py"]},
                 {"page_title": "Utils", "files": ["utils.py"]},
             ]
         },
@@ -918,9 +869,9 @@ async def test_generate_wiki_plan_with_clone_root(mock_llm):
         clone_root=fixture_root,
     )
 
-    assert len(plan.pages) == 3
+    assert len(plan.pages) == 4
     titles = {p.title for p in plan.pages}
-    assert titles == {"Overview", "Models", "Utils"}
+    assert titles == {"Core", "Infra", "Models", "Utils"}
     # The outline prompt received by Phase 1 should have included an anchors block;
     # verify the plan was produced (anchors don't appear in plan output, but the
     # call must complete without error and produce a valid plan).
@@ -1121,19 +1072,19 @@ async def test_generate_wiki_plan_uses_selection_model(mock_llm):
         }
     )
 
-    # Phase 1: outline response — must have >= 3 pages for the small-repo validator
+    # Phase 1: outline response — 2-level hierarchy with 2 subsystems
     outline_response = {
         "pages": [
-            {"title": "Overview", "purpose": "Project overview."},
-            {"title": "API", "purpose": "REST endpoints.", "parent": "Overview"},
-            {"title": "Worker", "purpose": "Background jobs.", "parent": "Overview"},
+            {"title": "API", "purpose": "REST endpoints."},
+            {"title": "Backend", "purpose": "Background processing."},
+            {"title": "Routes", "purpose": "HTTP route handlers.", "parent": "API"},
+            {"title": "Worker", "purpose": "Background jobs.", "parent": "Backend"},
         ]
     }
     # Phase 2: selection response — tests/test_api.py intentionally omitted
     selection_response = {
         "selections": [
-            {"page_title": "Overview", "files": ["api/routes.py"]},
-            {"page_title": "API", "files": ["api/routes.py", "api/models.py"]},
+            {"page_title": "Routes", "files": ["api/routes.py", "api/models.py"]},
             {"page_title": "Worker", "files": ["worker/job.py"]},
         ]
     }
@@ -1148,9 +1099,9 @@ async def test_generate_wiki_plan_uses_selection_model(mock_llm):
     )
 
     assert isinstance(plan, WikiPlan)
-    api_page = next(p for p in plan.pages if p.title == "API")
-    assert "api/routes.py" in api_page.files
-    assert "api/models.py" in api_page.files
+    routes_page = next(p for p in plan.pages if p.title == "Routes")
+    assert "api/routes.py" in routes_page.files
+    assert "api/models.py" in routes_page.files
     worker_page = next(p for p in plan.pages if p.title == "Worker")
     assert "worker/job.py" in worker_page.files
     # tests/test_api.py is not selected — this is the key difference from the old model

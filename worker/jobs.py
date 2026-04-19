@@ -833,7 +833,6 @@ async def run_refresh_index(
                     purpose=p.get("purpose", ""),
                     parent=p.get("parent"),
                     files=p.get("files", []),
-                    secondary_files=p.get("secondary_files", []),
                     # Merge saved page_notes back into the spec; default to empty note
                     page_notes=saved_page_notes.get(p["title"], [{"content": ""}]),
                 )
@@ -842,36 +841,24 @@ async def run_refresh_index(
             all_repo_files=plan_data.get("all_repo_files", []),
         )
 
-        stale_path = ast_dir / "stale_secondary.json"
-        prior_stale: set[str] = set()
-
-        def _read_stale():
-            if not stale_path.exists():
-                return set()
-            try:
-                return set(json.loads(stale_path.read_text()))
-            except (OSError, json.JSONDecodeError):
-                return set()
-
-        prior_stale = await loop.run_in_executor(None, _read_stale)
-
         affected = get_affected_pages(changed_files, old_plan)
         logger.info(
-            "Refresh affects %d primary pages and %d secondary pages (deferred)",
+            "Refresh affects %d pages",
             len(affected.primary),
-            len(affected.secondary),
         )
-        # Write deferred secondary pages for the next refresh cycle.  Include
-        # prior_stale entries so they are not silently dropped if this refresh
-        # fails before regenerating them.  Pages processed in this cycle
-        # (affected.primary | prior_stale) are excluded because they are
-        # regenerated below — they only stay queued if that regeneration fails,
-        # at which point the next full refresh will re-detect them via diff.
-        next_stale = affected.secondary | (prior_stale - affected.primary)
-        await _write_text_async(stale_path, json.dumps(sorted(next_stale)))
-        affected_page_titles = affected.primary | prior_stale
+        affected_page_titles = affected.primary
 
-        if not affected_page_titles:
+        # Check whether any changed file is absent from the old plan — those are
+        # newly-added files that get_affected_pages cannot surface (they have no
+        # page mapping yet), so we must not skip the refresh early.
+        old_all_files_early = (
+            set(old_plan.all_repo_files)
+            if old_plan.all_repo_files
+            else {f for p in old_plan.pages for f in (p.files or [])}
+        )
+        potentially_added = set(changed_files) - old_all_files_early
+
+        if not affected_page_titles and not potentially_added:
             logger.info("No affected pages found for changed files.")
             now = datetime.now(UTC)
             await _update_repo(db_path, repo_id, last_commit=new_sha, status="ready")
@@ -1024,7 +1011,7 @@ async def run_refresh_index(
             f
             for p in old_plan.pages
             if p.title in affected_page_titles
-            for f in [*(p.files or []), *(p.secondary_files or [])]
+            for f in (p.files or [])
         }
         affected_files_set |= added_files
         affected_file_analysis = FileAnalysis(
@@ -1180,7 +1167,11 @@ async def run_refresh_index(
             p for p in old_plan.pages if p.title not in affected_page_titles
         ]
         merged_pages = list(plan.pages) + preserved_pages
-        merged_plan = WikiPlan(repo_notes=old_plan.repo_notes, pages=merged_pages)
+        merged_plan = WikiPlan(
+            repo_notes=old_plan.repo_notes,
+            pages=merged_pages,
+            all_repo_files=sorted(new_all_files),
+        )
 
         # Persist the merged plan so future refreshes have an accurate baseline
         wiki_dir.mkdir(parents=True, exist_ok=True)

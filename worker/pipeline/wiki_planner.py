@@ -3,7 +3,9 @@
 Given a :class:`~worker.pipeline.ast_analysis.FileAnalysis` and an optional
 :class:`~worker.pipeline.dependency_graph.DependencyGraph`, this module asks
 the configured LLM to produce a hierarchical wiki plan: a JSON structure that
-maps *every* source file in the repository to exactly one page.
+selects representative source files for each page (5–8 per page in Phase 2)
+while separately retaining the full repository file list in ``all_repo_files``
+for incremental refresh.
 
 The main entry point is :func:`generate_wiki_plan`, which:
 
@@ -137,13 +139,7 @@ class WikiPageSpec:
     purpose: str  # replaces "description"
     parent: str | None = None  # parent page TITLE string (not slug)
     page_notes: list[dict] = field(default_factory=lambda: [{"content": ""}])
-    files: list[str] = field(default_factory=list)  # primary rel_paths assigned by LLM
-    secondary_files: list[str] = field(default_factory=list)
-    """Files *referenced* by this page but *primarily owned* by another page.
-
-    Included in the generation prompt as "see also" context and used by
-    incremental refresh to mark the page as stale when one of them changes.
-    """
+    files: list[str] = field(default_factory=list)  # representative source files
 
     @property
     def slug(self) -> str:
@@ -268,7 +264,6 @@ class WikiPlan:
                     "title": p.title,
                     "purpose": p.purpose,
                     "files": p.files,
-                    "secondary_files": p.secondary_files,
                     **({"parent": p.parent} if p.parent is not None else {}),
                 }
                 for p in self.pages
@@ -307,7 +302,6 @@ class WikiPlan:
                     "parent_slug": p.parent_slug,
                     "description": p.purpose,
                     "has_user_notes": _has_user_notes(p),
-                    "secondary_file_count": len(p.secondary_files),
                 }
                 for p in self.pages
             ]
@@ -374,8 +368,12 @@ _SYSTEM = (
     "signal — only override directory structure when files in "
     "different directories form a tight semantic unit (e.g. a "
     "frontend component and its backend route).\n"
-    "5. Create a clear hierarchy: top-level pages for major "
-    "subsystems, child pages for details\n\n"
+    "5. Create exactly 2 levels of hierarchy: top-level pages "
+    "for major subsystems (e.g. 'Worker Pipeline', 'API Layer', "
+    "'Frontend'), and child pages for specific topics within "
+    "each subsystem. Do NOT create a single root page that is "
+    "the parent of all other pages — every top-level page must "
+    "represent a coherent subsystem, not a catch-all container.\n\n"
     "Each page should have a clear PURPOSE — it should "
     "explain a concept, component, or workflow. Pages are "
     "represented by 5\u20138 of their most representative source "
@@ -460,11 +458,17 @@ def _build_outline_prompt(
         "purpose (1-2 sentences explaining WHAT the page covers and WHY a "
         "developer would read it)\n"
         "- Optionally set parent (title of parent page) for hierarchy\n"
+        "- Use EXACTLY 2 levels of hierarchy: top-level pages represent major "
+        "subsystems (e.g. 'Worker Pipeline', 'API Layer', 'Frontend UI'), child "
+        "pages cover specific topics within that subsystem. Pages may have at most "
+        "one level of children — grandchild pages are not allowed.\n"
+        "- Do NOT create a single omnibus root page (e.g. 'Project Overview' or "
+        "'Documentation Home') as the parent of all other top-level pages. "
+        "Every top-level page should stand on its own as a coherent subsystem.\n"
         "- Group by semantic purpose. Directories are a strong default "
         "signal — only override directory structure when files in different "
         "directories form a tight semantic unit (e.g. a frontend component "
         "and its backend route).\n"
-        "- Create 2-3 levels of hierarchy for larger repos\n"
         "- Page titles should describe concepts/components, not directory names\n"
         "- Do NOT assign files to pages — just define the page structure\n\n"
         "Output JSON matching this schema:\n"
@@ -538,8 +542,9 @@ def _validate_outline_structure(
     Checks:
     - Duplicate slugs (two titles that normalise to the same URL slug).
     - Parent cycles (circular parent references).
-    - Hierarchy depth > 4.
-    - Flat plan when the repository has > 30 files.
+    - Hierarchy not exactly 2 levels deep.
+    - Flat plan (all pages top-level) when there are multiple pages.
+    - Single omnibus root with all others as children.
     - Page count below the suggested minimum.
 
     Raises:
@@ -573,14 +578,21 @@ def _validate_outline_structure(
         return d
 
     max_depth = max((_depth(p["title"]) for p in pages), default=1)
-    if max_depth > 4:
+    if max_depth > 2:
         raise ValueError(
-            f"Wiki hierarchy is {max_depth} levels deep — flatten to at most 4 levels"
+            f"Wiki hierarchy is {max_depth} levels deep — use exactly 2 levels: "
+            "top-level pages for major subsystems, child pages for specific topics"
         )
-    if max_depth == 1 and total_file_count > 30:
+    if max_depth == 1 and len(pages) > 1:
         raise ValueError(
-            f"All pages are top-level — create 2-3 levels of hierarchy "
-            f"for a repo with {total_file_count} files"
+            "All pages are top-level — use exactly 2 levels: top-level subsystem "
+            "pages with child topic pages"
+        )
+    top_level = [p for p in pages if not p.get("parent")]
+    if len(top_level) == 1 and len(pages) > 2:
+        raise ValueError(
+            "Single-root wiki plans are not allowed — top-level pages must be "
+            "coherent subsystems, not a catch-all container"
         )
     if len(pages) < page_range[0]:
         raise ValueError(
@@ -1254,7 +1266,6 @@ def validate_wiki_plan(
                 purpose=p["purpose"],
                 parent=parent,
                 files=p.get("files", []),
-                secondary_files=p.get("secondary_files", []),
             )
         )
 
@@ -1263,7 +1274,6 @@ def validate_wiki_plan(
     # Log unselected files (selection model: not all files need to be on a page)
     if all_files:
         selected = {f for page in pages for f in page.files}
-        selected |= {f for page in pages for f in page.secondary_files}
         unselected = [f for f in all_files if f not in selected]
         if unselected:
             logger.info(
@@ -1313,17 +1323,21 @@ def validate_wiki_plan(
         return d
 
     max_depth = max((_depth(p.title) for p in pages), default=1)
-    if max_depth > 4:
+    if max_depth > 2:
         raise ValueError(
-            f"Wiki hierarchy is {max_depth} levels deep — flatten to at most 4 levels"
+            f"Wiki hierarchy is {max_depth} levels deep — use exactly 2 levels: "
+            "top-level pages for major subsystems, child pages for specific topics"
         )
-
-    # Flat plan check for repos with >30 files
-    total_file_count = len(all_files) if all_files else sum(len(p.files) for p in pages)
-    if max_depth == 1 and total_file_count > 30:
+    if max_depth == 1 and len(pages) > 1:
         raise ValueError(
-            f"All pages are top-level — create 2-3 levels of "
-            f"hierarchy for a repo with {total_file_count} files"
+            "All pages are top-level — use exactly 2 levels: top-level subsystem "
+            "pages with child topic pages"
+        )
+    top_level = [p for p in pages if p.parent is None]
+    if len(top_level) == 1 and len(pages) > 2:
+        raise ValueError(
+            "Single-root wiki plans are not allowed — top-level pages must be "
+            "coherent subsystems, not a catch-all container"
         )
 
     # Page count vs suggested range
@@ -1539,7 +1553,6 @@ async def generate_wiki_plan(
                 "purpose": p["purpose"],
                 "parent": p.get("parent"),
                 "files": primary_assignments.get(p["title"], []),
-                "secondary_files": [],
             }
             for p in outline
         ]

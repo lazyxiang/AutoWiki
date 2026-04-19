@@ -10,11 +10,20 @@ from worker.llm.prompt_segment import PromptInput, normalize_prompt, segments_to
 
 try:
     from google import genai
+    from google.genai import errors as _genai_errors
     from google.genai import types
 
     _GENAI_AVAILABLE = True
 except ImportError:
     _GENAI_AVAILABLE = False
+
+
+def _unwrap_genai_error(exc: Exception) -> Exception:
+    """Convert Gemini 429 ClientError to TimeoutError so async_retry will retry it."""
+    if _GENAI_AVAILABLE and isinstance(exc, _genai_errors.ClientError):
+        if getattr(exc, "code", None) == 429:
+            return TimeoutError(str(exc))
+    return exc
 
 
 class GeminiProvider(LLMProvider):
@@ -35,12 +44,15 @@ class GeminiProvider(LLMProvider):
             system_instruction=system_text if system_text else None,
             max_output_tokens=65536,
         )
-        response = await asyncio.to_thread(
-            self._client.models.generate_content,
-            model=self._model,
-            contents=prompt_text,
-            config=config,
-        )
+        try:
+            response = await asyncio.to_thread(
+                self._client.models.generate_content,
+                model=self._model,
+                contents=prompt_text,
+                config=config,
+            )
+        except Exception as exc:
+            raise _unwrap_genai_error(exc) from exc
         return response.text
 
     async def generate_structured(
@@ -58,12 +70,15 @@ class GeminiProvider(LLMProvider):
             response_mime_type="application/json",
             max_output_tokens=16000,
         )
-        response = await asyncio.to_thread(
-            self._client.models.generate_content,
-            model=self._model,
-            contents=prompt_with_schema,
-            config=config,
-        )
+        try:
+            response = await asyncio.to_thread(
+                self._client.models.generate_content,
+                model=self._model,
+                contents=prompt_with_schema,
+                config=config,
+            )
+        except Exception as exc:
+            raise _unwrap_genai_error(exc) from exc
         return _parse_json_response(response.text)
 
     async def generate_stream(
@@ -86,7 +101,13 @@ class GeminiProvider(LLMProvider):
                 config=config,
             )
 
-        stream = await asyncio.to_thread(sync_stream)
-        for chunk in stream:
-            if chunk.text:
-                yield chunk.text
+        try:
+            stream = await asyncio.to_thread(sync_stream)
+            for chunk in stream:
+                if chunk.text:
+                    yield chunk.text
+        except Exception as exc:
+            unwrapped = _unwrap_genai_error(exc)
+            if unwrapped is exc:
+                raise
+            raise unwrapped from exc

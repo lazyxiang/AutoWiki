@@ -24,17 +24,19 @@ def test_validate_plan_reports_coverage_and_page_sizes(tmp_path, monkeypatch):
         {
             "repo_notes": [{"content": ""}],
             "pages": [
+                {"title": "System", "purpose": "system", "files": []},
+                {"title": "Infra", "purpose": "infra", "files": []},
                 {
                     "title": "Overview",
                     "purpose": "top",
+                    "parent": "System",
                     "files": ["a.py", "b.py"],
-                    "secondary_files": [],
                 },
                 {
                     "title": "Core",
                     "purpose": "core",
+                    "parent": "Infra",
                     "files": [f"core/{i}.py" for i in range(5)],
-                    "secondary_files": ["a.py"],
                 },
             ],
         },
@@ -43,9 +45,9 @@ def test_validate_plan_reports_coverage_and_page_sizes(tmp_path, monkeypatch):
 
     result = runner.invoke(app, ["validate-plan", "owner-repo"])
     assert result.exit_code == 0, result.output
-    assert "Pages: 2" in result.output
+    assert "Pages: 4" in result.output
     assert "Primary files: 7" in result.output
-    assert "Secondary assignments: 1" in result.output
+    assert "Secondary assignments" not in result.output
     # Page sizes
     assert "Overview" in result.output
     assert "Core" in result.output
@@ -64,7 +66,6 @@ def test_validate_plan_reports_validation_failure(tmp_path, monkeypatch):
                     "title": "Overview",
                     "purpose": "top",
                     "files": [f"f{i}.py" for i in range(11)],  # > 10 cap
-                    "secondary_files": [],
                 }
             ],
         },
@@ -92,21 +93,23 @@ def test_validate_plan_reports_locality_score(tmp_path, monkeypatch):
         {
             "repo_notes": [],
             "pages": [
+                {"title": "Worker", "purpose": "p", "files": []},
+                {"title": "Storage", "purpose": "p", "files": []},
                 {
                     "title": "Worker Pipeline",
                     "purpose": "p",
+                    "parent": "Worker",
                     "files": [
                         "worker/pipeline/a.py",
                         "worker/pipeline/b.py",
                         "api/routes.py",  # cross-directory — hurts locality
                     ],
-                    "secondary_files": [],
                 },
                 {
                     "title": "Core",
                     "purpose": "p",
+                    "parent": "Storage",
                     "files": ["core/a.py", "core/b.py"],
-                    "secondary_files": [],
                 },
             ],
         },

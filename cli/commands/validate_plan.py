@@ -33,7 +33,6 @@ def _load_plan(plan_path: Path) -> tuple[dict, WikiPlan]:
             purpose=p.get("purpose", ""),
             parent=p.get("parent"),
             files=p.get("files", []),
-            secondary_files=p.get("secondary_files", []),
         )
         for p in data.get("pages", [])
     ]
@@ -70,14 +69,12 @@ def validate_plan_cmd(
         raise typer.Exit(1)
 
     total_primary = sum(len(p.files) for p in plan.pages)
-    total_secondary = sum(len(p.secondary_files) for p in plan.pages)
     sizes = [len(p.files) for p in plan.pages]
 
     typer.echo(f"Pages: {len(plan.pages)}")
     typer.echo(f"Primary files: {total_primary}")
-    typer.echo(f"Secondary assignments: {total_secondary}")
     typer.echo("")
-    typer.echo("Per-page primary file distribution:")
+    typer.echo("Per-page file distribution:")
     typer.echo(
         f"  min={min(sizes, default=0)} "
         f"p50={_percentile(sizes, 0.5):.0f} "
@@ -88,9 +85,7 @@ def validate_plan_cmd(
     typer.echo("")
     typer.echo("Per-page breakdown:")
     for p in plan.pages:
-        typer.echo(
-            f"  - {p.title}: primary={len(p.files)} secondary={len(p.secondary_files)}"
-        )
+        typer.echo(f"  - {p.title}: files={len(p.files)}")
     typer.echo("")
 
     def _locality_score(page: WikiPageSpec) -> float:

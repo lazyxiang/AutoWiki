@@ -389,26 +389,15 @@ async def get_changed_files(clone_dir: Path, old_sha: str, new_sha: str) -> list
 class AffectedPages:
     """Result of :func:`get_affected_pages`.
 
-    ``primary`` — page titles whose *primary* file set overlaps with the
-    changed file set.  These pages must be regenerated in the current
-    refresh cycle.
-
-    ``secondary`` — page titles whose *secondary* file set overlaps but
-    whose primary set does not.  These pages are marked stale and
-    regenerated in the next refresh cycle (deferred, to keep refresh
-    cost bounded).  A page never appears in both sets — primary wins.
+    ``primary`` — page titles whose file set overlaps with the changed
+    file set.  These pages must be regenerated in the current refresh cycle.
     """
 
     primary: set[str]
-    secondary: set[str]
 
 
 def get_affected_pages(changed_files: list[str], wiki_plan: WikiPlan) -> AffectedPages:
-    """Return pages affected by the changed files, split by assignment kind.
-
-    Primary pages (whose owned files changed) are regenerated eagerly in
-    the current refresh cycle.  Secondary pages (where the changed file is
-    only referenced, not owned) are deferred to the next cycle.
+    """Return pages whose representative files overlap with the changed files.
 
     Args:
         changed_files: List of relative file paths (as returned by
@@ -417,16 +406,12 @@ def get_affected_pages(changed_files: list[str], wiki_plan: WikiPlan) -> Affecte
             describing the current page-to-file assignments.
 
     Returns:
-        :class:`AffectedPages` with ``primary`` and ``secondary`` title sets.
-        A page never appears in both sets — primary wins.
+        :class:`AffectedPages` with the ``primary`` title set of pages to
+        regenerate.
     """
     changed = set(changed_files)
     primary: set[str] = set()
-    secondary: set[str] = set()
     for page in wiki_plan.pages:
         if any(f in changed for f in (page.files or [])):
             primary.add(page.title)
-            continue  # primary wins
-        if any(f in changed for f in (page.secondary_files or [])):
-            secondary.add(page.title)
-    return AffectedPages(primary=primary, secondary=secondary)
+    return AffectedPages(primary=primary)

@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 from worker.llm.base import LLMProvider
 from worker.llm.prompt_segment import PromptSegment
 from worker.pipeline.pipeline_logging import log_final_failure, log_validation_retry
-from worker.utils.retry import OnRetryCallback
+from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
 
 if TYPE_CHECKING:
     from worker.pipeline.wiki_planner import WikiPageSpec
@@ -276,10 +276,13 @@ async def generate_page_outline(
 
     for attempt in range(max_retries + 1):
         try:
-            raw = await fast_llm.generate_structured(
+            raw = await async_retry(
+                fast_llm.generate_structured,
                 segments,
                 schema=_OUTLINE_SCHEMA,
                 system=system,
+                transient_exceptions=TRANSIENT_EXCEPTIONS,
+                on_retry=on_retry,
             )
             return validate_outline(raw, page_files=spec.files or [])
         except (ValueError, json.JSONDecodeError, KeyError) as e:
@@ -304,3 +307,11 @@ async def generate_page_outline(
                     context={"page_title": spec.title, "files": len(spec.files or [])},
                 )
                 raise
+        except Exception as e:
+            log_final_failure(
+                logger,
+                stage="page_outline",
+                exc=e,
+                context={"page_title": spec.title, "files": len(spec.files or [])},
+            )
+            raise
