@@ -291,6 +291,7 @@ async def run_full_index(
     clone_root: Path | None = None,
     wiki_language: str = "en",
     reuse_index: bool = False,
+    reuse_plan: bool = False,
 ) -> None:
     """Run the complete 6-stage wiki generation pipeline for a repository.
 
@@ -384,9 +385,10 @@ async def run_full_index(
                 for f in wiki_dir.iterdir():
                     if f.is_file():
                         f.unlink()
-            wiki_plan = ast_dir / "wiki_plan.json"
-            if wiki_plan.exists():
-                wiki_plan.unlink()
+            if not reuse_plan:
+                wiki_plan = ast_dir / "wiki_plan.json"
+                if wiki_plan.exists():
+                    wiki_plan.unlink()
 
         await asyncio.get_running_loop().run_in_executor(None, _clear_repo_artifacts)
         # Delete all existing wiki page rows for this repo so the DB matches disk
@@ -513,18 +515,42 @@ async def run_full_index(
 
         # Stage 5: Wiki Planner — LLM generates logical page tree (WikiPlan)
         logger.info("Stage 5: Wiki Planner starting")
-        plan = await generate_wiki_plan(
-            file_analysis,
-            repo_name=name,
-            llm=llm,
-            dep_graph=dep_graph,
-            readme=readme,
-            on_retry=_on_retry,
-            wiki_language=wiki_language,
-            fast_llm=fast_llm,
-            user_steering=user_steering,
-            clone_root=clone_root,
-        )
+        wiki_plan_path = ast_dir / "wiki_plan.json"
+        if reuse_plan and wiki_plan_path.exists():
+            logger.info(
+                "Reusing existing wiki plan at %s (skipping LLM planning)",
+                wiki_plan_path,
+            )
+            plan_raw = await asyncio.get_running_loop().run_in_executor(
+                None, wiki_plan_path.read_text
+            )
+            plan_data = json.loads(plan_raw)
+            plan = WikiPlan(
+                repo_notes=plan_data.get("repo_notes", [{"content": ""}]),
+                all_repo_files=plan_data.get("all_repo_files", []),
+                pages=[
+                    WikiPageSpec(
+                        title=p["title"],
+                        purpose=p.get("purpose", ""),
+                        parent=p.get("parent"),
+                        files=p.get("files", []),
+                    )
+                    for p in plan_data.get("pages", [])
+                ],
+            )
+        else:
+            plan = await generate_wiki_plan(
+                file_analysis,
+                repo_name=name,
+                llm=llm,
+                dep_graph=dep_graph,
+                readme=readme,
+                on_retry=_on_retry,
+                wiki_language=wiki_language,
+                fast_llm=fast_llm,
+                user_steering=user_steering,
+                clone_root=clone_root,
+            )
         logger.info(
             "Wiki plan generated: %d pages planned for %s", len(plan.pages), name
         )

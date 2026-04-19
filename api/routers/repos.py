@@ -37,11 +37,16 @@ class IndexRequest(BaseModel):
             for this repository and skip Stage 4 (RAG embedding) if the
             index is already present.  Useful for iterating on wiki structure
             without re-embedding the entire codebase.  Defaults to ``False``.
+        reuse_plan (bool): When ``True``, load the existing
+            ``ast/wiki_plan.json`` and skip Stage 5 (Wiki Planner) if the
+            plan file is present.  Useful for iterating on page generation
+            without re-running LLM planning.  Defaults to ``False``.
     """
 
     url: str
     wiki_language: str = "en"
     reuse_index: bool = False
+    reuse_plan: bool = False
 
 
 @router.post("", status_code=202)
@@ -157,6 +162,7 @@ async def submit_repo(req: IndexRequest):
             name,
             wiki_language=req.wiki_language,
             reuse_index=req.reuse_index,
+            reuse_plan=req.reuse_plan,
         )
     except Exception:
         # If Redis is unavailable, mark the job failed immediately so the
