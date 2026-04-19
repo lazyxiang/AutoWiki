@@ -2,12 +2,24 @@ from __future__ import annotations
 
 import logging
 import sys
+from datetime import datetime
 from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
 from queue import Queue
 
 from shared.config import Config
 
 _listener: QueueListener | None = None
+
+
+class _LocalTimezoneFormatter(logging.Formatter):
+    """Formatter that stamps records in the local system timezone with UTC offset."""
+
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:
+        dt = datetime.fromtimestamp(record.created).astimezone()
+        if datefmt:
+            return dt.strftime(datefmt)
+        ms = round(record.msecs)
+        return dt.strftime(f"%Y-%m-%d %H:%M:%S,{ms:03d} %z")
 
 
 def setup_logging(config: Config) -> None:
@@ -33,7 +45,7 @@ def setup_logging(config: Config) -> None:
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
 
-    formatter = logging.Formatter(
+    formatter = _LocalTimezoneFormatter(
         "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
 
@@ -92,7 +104,16 @@ def setup_logging(config: Config) -> None:
     # Suppress noisy third-party warnings from error.log (WARNING-level threshold
     # on error_handler would otherwise funnel httpx/pydantic/anthropic deprecation
     # warnings into what operators treat as an actionable error stream).
-    for _noisy in ("httpx", "urllib3", "asyncio", "pydantic", "anthropic", "langchain"):
+    _noisy_loggers = (
+        "httpx",
+        "urllib3",
+        "asyncio",
+        "pydantic",
+        "anthropic",
+        "langchain",
+        "google_genai",
+    )
+    for _noisy in _noisy_loggers:
         logging.getLogger(_noisy).setLevel(logging.ERROR)
 
     # Start the listener with all collected handlers
