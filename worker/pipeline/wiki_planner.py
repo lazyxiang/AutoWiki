@@ -540,8 +540,9 @@ def _validate_outline_structure(
     Checks:
     - Duplicate slugs (two titles that normalise to the same URL slug).
     - Parent cycles (circular parent references).
-    - Hierarchy depth > 4.
-    - Flat plan when the repository has > 30 files.
+    - Hierarchy not exactly 2 levels deep.
+    - Flat plan (all pages top-level) when there are multiple pages.
+    - Single omnibus root with all others as children.
     - Page count below the suggested minimum.
 
     Raises:
@@ -580,10 +581,16 @@ def _validate_outline_structure(
             f"Wiki hierarchy is {max_depth} levels deep — use exactly 2 levels: "
             "top-level pages for major subsystems, child pages for specific topics"
         )
-    if max_depth == 1 and total_file_count > 30:
+    if max_depth == 1 and len(pages) > 1:
         raise ValueError(
-            f"All pages are top-level — add parent hierarchy "
-            f"for a repo with {total_file_count} files"
+            "All pages are top-level — use exactly 2 levels: top-level subsystem "
+            "pages with child topic pages"
+        )
+    top_level = [p for p in pages if not p.get("parent")]
+    if len(top_level) == 1 and len(pages) > 2:
+        raise ValueError(
+            "Single-root wiki plans are not allowed — top-level pages must be "
+            "coherent subsystems, not a catch-all container"
         )
     if len(pages) < page_range[0]:
         raise ValueError(
@@ -1319,13 +1326,16 @@ def validate_wiki_plan(
             f"Wiki hierarchy is {max_depth} levels deep — use exactly 2 levels: "
             "top-level pages for major subsystems, child pages for specific topics"
         )
-
-    # Flat plan check for repos with >30 files
-    total_file_count = len(all_files) if all_files else sum(len(p.files) for p in pages)
-    if max_depth == 1 and total_file_count > 30:
+    if max_depth == 1 and len(pages) > 1:
         raise ValueError(
-            f"All pages are top-level — add parent hierarchy "
-            f"for a repo with {total_file_count} files"
+            "All pages are top-level — use exactly 2 levels: top-level subsystem "
+            "pages with child topic pages"
+        )
+    top_level = [p for p in pages if p.parent is None]
+    if len(top_level) == 1 and len(pages) > 2:
+        raise ValueError(
+            "Single-root wiki plans are not allowed — top-level pages must be "
+            "coherent subsystems, not a catch-all container"
         )
 
     # Page count vs suggested range

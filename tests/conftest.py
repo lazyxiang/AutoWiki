@@ -22,20 +22,31 @@ def mock_llm():
 
     _structured_responses = iter(
         [
-            # Phase 1: outline
+            # Phase 1: outline — 2-level hierarchy (2 subsystems + 3 topic pages)
             {
                 "pages": [
                     {
-                        "title": "Overview",
-                        "purpose": "High-level overview of the project architecture.",
+                        "title": "Core",
+                        "purpose": "Core application logic and data models.",
+                    },
+                    {
+                        "title": "Infrastructure",
+                        "purpose": "Entry points and utility infrastructure.",
                     },
                     {
                         "title": "Models",
                         "purpose": "Data models including User and Post classes.",
+                        "parent": "Core",
+                    },
+                    {
+                        "title": "Overview",
+                        "purpose": "High-level overview of the project architecture.",
+                        "parent": "Infrastructure",
                     },
                     {
                         "title": "Utils",
                         "purpose": "Utility functions for greeting and validation.",
+                        "parent": "Infrastructure",
                     },
                 ]
             },
