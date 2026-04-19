@@ -1,5 +1,7 @@
 # AutoWiki
 
+[English](README.md) | [简体中文](README-zh.md)
+
 Self-hosted, open-source AI-powered wiki generator for GitHub repositories. Point it at a repo and get a browsable, source-linked wiki in minutes — running entirely on your own machine with your own API keys.
 
 ## What it does
