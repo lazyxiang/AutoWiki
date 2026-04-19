@@ -286,19 +286,32 @@ class TestUndirectedEdgeNormalisation:
 
 
 class TestEmbeddedCodeFenceRemoval:
-    """Lines starting with ``` inside Mermaid content should be dropped."""
+    """Lines starting with ``` are stripped of their prefix; content after | is kept."""
 
-    def test_embedded_fence_line_removed(self):
+    def test_plain_fence_dropped(self):
+        diagram = "flowchart TD\n    A --> B\n```\n    B --> C"
+        result = sanitize_mermaid(diagram)
+        assert "```" not in result
+
+    def test_fence_without_pipe_dropped(self):
         diagram = "flowchart TD\n    A --> B\n```mermaid extra content\n    B --> C\n"
         result = sanitize_mermaid(diagram)
         assert "```" not in result
         assert "A --> B" in result
         assert "B --> C" in result
 
-    def test_plain_triple_backtick_removed(self):
-        diagram = "flowchart TD\n    A --> B\n```\n    B --> C"
+    def test_fence_with_pipe_keeps_node_definition(self):
+        # ```mermaid 块| NodeScanner["..."] — the node definition after | is kept.
+        diagram = (
+            "flowchart TD\n"
+            "    A --> B\n"
+            '```mermaid 块| NodeScanner["label"]\n'
+            "    NodeScanner --> C\n"
+        )
         result = sanitize_mermaid(diagram)
         assert "```" not in result
+        assert 'NodeScanner["label"]' in result
+        assert "NodeScanner --> C" in result
 
 
 class TestSanitizeMermaidBlocksClosingFence:

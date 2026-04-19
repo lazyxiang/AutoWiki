@@ -235,7 +235,12 @@ describe("undirected edge normalisation", () => {
 // ── Embedded code-fence removal ───────────────────────────────────────
 
 describe("embedded code-fence removal", () => {
-  it("removes lines starting with backtick fence", () => {
+  it("drops plain triple-backtick lines", () => {
+    const input = "flowchart TD\n    A --> B\n```\n    B --> C";
+    expect(sanitizeMermaid(input)).not.toContain("```");
+  });
+
+  it("drops fence line with no pipe separator", () => {
     const input = "flowchart TD\n    A --> B\n```mermaid extra\n    B --> C";
     const result = sanitizeMermaid(input);
     expect(result).not.toContain("```");
@@ -243,9 +248,12 @@ describe("embedded code-fence removal", () => {
     expect(result).toContain("B --> C");
   });
 
-  it("removes plain triple-backtick lines", () => {
-    const input = "flowchart TD\n    A --> B\n```\n    B --> C";
-    expect(sanitizeMermaid(input)).not.toContain("```");
+  it("keeps node definition after pipe in fence line", () => {
+    const input = 'flowchart TD\n    A --> B\n```mermaid 块| NodeScanner["label"]\n    NodeScanner --> C';
+    const result = sanitizeMermaid(input);
+    expect(result).not.toContain("```");
+    expect(result).toContain('NodeScanner["label"]');
+    expect(result).toContain("NodeScanner --> C");
   });
 });
 

@@ -75,7 +75,15 @@ function edgeReplacer(_match: string, open: string, label: string, close: string
  */
 export function sanitizeMermaid(text: string): string {
   return text.split("\n")
-    .filter(line => !line.trim().startsWith("```"))
+    .flatMap(line => {
+      // Strip embedded code-fence markers, e.g. ```mermaid 块| NodeScanner["…"]
+      // Keep any Mermaid content that follows the | separator; drop plain ```.
+      if (line.trim().startsWith("```")) {
+        const remainder = line.trim().replace(/^```[^|]*\|?\s*/, "");
+        return remainder ? [remainder] : [];
+      }
+      return [line];
+    })
     .map(line => {
       line = line.replace(UNDIRECTED_EDGE_RE, "-->|");
       line = line.replace(EDGE_LABEL_RE, edgeReplacer);

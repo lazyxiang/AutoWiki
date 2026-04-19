@@ -207,12 +207,16 @@ def sanitize_mermaid(text: str) -> str:
     for line in lines:
         stripped = line.strip()
 
-        # Drop lines that look like embedded code-fence markers (e.g. ```mermaid …
-        # inside a node label that the LLM accidentally split across a fence).
-        # Mermaid has no syntax that starts with a backtick, so these are always
-        # artefacts of malformed LLM output.
+        # Strip embedded code-fence markers that LLMs sometimes emit before a
+        # node definition, e.g.  ```mermaid 块| NodeScanner["…"]
+        # Strip the  ```…|  prefix and keep any Mermaid content that follows.
+        # If nothing remains (plain  ```  or  ```mermaid  with no pipe), drop.
         if stripped.startswith("```"):
-            continue
+            remainder = re.sub(r"^```[^|]*\|?\s*", "", stripped)
+            if not remainder:
+                continue
+            line = remainder
+            stripped = remainder
 
         # Count block openings to maintain depth.
         if block_opener.match(stripped):
