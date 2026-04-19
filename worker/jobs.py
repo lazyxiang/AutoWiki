@@ -577,11 +577,11 @@ async def run_full_index(
         # Write both the internal plan (with file assignments) and the user-facing JSON
         await _write_text_async(
             ast_dir / "wiki_plan.json",
-            json.dumps(plan.to_internal_json(), indent=2),
+            json.dumps(plan.to_internal_json(), indent=2, ensure_ascii=False),
         )
         await _write_text_async(
             wiki_dir / "wiki.json",
-            json.dumps(plan.to_wiki_json(), indent=2),
+            json.dumps(plan.to_wiki_json(), indent=2, ensure_ascii=False),
         )
         await _update_job(
             db_path,
@@ -675,7 +675,7 @@ async def run_full_index(
             last_commit=head_sha,
             indexed_at=now,
             wiki_path=str(wiki_dir),
-            wiki_structure=json.dumps(structure_data),
+            wiki_structure=json.dumps(structure_data, ensure_ascii=False),
         )
 
     except Exception as e:
@@ -1232,11 +1232,11 @@ async def run_refresh_index(
         wiki_dir.mkdir(parents=True, exist_ok=True)
         await _write_text_async(
             ast_dir / "wiki_plan.json",
-            json.dumps(merged_plan.to_internal_json(), indent=2),
+            json.dumps(merged_plan.to_internal_json(), indent=2, ensure_ascii=False),
         )
         await _write_text_async(
             wiki_dir / "wiki.json",
-            json.dumps(merged_plan.to_wiki_json(), indent=2),
+            json.dumps(merged_plan.to_wiki_json(), indent=2, ensure_ascii=False),
         )
         structure_data = merged_plan.to_api_structure()
 
@@ -1257,7 +1257,7 @@ async def run_refresh_index(
             last_commit=new_sha,
             indexed_at=now,
             wiki_path=str(wiki_dir),
-            wiki_structure=json.dumps(structure_data),
+            wiki_structure=json.dumps(structure_data, ensure_ascii=False),
         )
 
     except Exception as e:

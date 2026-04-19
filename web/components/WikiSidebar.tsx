@@ -48,7 +48,7 @@ export function WikiSidebar({ pages, owner, repo, repoId, lastCommit = "", index
         <RefreshButton owner={owner} repo={repo} repoId={repoId} />
       </div>
       {indexedLine && (
-        <p className="text-secondary pb-1 text-xs">{indexedLine}</p>
+        <p className="text-foreground pb-1 text-xs">{indexedLine}</p>
       )}
       <div className="mt-3" />
       <ul className="space-y-1 mb-4">
