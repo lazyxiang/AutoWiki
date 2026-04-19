@@ -22,11 +22,17 @@ export async function submitRepo(
   url: string,
   wikiLanguage: string = "en",
   reuseIndex: boolean = false,
+  reusePlan: boolean = false,
 ) {
   const res = await fetch(`${API_URL}/api/repos`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url, wiki_language: wikiLanguage, reuse_index: reuseIndex }),
+    body: JSON.stringify({
+      url,
+      wiki_language: wikiLanguage,
+      reuse_index: reuseIndex,
+      reuse_plan: reusePlan,
+    }),
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json() as Promise<{ repo_id: string; job_id: string; status: string }>;
