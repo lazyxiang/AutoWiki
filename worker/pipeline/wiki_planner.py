@@ -3,7 +3,9 @@
 Given a :class:`~worker.pipeline.ast_analysis.FileAnalysis` and an optional
 :class:`~worker.pipeline.dependency_graph.DependencyGraph`, this module asks
 the configured LLM to produce a hierarchical wiki plan: a JSON structure that
-maps *every* source file in the repository to exactly one page.
+selects representative source files for each page (5–8 per page in Phase 2)
+while separately retaining the full repository file list in ``all_repo_files``
+for incremental refresh.
 
 The main entry point is :func:`generate_wiki_plan`, which:
 

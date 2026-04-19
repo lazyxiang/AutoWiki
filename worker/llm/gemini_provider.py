@@ -101,7 +101,13 @@ class GeminiProvider(LLMProvider):
                 config=config,
             )
 
-        stream = await asyncio.to_thread(sync_stream)
-        for chunk in stream:
-            if chunk.text:
-                yield chunk.text
+        try:
+            stream = await asyncio.to_thread(sync_stream)
+            for chunk in stream:
+                if chunk.text:
+                    yield chunk.text
+        except Exception as exc:
+            unwrapped = _unwrap_genai_error(exc)
+            if unwrapped is exc:
+                raise
+            raise unwrapped from exc
