@@ -228,3 +228,4 @@ build/
 !web/lib/
 !web/lib/**
 .worktrees/
+.worktrees/
