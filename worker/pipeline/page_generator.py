@@ -60,6 +60,41 @@ def _append_source_files_table(content: str, files: list[str]) -> str:
     return content.rstrip() + table
 
 
+def _strip_code_blocks(draft: str) -> str:
+    """Strip fenced code blocks that are not Mermaid diagrams.
+
+    Scans the draft line by line.  When a fenced opening that is *not*
+    ``mermaid`` is encountered the opening fence line and its matching closing
+    fence line are removed; the content lines between them are kept so that
+    readers still see the information (just without the code-block framing).
+
+    ``````mermaid`` blocks are left completely untouched.
+    """
+    _FENCE_OPEN_RE = re.compile(r"^```(\w+)\s*$")
+    _FENCE_CLOSE = "```"
+
+    result: list[str] = []
+    inside_non_mermaid = False
+
+    for line in draft.splitlines(keepends=True):
+        stripped = line.rstrip("\n").rstrip("\r")
+        if not inside_non_mermaid:
+            m = _FENCE_OPEN_RE.match(stripped)
+            if m and m.group(1).lower() != "mermaid":
+                # Opening fence of a non-mermaid block — skip this line
+                inside_non_mermaid = True
+                continue
+            result.append(line)
+        else:
+            if stripped == _FENCE_CLOSE:
+                # Closing fence — skip this line, resume normal mode
+                inside_non_mermaid = False
+                continue
+            result.append(line)
+
+    return "".join(result)
+
+
 def _strip_preamble_and_ensure_header(content: str, title: str) -> str:
     """Strip reasoning preamble and ensure the page starts with # title.
 
@@ -302,6 +337,7 @@ async def generate_page(
     draft = _strip_preamble_and_ensure_header(draft, spec.title)
     draft = ensure_diagram_headers(draft, default_source_files=spec.files)
     draft = sanitize_mermaid_blocks(draft)
+    draft = _strip_code_blocks(draft)
     draft = _append_source_files_table(draft, spec.files or [])
 
     return PageResult(slug=spec.slug, title=spec.title, content=draft)

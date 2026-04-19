@@ -63,6 +63,45 @@ DRAFT_SYSTEM = (
 )
 
 
+def _summarize_child_page(content: str, title: str) -> str:
+    """Return a structured summary of a child page for use in parent prompts.
+
+    Extracts headings, diagram markers, and a brief intro excerpt so the parent
+    LLM knows exactly what is already covered and does not regenerate it.
+    """
+    headings: list[str] = []
+    diagrams: list[str] = []
+    intro: str = ""
+
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            if len(headings) < 20:
+                headings.append(stripped)
+        elif stripped.startswith("**Diagram:"):
+            if len(diagrams) < 10:
+                diagrams.append(stripped)
+        elif stripped and not intro:
+            intro = stripped[:200]
+
+    sections_str = ", ".join(headings) if headings else "(none)"
+    parts = [
+        f'### Child: "{title}"',
+        f"Sections covered: {sections_str}",
+    ]
+    if diagrams:
+        parts.append("Diagrams already in this page:")
+        parts.extend(f"  - {d}" for d in diagrams)
+    else:
+        parts.append("Diagrams already in this page: (none)")
+    parts.append(f"Intro: {intro}")
+
+    summary = "\n".join(parts)
+    if len(summary) > 2000:
+        summary = summary[:2000]
+    return summary
+
+
 def build_draft_prompt(
     spec: WikiPageSpec,
     outline: PageOutline,
@@ -128,22 +167,19 @@ def build_draft_prompt(
     )
 
     if child_contents:
-        child_sections = []
-        for child in child_contents:
-            # Truncate child content to avoid unbounded parent prompts
-            _max_child = 1000
-            excerpt = child.content[:_max_child]
-            if len(child.content) > _max_child:
-                excerpt += "\n... (truncated)"
-            child_sections.append(f'### Child: "{child.title}"\n{excerpt}')
+        child_summaries = [
+            _summarize_child_page(child.content, child.title)
+            for child in child_contents
+        ]
         cached_parts.append(
             "## Child Pages (already generated)\n"
-            "The following child pages have been written. Your role is to "
-            "SYNTHESIZE and CONNECT — provide the high-level narrative, "
-            "explain how these components relate, and add context that "
-            "individual pages cannot provide. Do NOT repeat details covered "
-            "in child pages; reference them instead.\n\n"
-            + "\n\n".join(child_sections)
+            "The following child pages have been written. "
+            "The sections and diagrams listed below are ALREADY covered — "
+            "do NOT recreate these diagrams or restate these sections. "
+            "Your role is to SYNTHESIZE and CONNECT: provide the high-level narrative, "
+            "explain how these components relate, and add architectural context that "
+            "individual pages cannot provide.\n\n"
+            + "\n\n".join(child_summaries)
             + "\n"
         )
 

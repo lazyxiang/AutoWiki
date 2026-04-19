@@ -331,3 +331,72 @@ class TestOrphanedEnd:
         result = sanitize_mermaid(diagram)
         assert result.count("end") == 1
         assert "subgraph Auth" in result
+
+
+class TestSequenceDiagramEndHandling:
+    """sequenceDiagram block keywords (rect/alt/opt/loop/par/critical/break) require end."""
+
+    def test_rect_end_preserved(self):
+        """A sequenceDiagram with a single rect...end block keeps the end."""
+        diagram = (
+            "sequenceDiagram\n"
+            "    participant A\n"
+            "    participant B\n"
+            "    rect rgb(200, 220, 255)\n"
+            "        A->>B: Hello\n"
+            "    end"
+        )
+        result = sanitize_mermaid(diagram)
+        assert "end" in [line.strip() for line in result.splitlines()]
+
+    def test_alt_else_end_preserved(self):
+        """A sequenceDiagram with alt...else...end keeps end and passes else through."""
+        diagram = (
+            "sequenceDiagram\n"
+            "    A->>B: Request\n"
+            "    alt success\n"
+            "        B->>A: 200 OK\n"
+            "    else failure\n"
+            "        B->>A: 500 Error\n"
+            "    end"
+        )
+        result = sanitize_mermaid(diagram)
+        lines = [line.strip() for line in result.splitlines()]
+        assert "end" in lines
+        assert any(line.startswith("else") for line in lines)
+
+    def test_unclosed_rect_balanced(self):
+        """A sequenceDiagram with an unclosed rect gets an end appended."""
+        diagram = (
+            "sequenceDiagram\n"
+            "    participant A\n"
+            "    rect rgb(200, 220, 255)\n"
+            "        A->>A: Internal"
+        )
+        result = sanitize_mermaid(diagram)
+        assert result.strip().endswith("end")
+
+    def test_nested_rect_both_ends_preserved(self):
+        """Two nested rect blocks in a sequenceDiagram preserve both end lines."""
+        diagram = (
+            "sequenceDiagram\n"
+            "    rect rgb(200, 220, 255)\n"
+            "        rect rgb(255, 200, 200)\n"
+            "            A->>B: Nested\n"
+            "        end\n"
+            "    end"
+        )
+        result = sanitize_mermaid(diagram)
+        assert result.count("end") == 2
+
+    def test_flowchart_orphaned_end_still_dropped(self):
+        """Regression: a flowchart with a stray end (no subgraph) still drops it."""
+        diagram = (
+            "flowchart LR\n"
+            '    NodeA["Session Request"]\n'
+            "        NodeA --> NodeB\n"
+            "    end\n"
+            '    NodeC["Cleanup"]'
+        )
+        result = sanitize_mermaid(diagram)
+        assert "end" not in [line.strip() for line in result.splitlines()]
