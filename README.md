@@ -15,6 +15,7 @@ The result is served via a REST API and displayed in a Next.js web UI with sideb
 
 ## Documentation
 
+- [Architecture Guide](docs/architecture-guide.md)
 - [Configuration](docs/configuration.md)
 - [CLI](docs/cli.md)
 - [API](docs/api.md)
@@ -106,6 +107,8 @@ GOOGLE_API_KEY=AIzaSy... docker-compose up
 ```
 
 Persistent data (SQLite, FAISS index, clones, wiki Markdown) is stored in the `autowiki_data` Docker volume.
+
+---
 
 ## Development
 
