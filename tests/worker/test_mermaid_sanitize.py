@@ -506,19 +506,14 @@ class TestStateDiagramEndHandling:
     def test_state_declaration_does_not_append_end(self):
         """Simple state declarations must not be balanced with end."""
         diagram = (
-            'stateDiagram-v2\n'
+            "stateDiagram-v2\n"
             '    state "Pending Review" as Pending\n'
-            '    [*] --> Pending'
+            "    [*] --> Pending"
         )
         assert sanitize_mermaid(diagram) == diagram
 
     def test_orphaned_end_in_state_diagram_dropped(self):
         """An orphaned end in a stateDiagram (no open block) is dropped."""
-        diagram = (
-            "stateDiagram-v2\n"
-            "    [*] --> Active\n"
-            "    end\n"
-            "    Active --> [*]"
-        )
+        diagram = "stateDiagram-v2\n    [*] --> Active\n    end\n    Active --> [*]"
         result = sanitize_mermaid(diagram)
         assert "end" not in [line.strip() for line in result.splitlines()]
