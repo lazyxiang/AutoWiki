@@ -70,8 +70,11 @@ def _strip_code_blocks(draft: str) -> str:
 
     ``````mermaid`` blocks are left completely untouched.
     """
-    _FENCE_OPEN_RE = re.compile(r"^```(\w+)\s*$")
-    _FENCE_CLOSE = "```"
+    # Matches optional leading spaces (≤3), ``` marker, optional language tag,
+    # and any trailing info string (e.g. ```python title="x").
+    _FENCE_OPEN_RE = re.compile(r"^\s{0,3}```\s*([^\s`]*)[^\n`]*\s*$")
+    # Matches a closing ``` with optional leading/trailing whitespace.
+    _FENCE_CLOSE_RE = re.compile(r"^\s{0,3}```\s*$")
 
     result: list[str] = []
     inside_non_mermaid = False
@@ -80,13 +83,14 @@ def _strip_code_blocks(draft: str) -> str:
         stripped = line.rstrip("\n").rstrip("\r")
         if not inside_non_mermaid:
             m = _FENCE_OPEN_RE.match(stripped)
-            if m and m.group(1).lower() != "mermaid":
+            lang = (m.group(1) or "").lower() if m else ""
+            if m and lang != "mermaid":
                 # Opening fence of a non-mermaid block — skip this line
                 inside_non_mermaid = True
                 continue
             result.append(line)
         else:
-            if stripped == _FENCE_CLOSE:
+            if _FENCE_CLOSE_RE.match(stripped):
                 # Closing fence — skip this line, resume normal mode
                 inside_non_mermaid = False
                 continue

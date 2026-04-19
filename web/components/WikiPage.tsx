@@ -98,12 +98,21 @@ function MermaidBlock({ children }: { children: string }) {
           "\nDiagram source:\n" + children.trim(),
         );
         if (outerRef.current) {
-          outerRef.current.style.display = "none";
+          // When rendered through react-markdown's code component, outerRef.current
+          // is nested inside a <pre> element. Climb to the <pre> first so that
+          // previousElementSibling reaches the heading rather than a text node
+          // inside the <pre>.
+          const blockEl =
+            outerRef.current.parentElement instanceof HTMLPreElement
+              ? outerRef.current.parentElement
+              : outerRef.current;
+
+          blockEl.style.display = "none";
           // Also hide the immediately preceding heading so an orphaned section
           // title is not left floating above hidden content.
-          let prev: ChildNode | null = outerRef.current.previousSibling;
-          while (prev && prev.nodeType === Node.TEXT_NODE && !prev.textContent?.trim()) {
-            prev = prev.previousSibling;
+          let prev = blockEl.previousElementSibling;
+          while (prev && !prev.textContent?.trim()) {
+            prev = prev.previousElementSibling;
           }
           if (prev instanceof HTMLElement && /^H[1-6]$/i.test(prev.tagName)) {
             prev.style.display = "none";

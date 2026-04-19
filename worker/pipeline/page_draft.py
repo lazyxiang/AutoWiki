@@ -73,9 +73,17 @@ def _summarize_child_page(content: str, title: str) -> str:
     diagrams: list[str] = []
     intro: str = ""
 
+    _HEADING_PREFIXES = ("# ", "## ", "### ", "#### ", "##### ", "###### ")
+    _HEADING_EXACT = {"#", "##", "###", "####", "#####", "######"}
+    in_fence = False
     for line in content.splitlines():
         stripped = line.strip()
-        if stripped.startswith("#"):
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        if stripped in _HEADING_EXACT or stripped.startswith(_HEADING_PREFIXES):
             if len(headings) < 20:
                 headings.append(stripped)
         elif stripped.startswith("**Diagram:"):
@@ -84,21 +92,26 @@ def _summarize_child_page(content: str, title: str) -> str:
         elif stripped and not intro:
             intro = stripped[:200]
 
-    sections_str = ", ".join(headings) if headings else "(none)"
-    parts = [
-        f'### Child: "{title}"',
-        f"Sections covered: {sections_str}",
-    ]
-    if diagrams:
+    def _clip(value: str, limit: int) -> str:
+        return value if len(value) <= limit else value[: limit - 3].rstrip() + "..."
+
+    heading_items = [_clip(h, 120) for h in headings]
+    diagram_items = [_clip(d, 160) for d in diagrams]
+    sections_str = ", ".join(heading_items) if heading_items else "(none)"
+    # Diagrams are placed before the potentially-verbose sections list so they
+    # survive the 2000-char hard cap.
+    parts = [f'### Child: "{title}"']
+    if diagram_items:
         parts.append("Diagrams already in this page:")
-        parts.extend(f"  - {d}" for d in diagrams)
+        parts.extend(f"  - {d}" for d in diagram_items)
     else:
         parts.append("Diagrams already in this page: (none)")
-    parts.append(f"Intro: {intro}")
+    parts.append(f"Sections covered: {sections_str}")
+    parts.append(f"Intro: {_clip(intro, 200)}")
 
     summary = "\n".join(parts)
     if len(summary) > 2000:
-        summary = summary[:2000]
+        summary = summary[:1997].rstrip() + "..."
     return summary
 
 

@@ -53,7 +53,9 @@ _BLOCK_OPENERS_BY_TYPE: dict[str, re.Pattern[str]] = {
     "flowchart": re.compile(r"^subgraph\b", re.I),
     "graph": re.compile(r"^subgraph\b", re.I),
     "sequencediagram": re.compile(r"^(rect|alt|opt|loop|par|critical|break)\b", re.I),
-    "statediagram": re.compile(r"^state\b", re.I),
+    # stateDiagram-v2 uses `{ }` braces for composite states — no `end` keyword.
+    # Simple `state "Label" as Id` declarations must not be balanced with `end`.
+    "statediagram": re.compile(r"a^"),
 }
 _FALLBACK_BLOCK_OPENER = re.compile(r"^subgraph\b", re.I)
 
