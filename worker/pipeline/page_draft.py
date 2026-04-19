@@ -178,9 +178,7 @@ def build_draft_prompt(
             "do NOT recreate these diagrams or restate these sections. "
             "Your role is to SYNTHESIZE and CONNECT: provide the high-level narrative, "
             "explain how these components relate, and add architectural context that "
-            "individual pages cannot provide.\n\n"
-            + "\n\n".join(child_summaries)
-            + "\n"
+            "individual pages cannot provide.\n\n" + "\n\n".join(child_summaries) + "\n"
         )
 
     # ── Variable tail: outline + instructions ──

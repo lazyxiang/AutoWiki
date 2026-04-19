@@ -334,7 +334,7 @@ class TestOrphanedEnd:
 
 
 class TestSequenceDiagramEndHandling:
-    """sequenceDiagram block keywords (rect/alt/opt/loop/par/critical/break) require end."""
+    """sequenceDiagram block-openers (rect/alt/opt/loop/par/critical/break) need end."""
 
     def test_rect_end_preserved(self):
         """A sequenceDiagram with a single rect...end block keeps the end."""
