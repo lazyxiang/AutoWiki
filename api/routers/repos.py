@@ -226,6 +226,7 @@ async def list_repos():
                 "default_branch": r.default_branch or "main",
                 "indexed_at": r.indexed_at.isoformat() if r.indexed_at else None,
                 "wiki_language": r.wiki_language or "en",
+                "last_commit": r.last_commit or "",
             }
             for r in repos
         ]
@@ -288,6 +289,7 @@ async def get_repo(repo_id: str):
             "default_branch": repo.default_branch or "main",
             "indexed_at": repo.indexed_at.isoformat() if repo.indexed_at else None,
             "wiki_language": repo.wiki_language or "en",
+            "last_commit": repo.last_commit or "",
         }
 
 
