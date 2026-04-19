@@ -538,7 +538,12 @@ async def run_full_index(
             wiki_dir / "wiki.json",
             json.dumps(plan.to_wiki_json(), indent=2),
         )
-        await _update_job(db_path, job_id, progress=70)
+        await _update_job(
+            db_path,
+            job_id,
+            progress=70,
+            status_description="Generating wiki pages...",
+        )
 
         # Stage 6: Bottom-up page generation
         logger.info("Stage 6: Page Generator starting (bottom-up)")
@@ -1041,7 +1046,12 @@ async def run_refresh_index(
         logger.info(
             "Wiki plan generated: %d pages updated for %s", len(plan.pages), name
         )
-        await _update_job(db_path, job_id, progress=65)
+        await _update_job(
+            db_path,
+            job_id,
+            progress=65,
+            status_description="Generating wiki pages...",
+        )
 
         # Collect slugs of the affected OLD pages — these are what we delete.
         # Using old slugs (not new) handles the case where the LLM retitles a page.
