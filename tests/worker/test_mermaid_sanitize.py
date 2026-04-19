@@ -269,7 +269,7 @@ class TestUndirectedEdgeNormalisation:
         assert 'A ---|"label"| B' == result
 
     def test_unquoted_undirected_edge_converted_and_quoted(self):
-        # --|fail (x)| — undirected + special char in label
+        # --|fail (x)| -- undirected edge with special char in label
         result = sanitize_mermaid("E --|fail (x)| F")
         assert '-->|"fail (x)"|' in result
 
@@ -301,11 +301,11 @@ class TestEmbeddedCodeFenceRemoval:
         assert "B --> C" in result
 
     def test_fence_with_pipe_keeps_node_definition(self):
-        # ```mermaid 块| NodeScanner["..."] — the node definition after | is kept.
+        # ```mermaid text| NodeScanner["..."] -- node definition after | is kept.
         diagram = (
             "flowchart TD\n"
             "    A --> B\n"
-            '```mermaid 块| NodeScanner["label"]\n'
+            '```mermaid text| NodeScanner["label"]\n'
             "    NodeScanner --> C\n"
         )
         result = sanitize_mermaid(diagram)
@@ -317,18 +317,18 @@ class TestEmbeddedCodeFenceRemoval:
 class TestSanitizeMermaidBlocksClosingFence:
     """Closing ``` must appear alone at the start of a line.
 
-    The key regression: a line like  ```mermaid 块| NodeScanner[...]  starts
+    The key regression: a line like  ```mermaid text| NodeScanner[...]  starts
     with  ```  but has trailing text, so the old lazy  \\n(```)  pattern closed
     the block there, cutting off the rest of the diagram.  The new pattern
     requires  ^(```)[ \\t]*$  (nothing after the backticks).
     """
 
     def test_backtick_in_node_label_mid_line_not_premature_close(self):
-        # ``` appears INSIDE a node label, NOT at line start — always fine.
+        # ``` appears INSIDE a node label mid-line, not at line start -- always fine.
         md = (
             "```mermaid\n"
             "flowchart TD\n"
-            '    A["识别 ```mermaid 代码块"] --> B\n'
+            '    A["detect ```mermaid code block"] --> B\n'
             "    B --> C\n"
             "```\n"
         )
@@ -336,13 +336,13 @@ class TestSanitizeMermaidBlocksClosingFence:
         assert "B --> C" in result
 
     def test_fence_with_trailing_text_not_premature_close(self):
-        # ``` at start of a line but with extra text (```mermaid 块| …).
+        # ``` at start of a line but with extra text (```mermaid text| ...).
         # Old regex closed the block here; new regex skips it.
         md = (
             "```mermaid\n"
             "flowchart TD\n"
             "    A --> B\n"
-            "```mermaid 块| extra\n"
+            "```mermaid text| extra\n"
             "    B --> C\n"
             "```\n"
         )

@@ -93,7 +93,7 @@ function MermaidBlock({ children }: { children: string }) {
         }
       } catch (e) {
         console.error(
-          "[AutoWiki] Mermaid render failed — hiding diagram and preceding heading.\n" +
+          "[AutoWiki] Mermaid render failed - hiding diagram and preceding heading.\n" +
           "Error:", e,
           "\nDiagram source:\n" + children.trim(),
         );

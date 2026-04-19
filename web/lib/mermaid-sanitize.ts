@@ -76,7 +76,7 @@ function edgeReplacer(_match: string, open: string, label: string, close: string
 export function sanitizeMermaid(text: string): string {
   return text.split("\n")
     .flatMap(line => {
-      // Strip embedded code-fence markers, e.g. ```mermaid 块| NodeScanner["…"]
+      // Strip embedded code-fence markers, e.g. ```mermaid text| NodeScanner["..."]
       // Keep any Mermaid content that follows the | separator; drop plain ```.
       if (line.trim().startsWith("```")) {
         const remainder = line.trim().replace(/^```[^|]*\|?\s*/, "");

@@ -211,7 +211,7 @@ describe("full diagram — edge label issue", () => {
   });
 });
 
-// ── Undirected edge normalisation ────────────────────────────────────
+// -- Undirected edge normalisation -----------------------------------
 
 describe("undirected edge normalisation", () => {
   it("converts --|label| to -->|label|", () => {
@@ -232,7 +232,7 @@ describe("undirected edge normalisation", () => {
   });
 });
 
-// ── Embedded code-fence removal ───────────────────────────────────────
+// -- Embedded code-fence removal -------------------------------------
 
 describe("embedded code-fence removal", () => {
   it("drops plain triple-backtick lines", () => {
@@ -249,7 +249,7 @@ describe("embedded code-fence removal", () => {
   });
 
   it("keeps node definition after pipe in fence line", () => {
-    const input = 'flowchart TD\n    A --> B\n```mermaid 块| NodeScanner["label"]\n    NodeScanner --> C';
+    const input = 'flowchart TD\n    A --> B\n```mermaid text| NodeScanner["label"]\n    NodeScanner --> C';
     const result = sanitizeMermaid(input);
     expect(result).not.toContain("```");
     expect(result).toContain('NodeScanner["label"]');

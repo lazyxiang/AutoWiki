@@ -40,7 +40,7 @@ _DOUBLE_CURLY_RE = re.compile(r"(\b\w+\{\{)([^\"]+)(\}\})")
 # Excludes already-quoted labels (label starting with `"`)
 _EDGE_LABEL_RE = re.compile(r"(\|)([^\"|][^|]*?)(\|)")
 
-# ── Edge-type normalisation ─────────────────────────────────────────
+# -- Edge-type normalisation -----------------------------------------
 # LLMs sometimes emit  --|"label"|  (undirected line) instead of
 # -->|"label"|  (directed arrow).  Convert  --\|  that is not already
 # preceded by  >  or  -  (so  -->|  and  ---|  are left untouched).
@@ -208,8 +208,8 @@ def sanitize_mermaid(text: str) -> str:
         stripped = line.strip()
 
         # Strip embedded code-fence markers that LLMs sometimes emit before a
-        # node definition, e.g.  ```mermaid 块| NodeScanner["…"]
-        # Strip the  ```…|  prefix and keep any Mermaid content that follows.
+        # node definition, e.g.  ```mermaid text| NodeScanner["..."]
+        # Strip the  ```...|  prefix and keep any Mermaid content that follows.
         # If nothing remains (plain  ```  or  ```mermaid  with no pipe), drop.
         if stripped.startswith("```"):
             remainder = re.sub(r"^```[^|]*\|?\s*", "", stripped)
@@ -228,7 +228,7 @@ def sanitize_mermaid(text: str) -> str:
                 # Orphaned `end` — no open block to close; drop the line.
                 continue
 
-        # Normalise undirected labelled edges: --|"…"| → -->|"…"|
+        # Normalise undirected labelled edges: --|"..."| to -->|"..."|
         line = _UNDIRECTED_LABELED_EDGE_RE.sub(r"-->|", line)
         # Sanitise edge labels first (|...|)
         line = _EDGE_LABEL_RE.sub(_edge_replacer, line)
@@ -273,7 +273,7 @@ def sanitize_mermaid_blocks(markdown: str) -> str:
 
     # The closing ``` must appear alone at the start of a line (with optional
     # trailing whitespace) so that triple-backticks embedded mid-line inside a
-    # node label (e.g. `识别 ```mermaid 代码块`) do not prematurely terminate
+    # node label (e.g. `detect ```mermaid code block`) do not prematurely terminate
     # the block.
     return re.sub(
         r"^(```mermaid[ \t]*)\n(.*?)\n^(```)[ \t]*$",
