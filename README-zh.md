@@ -24,6 +24,12 @@
 
 ---
 
+## 本项目维基
+
+本项目自身的维基文档是由 AutoWiki 通过其生成流水线自动生成的。您可以访问 [AutoWiki 项目维基](https://lazyxiang.github.io/wiki-zh.github.io/) 进行参考。
+
+---
+
 ## 快速开始
 
 ### 本地运行
