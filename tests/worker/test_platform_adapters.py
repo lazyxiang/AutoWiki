@@ -9,8 +9,10 @@ from worker.platform.base import (
     RepoMetadata,
     UnsupportedPlatformError,
 )
+from worker.platform.bitbucket import BitbucketPlatform
 from worker.platform.github import GitHubPlatform
 from worker.platform.gitlab import GitLabPlatform
+from worker.platform.registry import detect_platform, get_platform_by_name
 
 
 def test_repo_metadata_fields():
@@ -240,8 +242,6 @@ async def test_gitlab_fetch_metadata_bad_token():
             await _gl.fetch_metadata("group", "repo", "bad")
 
 
-from worker.platform.bitbucket import BitbucketPlatform
-
 _bb = BitbucketPlatform()
 
 
@@ -259,13 +259,17 @@ def test_bitbucket_parse_url_invalid():
 
 
 def test_bitbucket_clone_url_with_token():
-    assert _bb.authenticated_clone_url("owner", "repo", "tok") == \
-        "https://x-token-auth:tok@bitbucket.org/owner/repo.git"
+    assert (
+        _bb.authenticated_clone_url("owner", "repo", "tok")
+        == "https://x-token-auth:tok@bitbucket.org/owner/repo.git"
+    )
 
 
 def test_bitbucket_clone_url_no_token():
-    assert _bb.authenticated_clone_url("owner", "repo", None) == \
-        "https://bitbucket.org/owner/repo.git"
+    assert (
+        _bb.authenticated_clone_url("owner", "repo", None)
+        == "https://bitbucket.org/owner/repo.git"
+    )
 
 
 def _make_bitbucket_client(json_data: dict, status_code: int = 200):
@@ -286,12 +290,14 @@ def _make_bitbucket_client(json_data: dict, status_code: int = 200):
 
 
 async def test_bitbucket_fetch_metadata_public():
-    client = _make_bitbucket_client({
-        "is_private": False,
-        "description": "BB repo",
-        "language": "javascript",
-        "mainbranch": {"name": "main"},
-    })
+    client = _make_bitbucket_client(
+        {
+            "is_private": False,
+            "description": "BB repo",
+            "language": "javascript",
+            "mainbranch": {"name": "main"},
+        }
+    )
     with patch("worker.platform.bitbucket.httpx.AsyncClient", return_value=client):
         meta = await _bb.fetch_metadata("owner", "repo", None)
     assert meta.is_private is False
@@ -316,12 +322,6 @@ async def test_bitbucket_fetch_metadata_bad_token():
 # ── registry tests ───────────────────────────────────────────────────
 
 
-from worker.platform.registry import detect_platform, get_platform_by_name
-from worker.platform.github import GitHubPlatform
-from worker.platform.gitlab import GitLabPlatform
-from worker.platform.bitbucket import BitbucketPlatform
-
-
 def test_detect_platform_github():
     assert isinstance(detect_platform("https://github.com/owner/repo"), GitHubPlatform)
 
@@ -331,7 +331,9 @@ def test_detect_platform_gitlab():
 
 
 def test_detect_platform_bitbucket():
-    assert isinstance(detect_platform("https://bitbucket.org/owner/repo"), BitbucketPlatform)
+    assert isinstance(
+        detect_platform("https://bitbucket.org/owner/repo"), BitbucketPlatform
+    )
 
 
 def test_detect_platform_unsupported():

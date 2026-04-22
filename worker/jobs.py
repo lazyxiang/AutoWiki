@@ -329,8 +329,8 @@ async def run_full_index(
         repo_id (str): UUID primary key of the repository row in SQLite.
         job_id (str): UUID primary key of the job row in SQLite; used for
             progress updates throughout the run.
-        owner (str): GitHub repository owner (username or organisation).
-        name (str): GitHub repository name.
+        owner (str): Repository owner (username or organisation).
+        name (str): Repository name.
         clone_root (Path | None): Override the default clone directory.
             Defaults to ``<data_dir>/repos/<repo_id>/clone``.
         reuse_index (bool): When ``True``, preserve any existing FAISS index
@@ -761,8 +761,8 @@ async def run_refresh_index(
             ARQ worker; not used directly in this function).
         repo_id (str): UUID primary key of the repository row in SQLite.
         job_id (str): UUID primary key of the job row in SQLite.
-        owner (str): GitHub repository owner (username or organisation).
-        name (str): GitHub repository name.
+        owner (str): Repository owner (username or organisation).
+        name (str): Repository name.
         clone_root (Path | None): Override the default clone directory.
             Defaults to ``<data_dir>/repos/<repo_id>/clone``.
 

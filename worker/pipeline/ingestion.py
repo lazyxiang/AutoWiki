@@ -231,7 +231,7 @@ async def clone_or_fetch(clone_dir: Path, clone_url: str) -> tuple[str, str]:
             repo = git.Repo.clone_from(clone_url, clone_dir, depth=1)
         return repo.head.commit.hexsha, repo.active_branch.name
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _do_clone_or_fetch)
 
 

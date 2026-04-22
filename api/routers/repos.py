@@ -26,11 +26,11 @@ class IndexRequest(BaseModel):
     """Request body for submitting a repository for indexing.
 
     Attributes:
-        url (str): Full GitHub repository URL in any commonly accepted form,
-            e.g. ``"https://github.com/owner/repo"`` or
-            ``"github.com/owner/repo"``.  The URL is parsed by
-            :func:`worker.pipeline.ingestion.parse_github_url` which accepts
-            both ``https://`` and bare ``github.com/`` prefixes.
+        url (str): Repository URL to index.  Accepted formats:
+            ``https://github.com/owner/repo``,
+            ``https://gitlab.com/group/repo``,
+            ``https://bitbucket.org/owner/repo`` (with or without ``.git``
+            suffix).
         wiki_language (str): ISO-639-1 language code for the generated wiki
             content.  Defaults to ``"en"`` (English).  Use ``"zh"`` to
             generate the wiki in Chinese (简体中文).

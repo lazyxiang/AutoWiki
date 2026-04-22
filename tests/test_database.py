@@ -91,16 +91,21 @@ async def test_chat_models_created(tmp_path):
 
 
 async def test_platform_token_crud(tmp_path):
+    from datetime import UTC, datetime
+
+    from shared.database import dispose_db, get_session, init_db
     from shared.models import PlatformToken
-    from shared.database import init_db, get_session, dispose_db
-    from datetime import datetime, timezone
 
     db = str(tmp_path / "t.db")
     await init_db(db)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     async with get_session(db) as s:
-        s.add(PlatformToken(platform="github", token="ghp_test", created_at=now, updated_at=now))
+        s.add(
+            PlatformToken(
+                platform="github", token="ghp_test", created_at=now, updated_at=now
+            )
+        )
         await s.commit()
 
     async with get_session(db) as s:
@@ -112,21 +117,23 @@ async def test_platform_token_crud(tmp_path):
 
 
 async def test_repository_has_is_private(tmp_path):
-    from shared.database import init_db, get_session, dispose_db
+    from shared.database import dispose_db, get_session, init_db
     from shared.models import Repository
 
     db = str(tmp_path / "t2.db")
     await init_db(db)
 
     async with get_session(db) as s:
-        s.add(Repository(
-            id="abc123",
-            owner="owner",
-            name="repo",
-            status="pending",
-            platform="github",
-            is_private=True,
-        ))
+        s.add(
+            Repository(
+                id="abc123",
+                owner="owner",
+                name="repo",
+                status="pending",
+                platform="github",
+                is_private=True,
+            )
+        )
         await s.commit()
 
     async with get_session(db) as s:
