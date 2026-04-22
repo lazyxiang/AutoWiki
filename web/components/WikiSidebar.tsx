@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { cn } from "@/lib/utils";
+import { cn, repoPath } from "@/lib/utils";
 import { RefreshButton } from "./RefreshButton";
 
 interface Page {
@@ -36,7 +36,7 @@ function formatIndexedAt(isoDate: string, sha: string): string | null {
 
 export function WikiSidebar({ pages, owner, repo, repoId, lastCommit = "", indexedAt = "" }: Props) {
   const pathname = usePathname();
-  const basePath = `/${owner}/${repo}`;
+  const basePath = repoPath(owner, repo, repoId);
   const indexedLine = formatIndexedAt(indexedAt, lastCommit);
 
   return (

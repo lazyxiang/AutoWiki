@@ -98,22 +98,26 @@ async def test_platform_token_crud(tmp_path):
 
     db = str(tmp_path / "t.db")
     await init_db(db)
-    now = datetime.now(UTC)
+    try:
+        now = datetime.now(UTC)
 
-    async with get_session(db) as s:
-        s.add(
-            PlatformToken(
-                platform="github", token="ghp_test", created_at=now, updated_at=now
+        async with get_session(db) as s:
+            s.add(
+                PlatformToken(
+                    platform="github",
+                    token="ghp_test",
+                    created_at=now,
+                    updated_at=now,
+                )
             )
-        )
-        await s.commit()
+            await s.commit()
 
-    async with get_session(db) as s:
-        row = await s.get(PlatformToken, "github")
-        assert row is not None
-        assert row.token == "ghp_test"
-
-    await dispose_db(db)
+        async with get_session(db) as s:
+            row = await s.get(PlatformToken, "github")
+            assert row is not None
+            assert row.token == "ghp_test"
+    finally:
+        await dispose_db(db)
 
 
 async def test_repository_has_is_private(tmp_path):
@@ -122,22 +126,35 @@ async def test_repository_has_is_private(tmp_path):
 
     db = str(tmp_path / "t2.db")
     await init_db(db)
-
-    async with get_session(db) as s:
-        s.add(
-            Repository(
-                id="abc123",
-                owner="owner",
-                name="repo",
-                status="pending",
-                platform="github",
-                is_private=True,
+    try:
+        async with get_session(db) as s:
+            s.add(
+                Repository(
+                    id="abc123",
+                    owner="owner",
+                    name="repo",
+                    status="pending",
+                    platform="github",
+                    is_private=True,
+                )
             )
-        )
-        await s.commit()
+            await s.commit()
 
-    async with get_session(db) as s:
-        repo = await s.get(Repository, "abc123")
-        assert repo.is_private is True
+        async with get_session(db) as s:
+            repo = await s.get(Repository, "abc123")
+            assert repo.is_private is True
+    finally:
+        await dispose_db(db)
 
-    await dispose_db(db)
+
+async def test_init_db_applies_private_file_permissions(tmp_path):
+    from shared.database import dispose_db, init_db
+
+    db_path = tmp_path / "private" / "autowiki.db"
+    db = str(db_path)
+    await init_db(db)
+    try:
+        assert oct(db_path.parent.stat().st_mode & 0o777) == "0o700"
+        assert oct(db_path.stat().st_mode & 0o777) == "0o600"
+    finally:
+        await dispose_db(db)

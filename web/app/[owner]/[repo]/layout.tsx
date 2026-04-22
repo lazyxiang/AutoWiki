@@ -17,13 +17,15 @@ export default async function WikiLayout({
     getRepoWiki(rid).catch(() => ({ pages: [] })),
     getRepo(rid).catch(() => null),
   ]);
+  const displayOwner = repoMeta?.owner ?? owner;
+  const displayRepo = repoMeta?.name ?? repo;
 
   return (
     <div className="flex h-screen overflow-hidden">
       <WikiSidebar
         pages={pages}
-        owner={owner}
-        repo={repo}
+        owner={displayOwner}
+        repo={displayRepo}
         repoId={rid}
         lastCommit={repoMeta?.last_commit ?? ""}
         indexedAt={repoMeta?.indexed_at ?? ""}

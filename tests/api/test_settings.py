@@ -19,6 +19,25 @@ async def test_put_token_github(client):
     assert resp.status_code == 204
 
 
+async def test_put_token_rejects_blank(client):
+    resp = await client.put("/api/settings/tokens/github", json={"token": "   "})
+
+    assert resp.status_code == 422
+    tokens = (await client.get("/api/settings/tokens")).json()
+    github = next(item for item in tokens if item["platform"] == "github")
+    assert github["has_token"] is False
+
+
+async def test_put_token_trims_before_storing(client):
+    await client.put(
+        "/api/settings/tokens/github", json={"token": "  ghp_test1234abcd  "}
+    )
+
+    resp = await client.get("/api/settings/tokens")
+    github = next(item for item in resp.json() if item["platform"] == "github")
+    assert github["masked_token"].endswith("abcd")
+
+
 async def test_get_tokens_after_put(client):
     await client.put("/api/settings/tokens/github", json={"token": "ghp_test1234abcd"})
     resp = await client.get("/api/settings/tokens")

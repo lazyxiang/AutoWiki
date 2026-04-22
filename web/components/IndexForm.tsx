@@ -46,7 +46,9 @@ export function IndexForm({
       const parsed = parseRepoUrl(url);
       const owner = parsed?.owner ?? "";
       const repo = parsed?.name ?? "";
-      router.push(`/jobs/${job_id}?repo_id=${repo_id}&owner=${owner}&repo=${repo}`);
+      router.push(
+        `/jobs/${job_id}?repo_id=${repo_id}&owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`,
+      );
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {

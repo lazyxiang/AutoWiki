@@ -136,6 +136,20 @@ async def test_github_fetch_metadata_bad_token():
             await _gh.fetch_metadata("owner", "private-repo", "bad-token")
 
 
+async def test_github_fetch_metadata_rate_limited_without_token_returns_defaults():
+    client = _make_github_client({}, status_code=403)
+    with patch("worker.platform.github.httpx.AsyncClient", return_value=client):
+        meta = await _gh.fetch_metadata("owner", "repo", None)
+
+    assert meta.owner == "owner"
+    assert meta.name == "repo"
+    assert meta.description == ""
+    assert meta.stars == 0
+    assert meta.language == ""
+    assert meta.default_branch == "main"
+    assert meta.is_private is False
+
+
 _gl = GitLabPlatform()
 
 
@@ -242,6 +256,20 @@ async def test_gitlab_fetch_metadata_bad_token():
             await _gl.fetch_metadata("group", "repo", "bad")
 
 
+async def test_gitlab_fetch_metadata_unauthenticated_forbidden_is_private():
+    client = _make_gitlab_client({}, {}, project_status=403)
+    with patch("worker.platform.gitlab.httpx.AsyncClient", return_value=client):
+        with pytest.raises(PrivateRepoError):
+            await _gl.fetch_metadata("group", "repo", None)
+
+
+async def test_gitlab_fetch_metadata_token_404_is_auth_error():
+    client = _make_gitlab_client({}, {}, project_status=404)
+    with patch("worker.platform.gitlab.httpx.AsyncClient", return_value=client):
+        with pytest.raises(AuthenticationError):
+            await _gl.fetch_metadata("group", "repo", "bad")
+
+
 _bb = BitbucketPlatform()
 
 
@@ -314,6 +342,20 @@ async def test_bitbucket_fetch_metadata_private_no_token():
 
 async def test_bitbucket_fetch_metadata_bad_token():
     client = _make_bitbucket_client({}, status_code=403)
+    with patch("worker.platform.bitbucket.httpx.AsyncClient", return_value=client):
+        with pytest.raises(AuthenticationError):
+            await _bb.fetch_metadata("owner", "repo", "bad")
+
+
+async def test_bitbucket_fetch_metadata_404_without_token_is_private():
+    client = _make_bitbucket_client({}, status_code=404)
+    with patch("worker.platform.bitbucket.httpx.AsyncClient", return_value=client):
+        with pytest.raises(PrivateRepoError):
+            await _bb.fetch_metadata("owner", "repo", None)
+
+
+async def test_bitbucket_fetch_metadata_404_with_token_is_auth_error():
+    client = _make_bitbucket_client({}, status_code=404)
     with patch("worker.platform.bitbucket.httpx.AsyncClient", return_value=client):
         with pytest.raises(AuthenticationError):
             await _bb.fetch_metadata("owner", "repo", "bad")

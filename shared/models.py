@@ -116,6 +116,8 @@ class ResearchReport(Base):
 class PlatformToken(Base):
     __tablename__ = "platform_tokens"
     platform: Mapped[str] = mapped_column(String, primary_key=True)
+    # PATs are stored locally in SQLite; init_db locks the data dir to 0700
+    # and the database file to 0600, and API responses only expose masked values.
     token: Mapped[str] = mapped_column(String, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(UTC)

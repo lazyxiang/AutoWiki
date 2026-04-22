@@ -23,6 +23,7 @@ export function RepoGrid({ repos, query }: RepoGridProps) {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {filtered.slice(0, 20).map((repo) => (
             <RepoCard
+              id={repo.id}
               key={repo.id}
               owner={repo.owner}
               name={repo.name}

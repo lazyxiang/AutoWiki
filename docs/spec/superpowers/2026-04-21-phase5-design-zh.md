@@ -24,7 +24,7 @@
 
 ### 新文件 / 模块
 
-```
+```text
 worker/platform/
   __init__.py
   base.py          ← 平台抽象基类 (ABC) + RepoMetadata 数据类 + 自定义异常
@@ -43,7 +43,7 @@ web/components/RepoGrid.tsx       ← 过滤并渲染的仓库卡片网格
 
 ### 修改的文件
 
-```
+```text
 worker/pipeline/ingestion.py    ← 使用平台适配器；移除仅限 GitHub 的代码
 shared/models.py                ← Repository 模型新增 is_private 字段
 api/routers/repos.py            ← URL 验证扩展到 GitLab/Bitbucket
@@ -59,7 +59,7 @@ README.md                       ← 更新第 5/6 阶段路线图
 ### 端到端数据流
 
 **私有仓库索引：**
-```
+```text
 用户提交 gitlab.com/group/sub/repo
   → detect_platform() → GitLabPlatform
   → 从 platform_tokens 表中查找令牌
@@ -70,7 +70,7 @@ README.md                       ← 更新第 5/6 阶段路线图
 ```
 
 **首页搜索：**
-```
+```text
 服务器获取仓库 → 作为 props 传递给 HomepageClient
 用户输入 "fast" → IndexForm 触发 onQueryChange("fast")
   → HomepageClient 更新查询状态
@@ -195,7 +195,12 @@ class PlatformToken(Base):
 
 `platform` 是主键，取值为 `"github"`, `"gitlab"`, `"bitbucket"`。每个平台在 AutoWiki 实例中最多存储一个令牌（自托管，单用户模型）。
 
-令牌以明文存储。由于 AutoWiki 是自托管的，且 SQLite 文件位于 `~/.autowiki/`（用户所有），因此未应用数据库级加密。GET 端点绝不返回原始令牌。
+令牌当前以明文存储。由于 AutoWiki 是自托管的，SQLite 文件位于 `~/.autowiki/`（用户所有），因此本阶段未应用数据库级加密；后续版本可评估系统密钥环或本地 KMS。最低安全约束如下：
+
+- `~/.autowiki/` 目录权限应为 `0700`，SQLite 数据库文件权限应为 `0600`
+- GET 端点绝不返回原始 PAT，只返回掩码值
+- 日志和错误消息不得输出原始 PAT；克隆后持久化的 `origin.url` 必须去除令牌
+- 备份应加密，或明确排除包含 PAT 的 SQLite 数据库文件
 
 ### 4.2 令牌辅助函数 (`worker/platform/token_store.py`)
 
@@ -209,7 +214,7 @@ async def get_platform_token(platform_name: str, session: AsyncSession) -> str |
 
 ### 4.3 设置 REST API (`api/routers/settings.py`)
 
-```
+```http
 GET    /api/settings/tokens
        → [{ platform, has_token, masked_token }]
        masked_token: 最后 4 位可见，例如 "••••••••1234" (如果没有令牌则为 null)
@@ -304,7 +309,7 @@ function parseRepoUrl(url: string): { owner: string; name: string } | null {
 
 ### 6.1 组件架构
 
-```
+```text
 web/app/page.tsx (服务端组件)
   → 通过 getRepositories() 获取仓库
   → <HomepageClient repos={repos} />
@@ -358,7 +363,7 @@ function matchesQuery(query: string, repo: Repository): boolean {
 
 ### 新端点
 
-```
+```http
 GET  /api/settings/tokens
 PUT  /api/settings/tokens/{platform}    body: { token: str }
 DEL  /api/settings/tokens/{platform}
@@ -366,7 +371,7 @@ DEL  /api/settings/tokens/{platform}
 
 ### 修改的端点
 
-```
+```http
 POST /api/repos               — 接受 github.com, gitlab.com, bitbucket.org URL
 GET  /api/repos               — 每个仓库的响应包含 is_private 字段
 GET  /api/repos/{repo_id}     — 响应包含 is_private 字段
@@ -383,17 +388,17 @@ GET  /api/repos/{repo_id}     — 响应包含 is_private 字段
 ### CLAUDE.md + README.md
 
 替换：
-```
+```diff
 - **Phase 5** — GitLab/Bitbucket + hybrid search + MCP server
 ```
 
 为：
-```
+```diff
 - **Phase 5** — 支持 GitLab/Bitbucket（公共 + 私有仓库，全量 API 元数据） + 首页项目搜索
 - **Phase 6** — 混合搜索（关键词 + 语义 BM25/FAISS 融合）
 ```
 
-从这两个文件中移除任何关于 MCP 服务器或 GitHub Webhook 触发器的残留提及。
+从这两个文件中移除所有与 MCP 服务器或 GitHub Webhook 触发器相关的残留提及。
 
 ---
 

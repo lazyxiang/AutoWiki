@@ -31,7 +31,8 @@ export default async function SettingsPage() {
       <h1 className="text-3xl font-bold mb-2">Settings</h1>
       <p className="text-muted-foreground mb-10">
         Store personal access tokens (PATs) to index private repositories.
-        Tokens are stored locally and never sent to third parties.
+        Tokens are stored in this AutoWiki instance and used only for requests
+        to the selected repository hosting platform.
       </p>
       <div className="space-y-6">
         {PLATFORMS.map((p) => {

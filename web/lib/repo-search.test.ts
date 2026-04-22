@@ -7,6 +7,7 @@ function makeRepo(owner: string, name: string, description = ""): Repository {
     id: "test",
     owner,
     name,
+    platform: "github",
     description,
     status: "ready",
     indexed_at: "",
@@ -58,11 +59,20 @@ describe("parseRepoUrl", () => {
   it("strips .git suffix", () => {
     expect(parseRepoUrl("https://github.com/owner/repo.git")).toEqual({ owner: "owner", name: "repo" });
   });
+  it("strips .git suffix before trailing slash", () => {
+    expect(parseRepoUrl("https://gitlab.com/group/repo.git/")).toEqual({ owner: "group", name: "repo" });
+  });
+  it("parses host URLs without scheme", () => {
+    expect(parseRepoUrl("gitlab.com/group/repo")).toEqual({ owner: "group", name: "repo" });
+  });
   it("returns null for too-short url", () => {
     expect(parseRepoUrl("github.com/owner")).toBeNull();
   });
   it("returns null for non-url text", () => {
     expect(parseRepoUrl("fastapi")).toBeNull();
+  });
+  it("returns null for hostless paths", () => {
+    expect(parseRepoUrl("foo/bar/baz")).toBeNull();
   });
   it("strips trailing slash", () => {
     expect(parseRepoUrl("https://github.com/owner/repo/")).toEqual({ owner: "owner", name: "repo" });

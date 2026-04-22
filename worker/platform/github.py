@@ -49,9 +49,19 @@ class GitHubPlatform(Platform):
                         f"GitHub repo {owner}/{name} is private. "
                         "Add a GitHub token in Settings."
                     )
-                if code in (401, 403):
+                if code in (401, 403) and token is not None:
                     raise AuthenticationError(
                         "GitHub rejected the stored token. Check it in Settings."
+                    )
+                if code == 403 and token is None:
+                    return RepoMetadata(
+                        owner=owner,
+                        name=name,
+                        description="",
+                        stars=0,
+                        language="",
+                        default_branch="main",
+                        is_private=False,
                     )
                 raise
         data = resp.json()

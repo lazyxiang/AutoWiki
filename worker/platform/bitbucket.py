@@ -44,10 +44,15 @@ class BitbucketPlatform(Platform):
                 resp.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 code = exc.response.status_code
-                if code in (401, 403) and token is None:
+                if code in (401, 403, 404) and token is None:
                     raise PrivateRepoError(
                         f"Bitbucket repo {owner}/{name} is private. "
                         "Add a Bitbucket token in Settings."
+                    )
+                if code == 404 and token is not None:
+                    raise AuthenticationError(
+                        f"Bitbucket repo {owner}/{name} was not found or the stored "
+                        "token cannot access it. Check it in Settings."
                     )
                 if code in (401, 403):
                     raise AuthenticationError(

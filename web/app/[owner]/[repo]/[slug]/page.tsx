@@ -28,8 +28,8 @@ export default async function WikiPageRoute({
   return (
     <WikiPageContent 
       content={page.content} 
-      owner={owner} 
-      repo={repo} 
+      owner={repository.owner || owner} 
+      repo={repository.name || repo} 
       defaultBranch={repository.default_branch || "main"} 
     />
   );

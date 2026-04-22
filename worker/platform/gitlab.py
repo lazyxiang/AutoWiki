@@ -56,6 +56,16 @@ class GitLabPlatform(Platform):
                         f"GitLab repo {owner}/{name} is private. "
                         "Add a GitLab token in Settings."
                     )
+                if code == 404 and token is not None:
+                    raise AuthenticationError(
+                        f"GitLab repo {owner}/{name} was not found or the stored "
+                        "token cannot access it. Check it in Settings."
+                    )
+                if code in (401, 403) and token is None:
+                    raise PrivateRepoError(
+                        f"GitLab repo {owner}/{name} is inaccessible without a token. "
+                        "Add a GitLab token in Settings."
+                    )
                 if code in (401, 403):
                     raise AuthenticationError(
                         "GitLab rejected the stored token. Check it in Settings."

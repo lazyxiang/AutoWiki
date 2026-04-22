@@ -2,6 +2,7 @@ from worker.pipeline.ingestion import (
     extract_readme,
     filter_files,
     get_repo_hash,
+    public_clone_url,
 )
 
 
@@ -19,6 +20,17 @@ def test_get_repo_hash_differs_across_platforms():
     assert h_github != h_gitlab
     assert h_github != h_bitbucket
     assert h_gitlab != h_bitbucket
+
+
+def test_public_clone_url_strips_embedded_credentials():
+    assert (
+        public_clone_url("https://token@github.com/owner/repo.git")
+        == "https://github.com/owner/repo.git"
+    )
+    assert (
+        public_clone_url("https://oauth2:token@gitlab.com/group/repo.git")
+        == "https://gitlab.com/group/repo.git"
+    )
 
 
 def test_filter_files_excludes_binaries(tmp_path):

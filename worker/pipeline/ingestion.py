@@ -17,6 +17,7 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit, urlunsplit
 
 import pathspec
 
@@ -106,6 +107,15 @@ def get_repo_hash(platform: str, owner: str, name: str) -> str:
     """
     key = f"{platform}:{owner}/{name}"
     return hashlib.sha256(key.encode()).hexdigest()[:16]
+
+
+def public_clone_url(clone_url: str) -> str:
+    """Return clone_url without embedded username/password credentials."""
+    parsed = urlsplit(clone_url)
+    if "@" not in parsed.netloc:
+        return clone_url
+    host = parsed.netloc.rsplit("@", 1)[1]
+    return urlunsplit((parsed.scheme, host, parsed.path, parsed.query, parsed.fragment))
 
 
 def filter_files(
@@ -221,14 +231,27 @@ async def clone_or_fetch(clone_dir: Path, clone_url: str) -> tuple[str, str]:
     import git
 
     def _do_clone_or_fetch() -> tuple[str, str]:
+        stored_url = public_clone_url(clone_url)
         if (clone_dir / ".git").exists():
             repo = git.Repo(clone_dir)
             repo.remotes.origin.set_url(clone_url)
-            repo.remotes.origin.fetch()
-            repo.head.reset("FETCH_HEAD", index=True, working_tree=True)
+            try:
+                repo.remotes.origin.fetch()
+                repo.head.reset("FETCH_HEAD", index=True, working_tree=True)
+            finally:
+                repo.remotes.origin.set_url(stored_url)
         else:
             clone_dir.mkdir(parents=True, exist_ok=True)
-            repo = git.Repo.clone_from(clone_url, clone_dir, depth=1)
+            try:
+                repo = git.Repo.clone_from(clone_url, clone_dir, depth=1)
+            except Exception:
+                if (clone_dir / ".git").exists():
+                    try:
+                        git.Repo(clone_dir).remotes.origin.set_url(stored_url)
+                    except Exception:
+                        pass
+                raise
+            repo.remotes.origin.set_url(stored_url)
         return repo.head.commit.hexsha, repo.active_branch.name
 
     loop = asyncio.get_running_loop()

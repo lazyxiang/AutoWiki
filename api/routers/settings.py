@@ -48,6 +48,9 @@ class TokenRequest(BaseModel):
 async def upsert_token(platform: str, req: TokenRequest) -> None:
     if platform not in VALID_PLATFORMS:
         raise HTTPException(status_code=422, detail=f"Unknown platform: {platform!r}")
+    token = req.token.strip()
+    if not token:
+        raise HTTPException(status_code=422, detail="Blank token not allowed")
     cfg = get_config()
     now = datetime.now(UTC)
     async with get_session(str(cfg.database_path)) as s:
@@ -56,13 +59,13 @@ async def upsert_token(platform: str, req: TokenRequest) -> None:
             s.add(
                 PlatformToken(
                     platform=platform,
-                    token=req.token,
+                    token=token,
                     created_at=now,
                     updated_at=now,
                 )
             )
         else:
-            existing.token = req.token
+            existing.token = token
             existing.updated_at = now
         await s.commit()
 

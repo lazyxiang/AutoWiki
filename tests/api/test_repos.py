@@ -44,6 +44,7 @@ async def test_list_repos_after_index(client):
     repos = resp.json()["repos"]
     assert len(repos) == 1
     assert repos[0]["owner"] == "psf"
+    assert repos[0]["platform"] == "github"
 
 
 async def test_refresh_repo_returns_job(client):
@@ -75,24 +76,52 @@ async def test_refresh_repo_returns_job(client):
 
 
 async def test_post_repos_gitlab_url(client):
-    from unittest.mock import AsyncMock, patch
+    from shared.config import get_config
+    from shared.database import get_session
+    from shared.models import Repository
 
     with patch("api.routers.repos.enqueue_full_index", new_callable=AsyncMock):
         resp = await client.post(
             "/api/repos", json={"url": "https://gitlab.com/group/repo"}
         )
     assert resp.status_code == 202
-    assert "repo_id" in resp.json()
+    repo_id = resp.json()["repo_id"]
+
+    async with get_session(str(get_config().database_path)) as s:
+        repo = await s.get(Repository, repo_id)
+        assert repo is not None
+        assert repo.platform == "gitlab"
 
 
 async def test_post_repos_bitbucket_url(client):
-    from unittest.mock import AsyncMock, patch
+    from shared.config import get_config
+    from shared.database import get_session
+    from shared.models import Repository
 
     with patch("api.routers.repos.enqueue_full_index", new_callable=AsyncMock):
         resp = await client.post(
             "/api/repos", json={"url": "https://bitbucket.org/owner/repo"}
         )
     assert resp.status_code == 202
+    repo_id = resp.json()["repo_id"]
+
+    async with get_session(str(get_config().database_path)) as s:
+        repo = await s.get(Repository, repo_id)
+        assert repo is not None
+        assert repo.platform == "bitbucket"
+
+
+async def test_get_repo_includes_platform(client):
+    with patch("api.routers.repos.enqueue_full_index", new_callable=AsyncMock):
+        resp = await client.post(
+            "/api/repos", json={"url": "https://gitlab.com/group/repo"}
+        )
+    repo_id = resp.json()["repo_id"]
+
+    resp = await client.get(f"/api/repos/{repo_id}")
+
+    assert resp.status_code == 200
+    assert resp.json()["platform"] == "gitlab"
 
 
 async def test_post_repos_unsupported_host(client):

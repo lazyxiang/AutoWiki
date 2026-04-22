@@ -13,7 +13,7 @@ A self-hosted, open-source AI-powered wiki generator for software repositories. 
 ## Architecture
 
 ### Service Topology
-```
+```text
 User (Browser / CLI)
     ↓
 API Gateway (FastAPI)  ←→  Redis
@@ -40,7 +40,7 @@ Storage (SQLite + FAISS + Markdown files at ~/.autowiki/)
 Supported AST languages: Python, JavaScript/JSX, TypeScript/TSX, Java, Go, Rust, C, C++, C#
 
 ### Data Storage Layout
-```
+```text
 ~/.autowiki/
   autowiki.db               ← SQLite (repos, jobs, wiki_pages)
   repos/{repo_hash}/
@@ -50,10 +50,15 @@ Supported AST languages: Python, JavaScript/JSX, TypeScript/TSX, Java, Go, Rust,
     ast/
       wiki_plan.json        ← internal wiki plan with file mappings (for refresh)
     wiki/
-      wiki.json             ← user-facing wiki structure (for Phase 4 steering)
+      wiki.json             ← generated user-facing wiki structure/API output
       *.md                  ← generated Markdown pages
   logs/
 ```
+
+The generated `~/.autowiki/repos/{repo_hash}/wiki/wiki.json` is distinct from
+the user-authored `.autowiki/wiki.json` inside a cloned repository. Phase 4
+steering reads the user-authored file, and its `modules` schema applies only to
+that steering config, not to the generated wiki output.
 
 ### Key SQLite Tables
 - `repositories` — repo metadata, status, last-indexed commit SHA
@@ -98,7 +103,7 @@ Default LLM: `claude-sonnet-4-6`. Supported providers: `anthropic`, `openai`, `o
 
 ## API Surface
 
-### REST/WebSocket (Phase 1 + Phase 2 + Phase 3)
+### REST/WebSocket (Phase 1 + Phase 2 + Phase 3 + Phase 5)
 ```http
 POST  /api/repos                              # Submit repo for indexing
 GET   /api/repos                             # List all repos
@@ -114,6 +119,9 @@ GET   /api/jobs/{job_id}                     # Job status + progress
 WS    /ws/jobs/{job_id}                      # Stream job progress
 WS    /ws/repos/{repo_id}/chat/{session_id}  # Stream chat responses
 WS    /ws/repos/{repo_id}/research/{job_id}  # Stream research events
+GET   /api/settings/tokens                   # List PAT storage status (masked)
+PUT   /api/settings/tokens/{platform}        # Store/update PAT for private repos
+DELETE /api/settings/tokens/{platform}       # Delete stored PAT
 ```
 
 ### CLI (Phase 1 + Phase 3)
@@ -128,7 +136,7 @@ autowiki config set <key> <value>
 ```
 
 ### Research API (Phase 3)
-```
+```http
 POST  /api/repos/{repo_id}/research                   # Start deep research → {job_id, report_id}
 GET   /api/repos/{repo_id}/research/{job_id}          # Get report (plan, findings, Markdown)
 WS    /ws/repos/{repo_id}/research/{job_id}           # Stream research events

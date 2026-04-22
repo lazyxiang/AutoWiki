@@ -67,6 +67,7 @@ export async function getRepo(repoId: string): Promise<Repository> {
     id: repo.id || "",
     owner: repo.owner || "unknown",
     name: repo.name || "unnamed",
+    platform: repo.platform || "github",
     description: repo.description || "",
     stars: repo.stars ?? 0,
     language: repo.language || "Unknown",
@@ -163,6 +164,7 @@ export interface Repository {
   id: string;
   owner: string;
   name: string;
+  platform: string;
   description: string;
   stars?: number;
   language?: string;
@@ -182,6 +184,7 @@ interface RepoRaw {
   id?: string;
   owner?: string;
   name?: string;
+  platform?: string;
   description?: string;
   stars?: number;
   language?: string;
@@ -263,6 +266,7 @@ export async function getRepositories(): Promise<Repository[]> {
       id: repo.id || "",
       owner: repo.owner || "unknown",
       name: repo.name || "unnamed",
+      platform: repo.platform || "github",
       description: repo.description || "",
       stars: repo.stars ?? 0,
       language: repo.language || "Unknown",
