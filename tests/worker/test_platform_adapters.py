@@ -10,6 +10,7 @@ from worker.platform.base import (
     UnsupportedPlatformError,
 )
 from worker.platform.github import GitHubPlatform
+from worker.platform.gitlab import GitLabPlatform
 
 
 def test_repo_metadata_fields():
@@ -131,3 +132,109 @@ async def test_github_fetch_metadata_bad_token():
     with patch("worker.platform.github.httpx.AsyncClient", return_value=client):
         with pytest.raises(AuthenticationError):
             await _gh.fetch_metadata("owner", "private-repo", "bad-token")
+
+
+_gl = GitLabPlatform()
+
+
+# ── parse_url ────────────────────────────────────────────────────────
+
+
+def test_gitlab_parse_url_simple():
+    assert _gl.parse_url("https://gitlab.com/group/repo") == ("group", "repo")
+
+
+def test_gitlab_parse_url_subgroup():
+    assert _gl.parse_url("https://gitlab.com/group/sub/repo") == ("group/sub", "repo")
+
+
+def test_gitlab_parse_url_deep_subgroup():
+    assert _gl.parse_url("gitlab.com/a/b/c/repo") == ("a/b/c", "repo")
+
+
+def test_gitlab_parse_url_invalid():
+    with pytest.raises(ValueError):
+        _gl.parse_url("https://gitlab.com/only-one")
+
+
+# ── authenticated_clone_url ──────────────────────────────────────────
+
+
+def test_gitlab_clone_url_with_token():
+    assert (
+        _gl.authenticated_clone_url("group/sub", "repo", "tok")
+        == "https://oauth2:tok@gitlab.com/group/sub/repo.git"
+    )
+
+
+def test_gitlab_clone_url_no_token():
+    assert (
+        _gl.authenticated_clone_url("group", "repo", None)
+        == "https://gitlab.com/group/repo.git"
+    )
+
+
+# ── fetch_metadata ───────────────────────────────────────────────────
+
+
+def _make_gitlab_client(project_data: dict, lang_data: dict, project_status: int = 200):
+    proj_resp = MagicMock()
+    proj_resp.status_code = project_status
+    if project_status >= 400:
+        proj_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "error", request=MagicMock(), response=proj_resp
+        )
+    else:
+        proj_resp.raise_for_status = MagicMock()
+    proj_resp.json.return_value = project_data
+
+    lang_resp = MagicMock()
+    lang_resp.status_code = 200
+    lang_resp.raise_for_status = MagicMock()
+    lang_resp.json.return_value = lang_data
+
+    calls = [proj_resp, lang_resp]
+    call_idx = 0
+
+    async def _get(url, **kwargs):
+        nonlocal call_idx
+        r = calls[call_idx]
+        call_idx += 1
+        return r
+
+    mock_client = AsyncMock()
+    mock_client.get = _get
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    return mock_client
+
+
+async def test_gitlab_fetch_metadata_public():
+    client = _make_gitlab_client(
+        {
+            "visibility": "public",
+            "description": "GL repo",
+            "star_count": 5,
+            "default_branch": "main",
+        },
+        {"Python": 90.0, "Shell": 10.0},
+    )
+    with patch("worker.platform.gitlab.httpx.AsyncClient", return_value=client):
+        meta = await _gl.fetch_metadata("group", "repo", "token")
+    assert meta.language == "Python"
+    assert meta.is_private is False
+    assert meta.stars == 5
+
+
+async def test_gitlab_fetch_metadata_private_no_token():
+    client = _make_gitlab_client({}, {}, project_status=404)
+    with patch("worker.platform.gitlab.httpx.AsyncClient", return_value=client):
+        with pytest.raises(PrivateRepoError):
+            await _gl.fetch_metadata("group", "private-repo", None)
+
+
+async def test_gitlab_fetch_metadata_bad_token():
+    client = _make_gitlab_client({}, {}, project_status=401)
+    with patch("worker.platform.gitlab.httpx.AsyncClient", return_value=client):
+        with pytest.raises(AuthenticationError):
+            await _gl.fetch_metadata("group", "repo", "bad")
