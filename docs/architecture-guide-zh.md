@@ -119,7 +119,7 @@ Phase 2 中短暂加入，并在 Phase 2.5 中被移除 —— 页面生成器�
 |----------|--------|------------|
 | `docs/2026-04-15-wiki-planner-robustness-investigation.md` | 已完成 | 调查结果：大纲碎片化根因、三种候选修复方案 |
 | `docs/superpowers/plans/2026-04-15-wiki-planner-robustness.md` | 已完成 | 调查建议修复方案的实现计划，已在 PR #22 之前的提交中应用 |
-| `docs/superpowers/plans/2026-04-16-deferred-wiki-planner-robustness.md` | **已完成 (PR #22)** | C1 层大纲锚点、C2 层 `secondary_files` 多页面分配、`autowiki validate-plan` 离线测试框架、固定记录器 |
+| `docs/superpowers/plans/2026-04-16-deferred-wiki-planner-robustness.md` | **已完成 (PR #22)** | C1 层大纲锚点、`autowiki validate-plan` 离线测试框架 |
 
 ### Phase 4.6 — 以页面为中心的文件选择
 
@@ -146,7 +146,7 @@ Phase 2 中短暂加入，并在 Phase 2.5 中被移除 —— 页面生成器�
 4. **第 5 阶段 —— 规划器** (`worker/pipeline/wiki_planner.py`):
    - 第 1 阶段：`_build_outline_prompt()`（带有来自 `outline_anchors.py` 的架构锚点） → LLM 调用 → `_validate_outline_structure()`；最多重试 `max_retries` 次并提供反馈
    - 第 2 阶段：`_select_files_in_batches()`（12 页一批，可缓存的系统提示词） → `_validate_assignments()`；重试并提供反馈；最后失败时回退到 `_heuristic_select_files()`（基于评分的启发式方法）
-   - 结果：一个 `WikiPlan`（`WikiPageSpec` 列表，每个包含标题、目的、`files`、`secondary_files`、父页面）
+   - 结果：一个 `WikiPlan`（`WikiPageSpec` 列表，每个包含标题、目的、`files`、父页面）
    - 修正：第 2 阶段现在为每个页面选择 5–8 个代表性文件（最多 10 个），而不是将每个文件分配给一个页面。`WikiPlan.all_repo_files` 被持久化以在增量刷新期间实现正确的文件差异检测。
    - 离线诊断：`autowiki validate-plan <repo>` 读取 `ast/wiki_plan.json`
    - 设计原理：`docs/superpowers/specs/2026-04-08-wiki-planner-improvements-design.md` §5 和 `docs/superpowers/plans/2026-04-17-page-centric-file-selection.md`。

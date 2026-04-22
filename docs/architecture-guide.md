@@ -124,7 +124,7 @@ superseded.
 |----------|--------|------------|
 | `docs/2026-04-15-wiki-planner-robustness-investigation.md` | Complete | Investigation findings: outline fragmentation root causes, three candidate fixes |
 | `docs/superpowers/plans/2026-04-15-wiki-planner-robustness.md` | Complete | Implementation plan for investigation-recommended fixes applied in pre-PR #22 commits |
-| `docs/superpowers/plans/2026-04-16-deferred-wiki-planner-robustness.md` | **Complete (PR #22)** | Layer C1 outline anchors, Layer C2 `secondary_files` multi-page assignment, `autowiki validate-plan` offline harness, fixture recorder |
+| `docs/superpowers/plans/2026-04-16-deferred-wiki-planner-robustness.md` | **Complete (PR #22)** | Layer C1 outline anchors, `autowiki validate-plan` offline harness |
 
 ### Phase 4.6 — Page-centric File Selection
 
@@ -151,7 +151,7 @@ superseded.
 4. **Stage 5 — Planner** (`worker/pipeline/wiki_planner.py`):
    - Phase 1: `_build_outline_prompt()` (with architectural anchors from `outline_anchors.py`) → LLM call → `_validate_outline_structure()`; self-retries with feedback up to `max_retries` times
    - Phase 2: `_select_files_in_batches()` (12-page batches, cacheable system prompt) → `_validate_assignments()`; self-retries with feedback; on final failure falls back to `_heuristic_select_files()` (scoring-based heuristic)
-   - Result: a `WikiPlan` (list of `WikiPageSpec`, each with title, purpose, `files`, `secondary_files`, parent)
+   - Result: a `WikiPlan` (list of `WikiPageSpec`, each with title, purpose, `files`, parent)
    - Correction: Phase 2 now selects 5–8 representative files per page (max 10) rather than assigning every file to one page. `WikiPlan.all_repo_files` is persisted to enable correct file-diff detection during incremental refresh.
    - Offline diagnostics: `autowiki validate-plan <repo>` reads `ast/wiki_plan.json`
    - Design rationale: `docs/superpowers/specs/2026-04-08-wiki-planner-improvements-design.md` §5 and `docs/superpowers/plans/2026-04-17-page-centric-file-selection.md`.

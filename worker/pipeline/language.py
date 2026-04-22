@@ -23,9 +23,14 @@ _PLANNER_INSTRUCTIONS: dict[str, str] = {
     "en": "",
     "zh": (
         "\n\nIMPORTANT: Write page titles and purpose descriptions in Chinese "
-        "(简体中文). The JSON keys (title, purpose, parent, files) must remain "
-        "in English exactly as shown in the schema. File paths in the 'files' "
-        "array must be exact original paths — never translate them."
+        "(简体中文). The JSON keys (title, purpose, parent, en_keywords, files) must "
+        "remain in English exactly as shown in the schema. File paths in the 'files' "
+        "array must be exact original paths — never translate them.\n"
+        "For EVERY page, populate 'en_keywords' with 3–8 English terms taken "
+        "directly from the repository's directory names, module names, or file "
+        "basenames (e.g. ['worker', 'pipeline', 'ingestion'] or ['api', 'routes', "
+        "'auth']). These keywords are used internally to pre-filter candidate files "
+        "for each page and must correspond to actual paths in the repository."
     ),
 }
 

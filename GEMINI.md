@@ -4,7 +4,7 @@ This file provides guidance to GEMINI when working with code in this repository.
 
 ## Project Status
 
-AutoWiki **Phases 1, 2, 2.5, 3, 4, 4.5, and 4.6 are complete**. Phase 1 tagged `v0.1.0-phase1`; Phase 2 (chat, diagrams, incremental refresh) merged via PR #4; Phase 2.5 (wiki quality enhancements) merged across PRs #15 and #17; Phase 3 (Deep Research) and Phase 4 (User Steering) merged via PR #20; Phase 4.5 (planner robustness hardening: Layer C1/C2, validate-plan, feedback retries, Mermaid fixes, Docker startup fixes) merged via PR #22; Phase 4.6 (page-centric file selection) merged via PR #23.
+AutoWiki **Phases 1, 2, 2.5, 3, 4, 4.5, and 4.6 are complete**. Phase 1 tagged `v0.1.0-phase1`; Phase 2 (chat, diagrams, incremental refresh) merged via PR #4; Phase 2.5 (wiki quality enhancements) merged across PRs #15 and #17; Phase 3 (Deep Research) and Phase 4 (User Steering) merged via PR #20; Phase 4.5 (planner robustness hardening: Layer C1, validate-plan, feedback retries, Mermaid fixes, Docker startup fixes) merged via PR #22; Phase 4.6 (page-centric file selection) merged via PR #23.
 
 ## What AutoWiki Is
 
@@ -93,8 +93,7 @@ Default LLM: `claude-sonnet-4-6`. Supported providers: `anthropic`, `openai`, `o
 - **Planner fallback semantics**: when `_select_files` exhausts retries, `_heuristic_select_files` preserves valid pages from the partial LLM result and fills the remainder via scoring; `_directory_cluster_assign` is retained as a last resort.
 - **Planner batched selection**: `_select_files_in_batches` processes pages in batches of 12, reusing a cacheable system segment (outline + file summary + dep info) across batches for Anthropic prompt caching.
 - **`WikiPlan.all_repo_files`**: persisted in `ast/wiki_plan.json`; incremental refresh reads this to detect added/removed files (each page only carries 5–10 files, so the per-page union is too small to derive the full file list).
-- **`WikiPageSpec.secondary_files`**: retained for page generator "Referenced modules" context, but Phase 2 page-centric selection always produces `secondary_files=[]`.
-- **Outline anchors (Layer C1)**: `worker/pipeline/outline_anchors.py` synthesises a directory tree, package-entry docstrings, and README headings, injected into the Phase-1 outline prompt to reduce cross-page fragmentation.
+- **Outline anchors (Layer C1)**: worker/pipeline/outline_anchors.py synthesises a directory tree, package-entry docstrings, and README headings, injected into the Phase-1 outline prompt to reduce cross-page fragmentation.
 - **Mermaid sanitization** (`worker/utils/mermaid.py`): `sanitize_mermaid` quotes node/edge labels containing `(){}|<>/`, handles compound shapes, strips code fences, and removes orphaned `end` keywords (an `end` with no matching `subgraph` opening) that LLMs sometimes emit when using a node definition instead of a proper `subgraph … end` block.
 
 ## API Surface
@@ -169,6 +168,6 @@ Non-Docker: `autowiki serve` spawns API + worker + Next.js as subprocesses.
 - **Phase 2.5** ✅ — Wiki quality enhancements: two-phase planner with per-phase validation, bottom-up child-synthesis generation, 4-pass page orchestrator, prompt caching, fast model, RAG doc_k tuning, diagram post-processing (PRs #15 and #17)
 - **Phase 3** ✅ — Deep Research mode: multi-step RAG investigation, LLM planner, per-step AST context, synthesized report; `autowiki research` CLI; REST + WebSocket API (PR #20)
 - **Phase 4** ✅ — User-steered wiki structure via `.autowiki/wiki.json`: override page hierarchy, assign modules to pages, inject repo/page notes into generation (PR #20)
-- **Phase 4.5** ✅ — Planner robustness hardening (PR #22): architectural anchors in Phase-1 outline prompt (Layer C1), multi-page file assignment with `secondary_files` (Layer C2), `autowiki validate-plan` offline diagnostic CLI, feedback-retry loop in `_assign_files`, various bug fixes (Gemini JSON, Mermaid, Docker)
+- **Phase 4.5** ✅ — Planner robustness hardening (PR #22): architectural anchors in Phase-1 outline prompt (Layer C1), `autowiki validate-plan` offline diagnostic CLI, feedback-retry loop in `_assign_files`, various bug fixes (Gemini JSON, Mermaid, Docker)
 - **Phase 4.6** ✅ — Page-centric file selection (PR #23): Phase 2 replaced from file-centric assignment to page-centric selection (5–8 files per page); scoring-based pre-filter + fallback (`_score_file_for_page`, `_heuristic_select_files`); `WikiPlan.all_repo_files` for correct refresh coverage; orphan enforcement removed
 - **Phase 5** — GitLab/Bitbucket + hybrid search + MCP server

@@ -319,6 +319,10 @@ _OUTLINE_SCHEMA = {
                     "title": {"type": "string"},
                     "purpose": {"type": "string"},
                     "parent": {"type": ["string", "null"]},
+                    "en_keywords": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
                 },
                 "required": ["title", "purpose"],
             },
@@ -470,7 +474,11 @@ def _build_outline_prompt(
         "directories form a tight semantic unit (e.g. a frontend component "
         "and its backend route).\n"
         "- Page titles should describe concepts/components, not directory names\n"
-        "- Do NOT assign files to pages — just define the page structure\n\n"
+        "- Do NOT assign files to pages — just define the page structure\n"
+        "- en_keywords (optional): when page title/purpose are non-English, "
+        "list 3–8 English directory or module names from the file listing that "
+        "best identify the source files this page covers (e.g. 'worker', "
+        "'pipeline', 'api', 'routes'). Used internally for file pre-filtering.\n\n"
         "Output JSON matching this schema:\n"
         f"{schema_json}"
     )
@@ -797,6 +805,8 @@ def _score_file_for_page(
         score += min(in_degree * 0.3, 2.0)
 
     page_tokens = _tokenize(page["title"] + " " + page.get("purpose", ""))
+    for kw in page.get("en_keywords") or []:
+        page_tokens |= _tokenize(kw)
     file_tokens = _tokenize(path.replace("/", " ").replace("_", " ").replace("-", " "))
     score += len(page_tokens & file_tokens) * 0.5
 
@@ -842,7 +852,9 @@ def _directory_cluster_assign(
     """
     page_titles = [p["title"] for p in outline]
     page_tokens: dict[str, set[str]] = {
-        p["title"]: _tokenize(p["title"] + " " + p.get("purpose", "")) for p in outline
+        p["title"]: _tokenize(p["title"] + " " + p.get("purpose", ""))
+        | {tok for kw in (p.get("en_keywords") or []) for tok in _tokenize(kw)}
+        for p in outline
     }
 
     # Bucket files by first directory segment

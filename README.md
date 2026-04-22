@@ -256,7 +256,7 @@ WS /ws/jobs/{job_id}                 → streams {progress, status} every second
 - **Phase 2.5** ✅ — Wiki quality enhancements: two-phase planner, 4-pass page generation, prompt caching, fast model support, RAG tuning, diagram post-processing
 - **Phase 3** ✅ — Deep Research mode: multi-step RAG investigation with LLM planner, per-step AST context, synthesized Markdown report; REST + WebSocket API; `autowiki research` CLI command (PR #20)
 - **Phase 4** ✅ — User-steered wiki structure via `.autowiki/wiki.json`: override page hierarchy, assign modules to pages, inject repo/page notes into generation (PR #20)
-- **Phase 4.5** ✅ — Planner robustness hardening (PR #22): architectural anchors in Phase-1 outline prompt (Layer C1), multi-page file assignment with `secondary_files` (Layer C2), `autowiki validate-plan` offline diagnostic CLI, feedback-retry loop in `_assign_files`, various bug fixes (Gemini JSON, Mermaid, Docker)
+- **Phase 4.5** ✅ — Planner robustness hardening (PR #22): architectural anchors in Phase-1 outline prompt (Layer C1), `autowiki validate-plan` offline diagnostic CLI, feedback-retry loop in `_assign_files`, various bug fixes (Gemini JSON, Mermaid, Docker)
 - **Phase 4.6** ✅ — Page-centric file selection (PR #23): Phase 2 replaced from file-centric assignment to page-centric selection (5–8 files per page); scoring-based pre-filter + fallback (`_score_file_for_page`, `_heuristic_select_files`); `WikiPlan.all_repo_files` for correct refresh coverage; orphan enforcement removed
 - **Phase 5** — GitLab/Bitbucket, hybrid search, MCP server
 
