@@ -64,4 +64,7 @@ describe("parseRepoUrl", () => {
   it("returns null for non-url text", () => {
     expect(parseRepoUrl("fastapi")).toBeNull();
   });
+  it("strips trailing slash", () => {
+    expect(parseRepoUrl("https://github.com/owner/repo/")).toEqual({ owner: "owner", name: "repo" });
+  });
 });

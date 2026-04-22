@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,6 +23,15 @@ export function IndexForm({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const router = useRouter();
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function handleChange(value: string) {
+    setUrl(value);
+    if (onQueryChange) {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => onQueryChange(value), 200);
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -53,10 +62,7 @@ export function IndexForm({
             type="text"
             placeholder="Search or paste a repo URL (github.com, gitlab.com, bitbucket.org)"
             value={url}
-            onChange={(e) => {
-              setUrl(e.target.value);
-              onQueryChange?.(e.target.value);
-            }}
+            onChange={(e) => handleChange(e.target.value)}
             disabled={loading}
             className="flex-1 h-12 border-none shadow-none focus-visible:ring-0 text-lg bg-transparent px-4 font-normal"
           />
