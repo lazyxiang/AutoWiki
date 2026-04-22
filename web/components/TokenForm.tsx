@@ -11,6 +11,11 @@ interface TokenFormProps {
   maskedToken: string | null;
 }
 
+function maskToken(raw: string): string {
+  if (raw.length <= 4) return "••••";
+  return "••••••••" + raw.slice(-4);
+}
+
 export function TokenForm({
   platform,
   label,
@@ -18,6 +23,7 @@ export function TokenForm({
   maskedToken,
 }: TokenFormProps) {
   const [token, setToken] = useState("");
+  // State initialized from server props; parent must use key={platform} to remount on prop changes.
   const [currentHas, setCurrentHas] = useState(hasToken);
   const [currentMasked, setCurrentMasked] = useState(maskedToken);
   const [saving, setSaving] = useState(false);
@@ -30,7 +36,7 @@ export function TokenForm({
     try {
       await upsertToken(platform, token.trim());
       setCurrentHas(true);
-      setCurrentMasked("••••••••" + token.trim().slice(-4));
+      setCurrentMasked(maskToken(token.trim()));
       setToken("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save token");
@@ -68,9 +74,16 @@ export function TokenForm({
           ? "Token stored. Enter a new value to replace it."
           : "No token stored. Public repositories work without a token."}
       </p>
-      <div className="flex gap-2">
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          void handleSave();
+        }}
+        className="flex gap-2"
+      >
         <Input
           type="password"
+          aria-label={`${label} personal access token`}
           placeholder={
             currentHas ? "Replace existing token…" : "Personal access token"
           }
@@ -79,15 +92,20 @@ export function TokenForm({
           disabled={saving}
           className="flex-1"
         />
-        <Button onClick={handleSave} disabled={saving || !token.trim()}>
+        <Button type="submit" disabled={saving || !token.trim()}>
           {saving ? "Saving…" : "Save"}
         </Button>
         {currentHas && (
-          <Button variant="outline" onClick={handleClear} disabled={saving}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleClear}
+            disabled={saving}
+          >
             Clear
           </Button>
         )}
-      </div>
+      </form>
       {error && <p className="text-sm text-destructive">{error}</p>}
     </div>
   );

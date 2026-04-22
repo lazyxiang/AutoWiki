@@ -11,13 +11,14 @@ const PLATFORMS = [
 ];
 
 export default async function SettingsPage() {
-  const tokens = await getTokens().catch(() =>
-    PLATFORMS.map((p) => ({
+  const tokens = await getTokens().catch((err) => {
+    console.error("[settings] failed to load tokens:", err);
+    return PLATFORMS.map((p) => ({
       platform: p.id,
       has_token: false,
       masked_token: null,
-    })),
-  );
+    }));
+  });
 
   return (
     <main className="max-w-2xl mx-auto px-6 py-16">
