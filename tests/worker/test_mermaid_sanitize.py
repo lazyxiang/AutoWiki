@@ -249,6 +249,64 @@ class TestSanitizeMermaidBlocks:
         assert 'A["Foo (x)"]' in result
         assert '|"GET /y"|' in result
 
+    def test_unclosed_mermaid_block_closes_before_source_annotation(self):
+        md = (
+            "# Application UI Layer\n\n"
+            "**Diagram: UI Navigation and Activity Flow**\n\n"
+            "```mermaid\n"
+            "flowchart TD\n"
+            '    Start(["App Start"]) --> Main["MainActivity (Dashboard)"]\n'
+            '    Main -->|"onKeyDown (Back)"| ExitDialog{"Exit Dialog"}\n'
+            '    ExitDialog -->|"No"| Main\n'
+            "\n"
+            "*Source: src/com/seven/network/ericliu/MainActivity.java:71-745*\n\n"
+            "## MainActivity Lifecycle and Core Responsibilities\n\n"
+            "The lifecycle section must remain Markdown."
+        )
+
+        result = sanitize_mermaid_blocks(md)
+
+        assert result.count("```") == 2
+        assert "```\n\n*Source:" in result
+        assert "## MainActivity Lifecycle" in result
+        mermaid_body = result.split("```mermaid\n", 1)[1].split("\n```", 1)[0]
+        assert "*Source:" not in mermaid_body
+        assert "## MainActivity" not in mermaid_body
+
+    def test_unclosed_mermaid_block_closes_before_next_heading(self):
+        md = (
+            "```mermaid\n"
+            "flowchart TD\n"
+            "    A --> B\n"
+            "\n"
+            "## Next Section\n\n"
+            "Text after the diagram."
+        )
+
+        result = sanitize_mermaid_blocks(md)
+
+        assert result.count("```") == 2
+        assert "```\n\n## Next Section" in result
+
+    def test_unclosed_state_diagram_block_closes_state_before_markdown_fence(self):
+        md = (
+            "```mermaid\n"
+            "stateDiagram-v2\n"
+            '    [*] --> Created: "onCreate()"\n'
+            "\n"
+            "    state Started {\n"
+            '        D["User Interaction"] --> E["onActivityResult()"]\n'
+            '        D --> F["onKeyDown()"]\n'
+            "\n"
+            "*Source: src/MainActivity.java:114-153*\n"
+        )
+
+        result = sanitize_mermaid_blocks(md)
+
+        mermaid_body = result.split("```mermaid\n", 1)[1].split("\n```", 1)[0]
+        assert mermaid_body.rstrip().endswith("}")
+        assert "}\n```\n\n*Source:" in result
+
 
 # ── Edge cases ───────────────────────────────────────────────────────
 

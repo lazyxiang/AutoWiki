@@ -39,6 +39,11 @@ _DOUBLE_CURLY_RE = re.compile(r"(\b\w+\{\{)([^\"]+)(\}\})")
 # Matches edge labels like  -->|label text|  or  ---|label text|
 # Excludes already-quoted labels (label starting with `"`)
 _EDGE_LABEL_RE = re.compile(r"(\|)([^\"|][^|]*?)(\|)")
+_MERMAID_FENCE_OPEN_RE = re.compile(r"^```mermaid[ \t]*$")
+_FENCE_CLOSE_RE = re.compile(r"^```[ \t]*$")
+_MARKDOWN_BOUNDARY_RE = re.compile(
+    r"^(?:\*Source:|_Source:|#{1,6}\s|\|.+\|$|[-*+]\s+|\d+\.\s+)"
+)
 
 # -- Edge-type normalisation -----------------------------------------
 # LLMs sometimes emit  --|"label"|  (undirected line) instead of
@@ -194,17 +199,20 @@ def sanitize_mermaid(text: str) -> str:
 
     # Detect diagram type from the first non-empty line.
     block_opener = _FALLBACK_BLOCK_OPENER
+    diagram_type = ""
     for line in lines:
         first = line.strip().lower()
         if first:
             for dtype, pattern in _BLOCK_OPENERS_BY_TYPE.items():
                 if first.startswith(dtype):
                     block_opener = pattern
+                    diagram_type = dtype
                     break
             break
 
     # Track block depth so orphaned `end` keywords can be dropped.
     block_depth = 0
+    state_brace_depth = 0
 
     for line in lines:
         stripped = line.strip()
@@ -229,6 +237,14 @@ def sanitize_mermaid(text: str) -> str:
             else:
                 # Orphaned `end` — no open block to close; drop the line.
                 continue
+        elif diagram_type == "statediagram":
+            if stripped.startswith("state ") and stripped.endswith("{"):
+                state_brace_depth += 1
+            elif stripped == "}":
+                if state_brace_depth > 0:
+                    state_brace_depth -= 1
+                else:
+                    continue
 
         # Normalise undirected labelled edges: --|"..."| to -->|"..."|
         line = _UNDIRECTED_LABELED_EDGE_RE.sub(r"-->|", line)
@@ -246,6 +262,9 @@ def sanitize_mermaid(text: str) -> str:
     # Append missing end keywords for unclosed blocks.
     for _ in range(block_depth):
         result.append("end")
+    # stateDiagram-v2 uses braces for composite states rather than `end`.
+    for _ in range(state_brace_depth):
+        result.append("}")
 
     return "\n".join(result)
 
@@ -264,22 +283,49 @@ def sanitize_mermaid_blocks(markdown: str) -> str:
     if not markdown:
         return markdown
 
-    def _replace_block(m: re.Match) -> str:
-        fence_open = m.group(1)  # ```mermaid
-        body = m.group(2)
-        fence_close = m.group(3)  # ```
+    def _looks_like_markdown_boundary(line: str) -> bool:
+        return bool(_MARKDOWN_BOUNDARY_RE.match(line.strip()))
 
-        sanitized_body = sanitize_mermaid(body)
-        # sanitize_mermaid strips fences, so re-wrap
-        return f"{fence_open}\n{sanitized_body}\n{fence_close}"
+    had_trailing_newline = markdown.endswith("\n")
+    lines = markdown.splitlines()
+    result: list[str] = []
+    i = 0
 
-    # The closing ``` must appear alone at the start of a line (with optional
-    # trailing whitespace) so that triple-backticks embedded mid-line inside a
-    # node label (e.g. `detect ```mermaid code block`) do not prematurely terminate
-    # the block.
-    return re.sub(
-        r"^(```mermaid[ \t]*)\n(.*?)\n^(```)[ \t]*$",
-        _replace_block,
-        markdown,
-        flags=re.DOTALL | re.MULTILINE,
-    )
+    while i < len(lines):
+        line = lines[i]
+        if not _MERMAID_FENCE_OPEN_RE.match(line.strip()):
+            result.append(line)
+            i += 1
+            continue
+
+        fence_open = line
+        body: list[str] = []
+        i += 1
+        found_close = False
+
+        while i < len(lines):
+            current = lines[i]
+            if _FENCE_CLOSE_RE.match(current.strip()):
+                found_close = True
+                i += 1
+                break
+            if _looks_like_markdown_boundary(current):
+                break
+            body.append(current)
+            i += 1
+
+        sanitized_body = sanitize_mermaid("\n".join(body))
+        result.append(fence_open)
+        if sanitized_body:
+            result.extend(sanitized_body.split("\n"))
+        result.append("```")
+
+        if found_close:
+            continue
+        if i < len(lines) and _looks_like_markdown_boundary(lines[i]):
+            result.append("")
+
+    output = "\n".join(result)
+    if had_trailing_newline:
+        output += "\n"
+    return output

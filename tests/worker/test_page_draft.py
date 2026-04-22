@@ -25,6 +25,12 @@ def test_draft_system_mentions_mermaid_palette():
         assert diagram_type in DRAFT_SYSTEM
 
 
+def test_draft_system_requires_closed_mermaid_fences():
+    assert "Never leave a Mermaid fence unclosed" in DRAFT_SYSTEM
+    assert "source annotations after the closing fence" in DRAFT_SYSTEM
+    assert "Do not include Markdown headings" in DRAFT_SYSTEM
+
+
 def test_draft_system_mentions_source_of_truth():
     assert "source code" in DRAFT_SYSTEM.lower()
     assert (

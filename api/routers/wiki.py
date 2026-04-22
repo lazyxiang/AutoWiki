@@ -13,6 +13,7 @@ from sqlalchemy import select
 from shared.config import get_config
 from shared.database import get_session
 from shared.models import Repository, WikiPage
+from worker.utils.mermaid import sanitize_mermaid_blocks
 
 router = APIRouter(prefix="/api/repos/{repo_id}/wiki")
 
@@ -165,7 +166,7 @@ async def get_wiki_page(repo_id: str, slug: str):
     return {
         "slug": page.slug,
         "title": page.title,
-        "content": page.content,
+        "content": sanitize_mermaid_blocks(page.content),
         "parent_slug": page.parent_slug,
         "updated_at": page.updated_at,
     }
