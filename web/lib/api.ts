@@ -76,6 +76,7 @@ export async function getRepo(repoId: string): Promise<Repository> {
     indexed_at_formatted: repo.indexed_at_formatted || (indexedAt ? new Date(indexedAt).toLocaleString() : "Never"),
     wiki_language: repo.wiki_language || "en",
     last_commit: repo.last_commit || "",
+    is_private: repo.is_private ?? false,
   };
 }
 /**
@@ -171,6 +172,7 @@ export interface Repository {
   indexed_at_formatted: string;
   wiki_language: string;
   last_commit?: string;
+  is_private?: boolean;
 }
 
 /**
@@ -189,6 +191,7 @@ interface RepoRaw {
   indexed_at_formatted?: string;
   wiki_language?: string;
   last_commit?: string;
+  is_private?: boolean;
 }
 
 /**
@@ -269,6 +272,35 @@ export async function getRepositories(): Promise<Repository[]> {
       indexed_at_formatted: repo.indexed_at_formatted || (indexedAt ? new Date(indexedAt).toLocaleString() : "Never"),
       wiki_language: repo.wiki_language || "en",
       last_commit: repo.last_commit || "",
+      is_private: repo.is_private ?? false,
     };
   });
+}
+
+export interface PlatformTokenStatus {
+  platform: string;
+  has_token: boolean;
+  masked_token: string | null;
+}
+
+export async function getTokens(): Promise<PlatformTokenStatus[]> {
+  const res = await fetch(`${API_URL}/api/settings/tokens`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json() as Promise<PlatformTokenStatus[]>;
+}
+
+export async function upsertToken(platform: string, token: string): Promise<void> {
+  const res = await fetch(`${API_URL}/api/settings/tokens/${platform}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+export async function deleteToken(platform: string): Promise<void> {
+  const res = await fetch(`${API_URL}/api/settings/tokens/${platform}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error(await res.text());
 }
