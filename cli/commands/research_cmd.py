@@ -1,28 +1,30 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json as _json
 
 import httpx
 import typer
 
-from worker.pipeline.ingestion import parse_github_url
+from worker.pipeline.ingestion import get_repo_hash
+from worker.platform.base import UnsupportedPlatformError
+from worker.platform.registry import detect_platform
 
 
 def research_cmd(
-    url: str = typer.Argument(..., help="GitHub repo URL"),
+    url: str = typer.Argument(..., help="Repository URL"),
     question: str = typer.Argument(..., help="Research question"),
     api_url: str = typer.Option("http://127.0.0.1:3001", envvar="AUTOWIKI_API_URL"),
 ):
     """Run Deep Research on an indexed repository and print the report."""
     try:
-        owner, name = parse_github_url(url)
-    except ValueError as e:
+        platform = detect_platform(url)
+        owner, name = platform.parse_url(url)
+    except (ValueError, UnsupportedPlatformError) as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
 
-    repo_id = hashlib.sha256(f"github:{owner}/{name}".encode()).hexdigest()[:16]
+    repo_id = get_repo_hash(platform.name, owner, name)
 
     try:
         repo_resp = httpx.get(f"{api_url}/api/repos/{repo_id}", timeout=10)

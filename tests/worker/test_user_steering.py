@@ -130,7 +130,27 @@ async def test_full_index_reads_autowiki_wiki_json(tmp_path, monkeypatch):
             "worker.jobs.clone_or_fetch",
             new=AsyncMock(return_value=("abc", "main")),
         ),
-        patch("worker.jobs.fetch_github_metadata", new=AsyncMock(return_value={})),
+        patch(
+            "worker.jobs.get_platform_token",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "worker.jobs.get_platform_by_name",
+            return_value=MagicMock(
+                fetch_metadata=AsyncMock(
+                    return_value=MagicMock(
+                        description="",
+                        stars=0,
+                        language="",
+                        default_branch="main",
+                        is_private=False,
+                    )
+                ),
+                authenticated_clone_url=MagicMock(
+                    return_value="https://github.com/o/n.git"
+                ),
+            ),
+        ),
         patch("worker.jobs.filter_files", return_value=[]),
         patch("worker.jobs.extract_readme", return_value=""),
         patch(

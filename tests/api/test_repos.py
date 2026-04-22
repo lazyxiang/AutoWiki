@@ -72,3 +72,31 @@ async def test_refresh_repo_returns_job(client):
     body = resp2.json()
     assert "job_id" in body
     assert body["status"] == "queued"
+
+
+async def test_post_repos_gitlab_url(client):
+    from unittest.mock import AsyncMock, patch
+
+    with patch("api.routers.repos.enqueue_full_index", new_callable=AsyncMock):
+        resp = await client.post(
+            "/api/repos", json={"url": "https://gitlab.com/group/repo"}
+        )
+    assert resp.status_code == 202
+    assert "repo_id" in resp.json()
+
+
+async def test_post_repos_bitbucket_url(client):
+    from unittest.mock import AsyncMock, patch
+
+    with patch("api.routers.repos.enqueue_full_index", new_callable=AsyncMock):
+        resp = await client.post(
+            "/api/repos", json={"url": "https://bitbucket.org/owner/repo"}
+        )
+    assert resp.status_code == 202
+
+
+async def test_post_repos_unsupported_host(client):
+    resp = await client.post(
+        "/api/repos", json={"url": "https://codeberg.org/owner/repo"}
+    )
+    assert resp.status_code == 422

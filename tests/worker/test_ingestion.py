@@ -1,23 +1,8 @@
-import pytest
-
 from worker.pipeline.ingestion import (
     extract_readme,
     filter_files,
     get_repo_hash,
-    parse_github_url,
 )
-
-
-def test_parse_github_url():
-    owner, name = parse_github_url("https://github.com/psf/requests")
-    assert owner == "psf"
-    assert name == "requests"
-
-
-def test_parse_github_url_without_scheme():
-    owner, name = parse_github_url("github.com/psf/requests")
-    assert owner == "psf"
-    assert name == "requests"
 
 
 def test_get_repo_hash_is_deterministic():
@@ -47,16 +32,6 @@ def test_filter_files_respects_size_limit(tmp_path):
     files = filter_files(tmp_path, max_file_bytes=1024 * 1024)
     assert small in files
     assert large not in files
-
-
-def test_parse_github_url_invalid_raises():
-    with pytest.raises(ValueError, match="Cannot parse GitHub URL"):
-        parse_github_url("not-a-url")
-
-
-def test_parse_github_url_rejects_non_github():
-    with pytest.raises(ValueError):
-        parse_github_url("https://gitlab.com/owner/repo")
 
 
 def test_filter_files_uses_relative_parts(tmp_path):

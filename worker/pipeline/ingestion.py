@@ -3,11 +3,10 @@
 Covers repository cloning, file filtering, and diff detection.
 
 This module handles everything that happens before analysis:
-  - Parsing GitHub URLs into owner/name tuples
   - Hashing repo identifiers to stable storage keys
   - Walking the local clone to collect indexable source files
   - Extracting the README for later use in the wiki plan prompt
-  - Cloning or fetching a GitHub repo via gitpython (in a thread executor)
+  - Cloning or fetching a repository via gitpython (in a thread executor)
   - Computing which files changed between two commits
   - Mapping changed files to wiki pages that must be regenerated
 """
@@ -83,44 +82,6 @@ EXCLUDED_DIRS = {
     ".coverage",
     "htmlcov",
 }
-
-
-def parse_github_url(url: str) -> tuple[str, str]:
-    """Parse a GitHub URL or bare path into an (owner, name) tuple.
-
-    Accepts full HTTPS URLs as well as short-form ``github.com/owner/repo``
-    strings.  The ``.git`` suffix is stripped if present.
-
-    Args:
-        url: A GitHub repository URL in any of these forms:
-            ``https://github.com/owner/repo``,
-            ``http://github.com/owner/repo``,
-            ``github.com/owner/repo``, or
-            ``github.com/owner/repo.git``.
-
-    Returns:
-        tuple[str, str]: A two-element tuple ``(owner, name)`` where *owner*
-        is the GitHub organisation or user and *name* is the repository name
-        without the ``.git`` suffix.
-
-    Raises:
-        ValueError: If ``url`` does not contain ``github.com`` followed by at
-            least two path segments (owner and repo name).
-
-    Example:
-        >>> parse_github_url("https://github.com/anthropics/anthropic-sdk-python")
-        ('anthropics', 'anthropic-sdk-python')
-        >>> parse_github_url("github.com/owner/repo.git")
-        ('owner', 'repo')
-    """
-    url = url.replace("https://", "").replace("http://", "").rstrip("/")
-    parts = url.split("/")
-    # Find 'github.com' and take the next two parts
-    try:
-        idx = next(i for i, p in enumerate(parts) if p.lower() == "github.com")
-        return parts[idx + 1], parts[idx + 2].removesuffix(".git")
-    except (StopIteration, IndexError):
-        raise ValueError(f"Cannot parse GitHub URL: {url}")
 
 
 def get_repo_hash(platform: str, owner: str, name: str) -> str:
@@ -245,95 +206,29 @@ def extract_readme(root: Path, max_chars: int = 3000) -> str | None:
     return None
 
 
-async def fetch_github_metadata(owner: str, name: str) -> dict:
-    """Fetch repository metadata from the GitHub API.
-
-    Uses the public ``GET /repos/{owner}/{name}`` endpoint.  No
-    authentication is required for public repositories, though
-    unauthenticated requests are subject to stricter rate limits.
+async def clone_or_fetch(clone_dir: Path, clone_url: str) -> tuple[str, str]:
+    """Clone a repository from clone_url, or fetch and reset an existing clone.
 
     Args:
-        owner: GitHub repository owner.
-        name: GitHub repository name.
+        clone_dir: Local directory for the clone.
+        clone_url: Full HTTPS clone URL, with token embedded if needed.
 
     Returns:
-        dict: A dictionary with ``description``, ``stars``, and
-        ``language`` keys.  Values fall back to sensible defaults if
-        the API call fails or the keys are missing from the response.
-    """
-    import httpx
-
-    url = f"https://api.github.com/repos/{owner}/{name}"
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(
-                url, headers={"Accept": "application/vnd.github.v3+json"}
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            return {
-                "description": data.get("description") or "",
-                "stars": data.get("stargazers_count", 0),
-                "language": data.get("language") or "",
-                "default_branch": data.get("default_branch") or "main",
-            }
-    except Exception:
-        return {
-            "description": "",
-            "stars": 0,
-            "language": "",
-            "default_branch": "main",
-        }
-
-
-async def clone_or_fetch(clone_dir: Path, owner: str, name: str) -> tuple[str, str]:
-    """Clone a GitHub repository, or fetch and reset an existing clone.
-
-    Performs a *shallow* clone (``depth=1``) on first run to minimise disk
-    usage and network time.  On subsequent calls it fetches the latest changes
-    from ``origin`` and hard-resets ``HEAD`` to ``FETCH_HEAD``.
-
-    Blocking gitpython I/O is offloaded to the default thread-pool executor
-    via :func:`asyncio.get_event_loop().run_in_executor` so the ARQ event
-    loop is never blocked.
-
-    Args:
-        clone_dir: Local directory where the repository should be cloned.
-            Created automatically if it does not exist.
-        owner: GitHub repository owner (organisation or user).
-        name: GitHub repository name.
-
-    Returns:
-        tuple[str, str]: A tuple containing (head_sha, active_branch_name).
-        *head_sha* is the 40-character hexadecimal SHA of the HEAD commit.
-        *active_branch_name* is the name of the branch that was cloned/fetched.
-
-    Raises:
-        git.exc.GitCommandError: If the remote is unreachable, authentication
-            fails, or any git operation returns a non-zero exit code.
-
-    Example:
-        >>> sha, branch = await clone_or_fetch(
-        ...     Path("/tmp/clones/my-repo"), "owner", "repo"
-        ... )
-        >>> len(sha)
-        40
-        >>> branch
-        'main'
+        tuple[str, str]: (head_sha, active_branch_name)
     """
     import asyncio
 
     import git
 
     def _do_clone_or_fetch() -> tuple[str, str]:
-        url = f"https://github.com/{owner}/{name}.git"
         if (clone_dir / ".git").exists():
             repo = git.Repo(clone_dir)
+            repo.remotes.origin.set_url(clone_url)
             repo.remotes.origin.fetch()
             repo.head.reset("FETCH_HEAD", index=True, working_tree=True)
         else:
             clone_dir.mkdir(parents=True, exist_ok=True)
-            repo = git.Repo.clone_from(url, clone_dir, depth=1)
+            repo = git.Repo.clone_from(clone_url, clone_dir, depth=1)
         return repo.head.commit.hexsha, repo.active_branch.name
 
     loop = asyncio.get_event_loop()

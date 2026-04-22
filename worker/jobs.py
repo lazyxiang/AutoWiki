@@ -38,7 +38,6 @@ from worker.pipeline.dependency_graph import build_dependency_graph
 from worker.pipeline.ingestion import (
     clone_or_fetch,
     extract_readme,
-    fetch_github_metadata,
     filter_files,
     get_affected_pages,
     get_changed_files,
@@ -51,6 +50,8 @@ from worker.pipeline.page_generator import (
 from worker.pipeline.rag_indexer import FAISSStore, build_rag_index
 from worker.pipeline.user_steering import load_user_steering
 from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan, generate_wiki_plan
+from worker.platform.registry import get_platform_by_name
+from worker.platform.token_store import get_platform_token
 
 if TYPE_CHECKING:
     from worker.pipeline.dependency_graph import DependencyGraph
@@ -400,22 +401,33 @@ async def run_full_index(
             await s.execute(sa_delete(WikiPage).where(WikiPage.repo_id == repo_id))
             await s.commit()
 
-        # Stage 1: Ingestion — shallow-clone or fetch the repo; filter source files
+        # Stage 1: Ingestion — detect platform, fetch token, clone, filter files
         logger.info("Stage 1: Ingestion starting for %s/%s", owner, name)
         if clone_root is None:
             clone_root = repo_data_dir / "clone"
-        head_sha, active_branch = await clone_or_fetch(clone_root, owner, name)
+
+        async with get_session(db_path) as s:
+            repo_row = await s.get(Repository, repo_id)
+            platform_name = (repo_row.platform if repo_row else None) or "github"
+            token = await get_platform_token(platform_name, s)
+
+        platform = get_platform_by_name(platform_name)
+        meta = await platform.fetch_metadata(owner, name, token)
+        clone_url = platform.authenticated_clone_url(owner, name, token)
+        head_sha, active_branch = await clone_or_fetch(clone_root, clone_url)
         logger.info("Clone complete. HEAD SHA: %s, Branch: %s", head_sha, active_branch)
 
-        # Fetch GitHub metadata (description, stars, language, default_branch)
-        meta = await fetch_github_metadata(owner, name)
-        # Use active branch from clone as fallback if metadata fetch fails
-        if not meta.get("default_branch"):
-            meta["default_branch"] = active_branch
-
-        if any(meta.values()):
-            await _update_repo(db_path, repo_id, **meta)
-            logger.info("GitHub metadata fetched: %s", meta)
+        default_branch = meta.default_branch or active_branch
+        await _update_repo(
+            db_path,
+            repo_id,
+            description=meta.description,
+            stars=meta.stars,
+            language=meta.language,
+            default_branch=default_branch,
+            is_private=meta.is_private,
+        )
+        logger.info("Platform metadata fetched: %s", meta)
 
         loop = asyncio.get_running_loop()
         ignore_file = clone_root / ".autowikiignore"
@@ -783,7 +795,13 @@ async def run_refresh_index(
         repo_data_dir = data_dir / "repos" / repo_id
         if clone_root is None:
             clone_root = repo_data_dir / "clone"
-        new_sha, _ = await clone_or_fetch(clone_root, owner, name)
+        async with get_session(db_path) as s:
+            repo_row = await s.get(Repository, repo_id)
+            platform_name = (repo_row.platform if repo_row else None) or "github"
+            token = await get_platform_token(platform_name, s)
+        platform = get_platform_by_name(platform_name)
+        clone_url = platform.authenticated_clone_url(owner, name, token)
+        new_sha, _ = await clone_or_fetch(clone_root, clone_url)
         logger.info("Fetch complete. New HEAD SHA: %s", new_sha)
 
         async with get_session(db_path) as s:

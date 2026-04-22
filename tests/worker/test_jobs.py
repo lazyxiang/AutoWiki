@@ -1,5 +1,28 @@
+from contextlib import ExitStack
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
+_FAKE_META = MagicMock(
+    description="",
+    stars=0,
+    language="",
+    default_branch="main",
+    is_private=False,
+)
+_FAKE_PLATFORM = MagicMock(
+    fetch_metadata=AsyncMock(return_value=_FAKE_META),
+    authenticated_clone_url=MagicMock(return_value="https://github.com/o/r.git"),
+)
+_PLATFORM_PATCHES = [
+    ("worker.jobs.get_platform_token", dict(new=AsyncMock(return_value=None))),
+    ("worker.jobs.get_platform_by_name", dict(return_value=_FAKE_PLATFORM)),
+]
+
+
+def _enter_platform_patches(stack: ExitStack) -> None:
+    """Enter platform adapter patches using an ExitStack."""
+    for target, kwargs in _PLATFORM_PATCHES:
+        stack.enter_context(patch(target, **kwargs))
 
 
 async def test_full_index_job_updates_status(
@@ -38,12 +61,20 @@ async def test_full_index_job_updates_status(
         s.add(job)
         await s.commit()
 
-    with (
-        patch("worker.jobs.clone_or_fetch", return_value=("abc123def456", "main")),
-        patch("worker.jobs.make_llm_provider", return_value=mock_llm),
-        patch("worker.jobs.make_fast_llm_provider", return_value=mock_fast_llm),
-        patch("worker.jobs.make_embedding_provider", return_value=mock_embedding),
-    ):
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch("worker.jobs.clone_or_fetch", return_value=("abc123def456", "main"))
+        )
+        _enter_platform_patches(stack)
+        stack.enter_context(
+            patch("worker.jobs.make_llm_provider", return_value=mock_llm)
+        )
+        stack.enter_context(
+            patch("worker.jobs.make_fast_llm_provider", return_value=mock_fast_llm)
+        )
+        stack.enter_context(
+            patch("worker.jobs.make_embedding_provider", return_value=mock_embedding)
+        )
         from worker.jobs import run_full_index
 
         await run_full_index(
@@ -76,17 +107,25 @@ async def test_run_full_index_persists_wiki_plan(
 
     mock_embedding.dimension = 1536
 
-    with (
-        patch("worker.jobs.get_config") as mock_cfg,
-        patch(
-            "worker.jobs.clone_or_fetch",
-            new_callable=AsyncMock,
-            return_value=("abc123", "main"),
-        ),
-        patch("worker.jobs.make_llm_provider", return_value=mock_llm),
-        patch("worker.jobs.make_fast_llm_provider", return_value=mock_fast_llm),
-        patch("worker.jobs.make_embedding_provider", return_value=mock_embedding),
-    ):
+    with ExitStack() as stack:
+        mock_cfg = stack.enter_context(patch("worker.jobs.get_config"))
+        stack.enter_context(
+            patch(
+                "worker.jobs.clone_or_fetch",
+                new_callable=AsyncMock,
+                return_value=("abc123", "main"),
+            )
+        )
+        _enter_platform_patches(stack)
+        stack.enter_context(
+            patch("worker.jobs.make_llm_provider", return_value=mock_llm)
+        )
+        stack.enter_context(
+            patch("worker.jobs.make_fast_llm_provider", return_value=mock_fast_llm)
+        )
+        stack.enter_context(
+            patch("worker.jobs.make_embedding_provider", return_value=mock_embedding)
+        )
         cfg = mock_cfg.return_value
         cfg.database_path = tmp_path / "test.db"
         cfg.data_dir = tmp_path
@@ -217,12 +256,20 @@ async def test_always_clears_existing_artifacts(
     wiki_dir.mkdir()
     (wiki_dir / "stale-page.md").write_text("old content")
 
-    with (
-        patch("worker.jobs.clone_or_fetch", return_value=("newsha", "main")),
-        patch("worker.jobs.make_llm_provider", return_value=mock_llm),
-        patch("worker.jobs.make_fast_llm_provider", return_value=mock_fast_llm),
-        patch("worker.jobs.make_embedding_provider", return_value=mock_embedding),
-    ):
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch("worker.jobs.clone_or_fetch", return_value=("newsha", "main"))
+        )
+        _enter_platform_patches(stack)
+        stack.enter_context(
+            patch("worker.jobs.make_llm_provider", return_value=mock_llm)
+        )
+        stack.enter_context(
+            patch("worker.jobs.make_fast_llm_provider", return_value=mock_fast_llm)
+        )
+        stack.enter_context(
+            patch("worker.jobs.make_embedding_provider", return_value=mock_embedding)
+        )
         from worker.jobs import run_full_index
 
         await run_full_index(
