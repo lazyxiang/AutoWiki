@@ -311,3 +311,46 @@ async def test_bitbucket_fetch_metadata_bad_token():
     with patch("worker.platform.bitbucket.httpx.AsyncClient", return_value=client):
         with pytest.raises(AuthenticationError):
             await _bb.fetch_metadata("owner", "repo", "bad")
+
+
+# ── registry tests ───────────────────────────────────────────────────
+
+
+from worker.platform.registry import detect_platform, get_platform_by_name
+from worker.platform.github import GitHubPlatform
+from worker.platform.gitlab import GitLabPlatform
+from worker.platform.bitbucket import BitbucketPlatform
+
+
+def test_detect_platform_github():
+    assert isinstance(detect_platform("https://github.com/owner/repo"), GitHubPlatform)
+
+
+def test_detect_platform_gitlab():
+    assert isinstance(detect_platform("https://gitlab.com/group/repo"), GitLabPlatform)
+
+
+def test_detect_platform_bitbucket():
+    assert isinstance(detect_platform("https://bitbucket.org/owner/repo"), BitbucketPlatform)
+
+
+def test_detect_platform_unsupported():
+    with pytest.raises(UnsupportedPlatformError):
+        detect_platform("https://codeberg.org/owner/repo")
+
+
+def test_get_platform_by_name_github():
+    assert isinstance(get_platform_by_name("github"), GitHubPlatform)
+
+
+def test_get_platform_by_name_gitlab():
+    assert isinstance(get_platform_by_name("gitlab"), GitLabPlatform)
+
+
+def test_get_platform_by_name_bitbucket():
+    assert isinstance(get_platform_by_name("bitbucket"), BitbucketPlatform)
+
+
+def test_get_platform_by_name_unknown():
+    with pytest.raises(UnsupportedPlatformError):
+        get_platform_by_name("unknown")
