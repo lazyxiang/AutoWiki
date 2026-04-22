@@ -238,3 +238,76 @@ async def test_gitlab_fetch_metadata_bad_token():
     with patch("worker.platform.gitlab.httpx.AsyncClient", return_value=client):
         with pytest.raises(AuthenticationError):
             await _gl.fetch_metadata("group", "repo", "bad")
+
+
+from worker.platform.bitbucket import BitbucketPlatform
+
+_bb = BitbucketPlatform()
+
+
+def test_bitbucket_parse_url_full():
+    assert _bb.parse_url("https://bitbucket.org/owner/repo") == ("owner", "repo")
+
+
+def test_bitbucket_parse_url_no_scheme():
+    assert _bb.parse_url("bitbucket.org/owner/repo") == ("owner", "repo")
+
+
+def test_bitbucket_parse_url_invalid():
+    with pytest.raises(ValueError):
+        _bb.parse_url("https://bitbucket.org/only-one")
+
+
+def test_bitbucket_clone_url_with_token():
+    assert _bb.authenticated_clone_url("owner", "repo", "tok") == \
+        "https://x-token-auth:tok@bitbucket.org/owner/repo.git"
+
+
+def test_bitbucket_clone_url_no_token():
+    assert _bb.authenticated_clone_url("owner", "repo", None) == \
+        "https://bitbucket.org/owner/repo.git"
+
+
+def _make_bitbucket_client(json_data: dict, status_code: int = 200):
+    mock_resp = MagicMock()
+    mock_resp.status_code = status_code
+    if status_code >= 400:
+        mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "error", request=MagicMock(), response=mock_resp
+        )
+    else:
+        mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = json_data
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_resp)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    return mock_client
+
+
+async def test_bitbucket_fetch_metadata_public():
+    client = _make_bitbucket_client({
+        "is_private": False,
+        "description": "BB repo",
+        "language": "javascript",
+        "mainbranch": {"name": "main"},
+    })
+    with patch("worker.platform.bitbucket.httpx.AsyncClient", return_value=client):
+        meta = await _bb.fetch_metadata("owner", "repo", None)
+    assert meta.is_private is False
+    assert meta.language == "javascript"
+    assert meta.stars == 0
+
+
+async def test_bitbucket_fetch_metadata_private_no_token():
+    client = _make_bitbucket_client({}, status_code=401)
+    with patch("worker.platform.bitbucket.httpx.AsyncClient", return_value=client):
+        with pytest.raises(PrivateRepoError):
+            await _bb.fetch_metadata("owner", "repo", None)
+
+
+async def test_bitbucket_fetch_metadata_bad_token():
+    client = _make_bitbucket_client({}, status_code=403)
+    with patch("worker.platform.bitbucket.httpx.AsyncClient", return_value=client):
+        with pytest.raises(AuthenticationError):
+            await _bb.fetch_metadata("owner", "repo", "bad")
