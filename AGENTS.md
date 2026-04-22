@@ -1,6 +1,6 @@
-# GEMINI.md
+# AGENTS.md
 
-This file provides guidance to GEMINI when working with code in this repository.
+This file provides guidance to Codex and other coding agents when working with code in this repository.
 
 ## Project Status
 
