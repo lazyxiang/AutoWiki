@@ -4,14 +4,21 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { submitRepo } from "@/lib/api";
+import { parseRepoUrl } from "@/lib/repo-search";
 
 interface IndexFormProps {
   wikiLanguage?: string;
   reuseIndex?: boolean;
   reusePlan?: boolean;
+  onQueryChange?: (q: string) => void;
 }
 
-export function IndexForm({ wikiLanguage = "en", reuseIndex = false, reusePlan = false }: IndexFormProps) {
+export function IndexForm({
+  wikiLanguage = "en",
+  reuseIndex = false,
+  reusePlan = false,
+  onQueryChange,
+}: IndexFormProps) {
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -22,10 +29,14 @@ export function IndexForm({ wikiLanguage = "en", reuseIndex = false, reusePlan =
     setLoading(true);
     setError("");
     try {
-      const { repo_id, job_id } = await submitRepo(url, { wikiLanguage, reuseIndex, reusePlan });
-      const match = url.replace(/^https?:\/\//, "").match(/github\.com\/([^/]+)\/([^/]+)/);
-      const owner = match?.[1] ?? "";
-      const repo = match?.[2]?.replace(/\.git$/, "") ?? "";
+      const { repo_id, job_id } = await submitRepo(url, {
+        wikiLanguage,
+        reuseIndex,
+        reusePlan,
+      });
+      const parsed = parseRepoUrl(url);
+      const owner = parsed?.owner ?? "";
+      const repo = parsed?.name ?? "";
       router.push(`/jobs/${job_id}?repo_id=${repo_id}&owner=${owner}&repo=${repo}`);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Unknown error");
@@ -40,21 +51,28 @@ export function IndexForm({ wikiLanguage = "en", reuseIndex = false, reusePlan =
         <div className="flex items-center gap-2 p-2 bg-white dark:bg-zinc-900 rounded-2xl border border-border shadow-sm focus-within:ring-2 focus-within:ring-primary/20 focus-within:border-primary transition-all duration-200">
           <Input
             type="text"
-            placeholder="Search or paste GitHub URL (e.g. github.com/owner/repo)"
+            placeholder="Search or paste a repo URL (github.com, gitlab.com, bitbucket.org)"
             value={url}
-            onChange={(e) => setUrl(e.target.value)}
+            onChange={(e) => {
+              setUrl(e.target.value);
+              onQueryChange?.(e.target.value);
+            }}
             disabled={loading}
             className="flex-1 h-12 border-none shadow-none focus-visible:ring-0 text-lg bg-transparent px-4 font-normal"
           />
-          <Button 
-            type="submit" 
+          <Button
+            type="submit"
             disabled={loading || !url.trim()}
             className="h-12 px-8 rounded-xl text-lg font-semibold shadow-sm hover:shadow transition-all"
           >
             {loading ? "Submitting…" : "Get Started"}
           </Button>
         </div>
-        {error && <p className="mt-3 text-destructive text-sm text-center font-medium">{error}</p>}
+        {error && (
+          <p className="mt-3 text-destructive text-sm text-center font-medium">
+            {error}
+          </p>
+        )}
       </form>
     </div>
   );
