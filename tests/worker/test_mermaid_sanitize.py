@@ -131,30 +131,21 @@ class TestFullDiagramNodeLabels:
         "    G <-->|Mount| I[~/.codewiki/config.json]"
     )
 
-    def test_parens_quoted(self):
+    @pytest.mark.parametrize(
+        "expected",
+        [
+            'C["MCP Server (stdio)"]',
+            'A["Claude Desktop / Cursor"]',
+            'Docker_Container["Docker Container (codewiki)"]',
+            "H[(Persistent Output Volume)]",
+            "B[Web Browser]",
+            "D[FastAPI Web App]",
+            'I["~/.codewiki/config.json"]',
+        ],
+    )
+    def test_full_diagram_sanitized_as_expected(self, expected):
         result = sanitize_mermaid(self.DIAGRAM)
-        assert 'C["MCP Server (stdio)"]' in result
-
-    def test_slash_quoted(self):
-        result = sanitize_mermaid(self.DIAGRAM)
-        assert 'A["Claude Desktop / Cursor"]' in result
-
-    def test_already_quoted_subgraph_unchanged(self):
-        result = sanitize_mermaid(self.DIAGRAM)
-        assert 'Docker_Container["Docker Container (codewiki)"]' in result
-
-    def test_cylinder_preserved(self):
-        result = sanitize_mermaid(self.DIAGRAM)
-        assert "H[(Persistent Output Volume)]" in result
-
-    def test_clean_nodes_unchanged(self):
-        result = sanitize_mermaid(self.DIAGRAM)
-        assert "B[Web Browser]" in result
-        assert "D[FastAPI Web App]" in result
-
-    def test_slash_in_node_text(self):
-        result = sanitize_mermaid(self.DIAGRAM)
-        assert 'I["~/.codewiki/config.json"]' in result
+        assert expected in result
 
 
 # ── Full diagram: issue #2 (edge labels with braces/slashes) ─────────
@@ -178,28 +169,22 @@ class TestFullDiagramEdgeLabels:
         "    Visualiser -->|HTML| User"
     )
 
-    def test_braces_in_edge_quoted(self):
+    @pytest.mark.parametrize(
+        "expected",
+        [
+            '|"GET /job-status/{id}"|',
+            '|"GET /static-docs/{id}"|',
+            '|"POST /repo_url"|',
+            "|Start Job|",
+            "|Query|",
+            "|HTML|",
+            'FS[("FileSystem /docs")]',
+            "User([User Browser])",
+        ],
+    )
+    def test_full_diagram_sanitized_as_expected(self, expected):
         result = sanitize_mermaid(self.DIAGRAM)
-        assert '|"GET /job-status/{id}"|' in result
-        assert '|"GET /static-docs/{id}"|' in result
-
-    def test_slash_in_edge_quoted(self):
-        result = sanitize_mermaid(self.DIAGRAM)
-        assert '|"POST /repo_url"|' in result
-
-    def test_clean_edge_unchanged(self):
-        result = sanitize_mermaid(self.DIAGRAM)
-        assert "|Start Job|" in result
-        assert "|Query|" in result
-        assert "|HTML|" in result
-
-    def test_cylinder_inner_slash_quoted(self):
-        result = sanitize_mermaid(self.DIAGRAM)
-        assert 'FS[("FileSystem /docs")]' in result
-
-    def test_stadium_shape_preserved(self):
-        result = sanitize_mermaid(self.DIAGRAM)
-        assert "User([User Browser])" in result
+        assert expected in result
 
 
 # ── Code fences ──────────────────────────────────────────────────────

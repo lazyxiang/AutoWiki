@@ -142,6 +142,72 @@ def _edge_replacer(re_match: re.Match) -> str:
     return re_match.group(0)
 
 
+def _strip_outer_code_fences(text: str) -> str:
+    text = re.sub(r"^```(?:mermaid)?\s*\n?", "", text.strip())
+    return re.sub(r"\n?```\s*$", "", text)
+
+
+def _diagram_context(lines: list[str]) -> tuple[str, re.Pattern[str]]:
+    for line in lines:
+        first = line.strip().lower()
+        if not first:
+            continue
+        for dtype, pattern in _BLOCK_OPENERS_BY_TYPE.items():
+            if first.startswith(dtype):
+                return dtype, pattern
+        break
+    return "", _FALLBACK_BLOCK_OPENER
+
+
+def _strip_embedded_fence(line: str) -> tuple[str, str] | None:
+    stripped = line.strip()
+    if not stripped.startswith("```"):
+        return line, stripped
+
+    remainder = re.sub(r"^```[^|]*\|?\s*", "", stripped)
+    if not remainder:
+        return None
+    return remainder, remainder
+
+
+def _sanitize_mermaid_line(line: str) -> str:
+    line = _UNDIRECTED_LABELED_EDGE_RE.sub(r"-->|", line)
+    line = _EDGE_LABEL_RE.sub(_edge_replacer, line)
+    line = _DOUBLE_ROUND_RE.sub(_double_bracket_replacer, line)
+    line = _DOUBLE_CURLY_RE.sub(_double_bracket_replacer, line)
+    line = _SQUARE_RE.sub(_node_replacer, line)
+    line = _ROUND_RE.sub(_node_replacer, line)
+    return _CURLY_RE.sub(_node_replacer, line)
+
+
+def _track_block_depth(
+    stripped: str,
+    diagram_type: str,
+    block_opener: re.Pattern[str],
+    block_depth: int,
+    state_brace_depth: int,
+) -> tuple[bool, int, int]:
+    if block_opener.match(stripped):
+        return True, block_depth + 1, state_brace_depth
+    if stripped == "end":
+        if block_depth > 0:
+            return True, block_depth - 1, state_brace_depth
+        return False, block_depth, state_brace_depth
+    if diagram_type != "statediagram":
+        return True, block_depth, state_brace_depth
+    if stripped.startswith("state ") and stripped.endswith("{"):
+        return True, block_depth, state_brace_depth + 1
+    if stripped == "}":
+        if state_brace_depth > 0:
+            return True, block_depth, state_brace_depth - 1
+        return False, block_depth, state_brace_depth
+    return True, block_depth, state_brace_depth
+
+
+def _looks_like_markdown_boundary(line: str) -> bool:
+    return bool(_MARKDOWN_BOUNDARY_RE.match(line.strip()))
+
+
 def sanitize_mermaid(text: str) -> str:
     """Quote Mermaid node and edge labels that contain special characters.
 
@@ -190,81 +256,27 @@ def sanitize_mermaid(text: str) -> str:
     if not text:
         return text
 
-    # Strip markdown code fences that LLMs sometimes add
-    text = re.sub(r"^```(?:mermaid)?\s*\n?", "", text.strip())
-    text = re.sub(r"\n?```\s*$", "", text)
-
+    text = _strip_outer_code_fences(text)
     lines = text.split("\n")
     result: list[str] = []
-
-    # Detect diagram type from the first non-empty line.
-    block_opener = _FALLBACK_BLOCK_OPENER
-    diagram_type = ""
-    for line in lines:
-        first = line.strip().lower()
-        if first:
-            for dtype, pattern in _BLOCK_OPENERS_BY_TYPE.items():
-                if first.startswith(dtype):
-                    block_opener = pattern
-                    diagram_type = dtype
-                    break
-            break
-
-    # Track block depth so orphaned `end` keywords can be dropped.
+    diagram_type, block_opener = _diagram_context(lines)
     block_depth = 0
     state_brace_depth = 0
 
     for line in lines:
-        stripped = line.strip()
+        normalized = _strip_embedded_fence(line)
+        if normalized is None:
+            continue
 
-        # Strip embedded code-fence markers that LLMs sometimes emit before a
-        # node definition, e.g.  ```mermaid text| NodeScanner["..."]
-        # Strip the  ```...|  prefix and keep any Mermaid content that follows.
-        # If nothing remains (plain  ```  or  ```mermaid  with no pipe), drop.
-        if stripped.startswith("```"):
-            remainder = re.sub(r"^```[^|]*\|?\s*", "", stripped)
-            if not remainder:
-                continue
-            line = remainder
-            stripped = remainder
+        line, stripped = normalized
+        keep_line, block_depth, state_brace_depth = _track_block_depth(
+            stripped, diagram_type, block_opener, block_depth, state_brace_depth
+        )
+        if keep_line:
+            result.append(_sanitize_mermaid_line(line))
 
-        # Count block openings to maintain depth.
-        if block_opener.match(stripped):
-            block_depth += 1
-        elif stripped == "end":
-            if block_depth > 0:
-                block_depth -= 1
-            else:
-                # Orphaned `end` — no open block to close; drop the line.
-                continue
-        elif diagram_type == "statediagram":
-            if stripped.startswith("state ") and stripped.endswith("{"):
-                state_brace_depth += 1
-            elif stripped == "}":
-                if state_brace_depth > 0:
-                    state_brace_depth -= 1
-                else:
-                    continue
-
-        # Normalise undirected labelled edges: --|"..."| to -->|"..."|
-        line = _UNDIRECTED_LABELED_EDGE_RE.sub(r"-->|", line)
-        # Sanitise edge labels first (|...|)
-        line = _EDGE_LABEL_RE.sub(_edge_replacer, line)
-        # Handle double-bracket shapes before single-bracket ones
-        line = _DOUBLE_ROUND_RE.sub(_double_bracket_replacer, line)
-        line = _DOUBLE_CURLY_RE.sub(_double_bracket_replacer, line)
-        # Single-bracket shapes (negative lookahead prevents double-match)
-        line = _SQUARE_RE.sub(_node_replacer, line)
-        line = _ROUND_RE.sub(_node_replacer, line)
-        line = _CURLY_RE.sub(_node_replacer, line)
-        result.append(line)
-
-    # Append missing end keywords for unclosed blocks.
-    for _ in range(block_depth):
-        result.append("end")
-    # stateDiagram-v2 uses braces for composite states rather than `end`.
-    for _ in range(state_brace_depth):
-        result.append("}")
+    result.extend("end" for _ in range(block_depth))
+    result.extend("}" for _ in range(state_brace_depth))
 
     return "\n".join(result)
 
@@ -282,9 +294,6 @@ def sanitize_mermaid_blocks(markdown: str) -> str:
     """
     if not markdown:
         return markdown
-
-    def _looks_like_markdown_boundary(line: str) -> bool:
-        return bool(_MARKDOWN_BOUNDARY_RE.match(line.strip()))
 
     had_trailing_newline = markdown.endswith("\n")
     lines = markdown.splitlines()
