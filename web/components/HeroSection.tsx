@@ -78,7 +78,8 @@ export function HeroSection({ onQueryChange }: HeroSectionProps) {
         Explore Open Source Knowledge
       </h1>
       <p className="mt-4 text-xl text-muted-foreground max-w-2xl mx-auto">
-        AI-powered wiki generator for any GitHub repository. Search for a repo or paste a link to get started.
+        AI-powered wiki generator for any GitHub, GitLab, or Bitbucket repository.
+        Search for a repo or paste a link to get started.
       </p>
       <div className="mt-10 max-w-xl mx-auto">
         <IndexForm

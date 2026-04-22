@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import Any
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from shared.models import Base
@@ -17,6 +18,14 @@ async def init_db(database_path: str) -> None:
     _engines[database_path] = engine
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Add columns that may be missing in databases created before Phase 5.
+        for stmt in [
+            "ALTER TABLE repositories ADD COLUMN is_private BOOLEAN DEFAULT 0",
+        ]:
+            try:
+                await conn.execute(text(stmt))
+            except Exception:
+                pass  # Column already exists
     _session_factories[database_path] = async_sessionmaker(
         engine, expire_on_commit=False
     )

@@ -12,6 +12,15 @@ def test_get_repo_hash_is_deterministic():
     assert len(h1) == 16  # truncated sha256
 
 
+def test_get_repo_hash_differs_across_platforms():
+    h_github = get_repo_hash("github", "owner", "repo")
+    h_gitlab = get_repo_hash("gitlab", "owner", "repo")
+    h_bitbucket = get_repo_hash("bitbucket", "owner", "repo")
+    assert h_github != h_gitlab
+    assert h_github != h_bitbucket
+    assert h_gitlab != h_bitbucket
+
+
 def test_filter_files_excludes_binaries(tmp_path):
     (tmp_path / "main.py").write_text("print('hello')")
     (tmp_path / "image.png").write_bytes(b"\x89PNG\r\n")
