@@ -152,7 +152,7 @@ WS    /ws/repos/{repo_id}/research/{job_id}           # Stream research events
   npm run lint          # run from web/
   ```
   All lint errors and format violations **must be fixed** before committing. Do not commit with outstanding `ruff` errors or `npm run lint` errors.
-- **PR Review Workflow (Required)**: After fixing issues raised in a pull request review, reply to each inline review comment thread describing what was fixed and in which commit. Mark each thread as resolved via the GraphQL API (since REST has no resolve endpoint). Use the node IDs from the review comments.
+- **PR Review Workflow (Required)**: After fixing issues raised in a pull request review, commit and push the fixes first. Then reply to each inline review comment thread describing what was fixed and include the corresponding commit id. Mark each thread as resolved via the GraphQL API (since REST has no resolve endpoint). Use the node IDs from the review comments.
 
 ## Testing
 
