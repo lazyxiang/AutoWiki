@@ -187,6 +187,46 @@ class TestFullDiagramEdgeLabels:
         assert expected in result
 
 
+# ── Class diagram relation repair ────────────────────────────────────
+
+
+class TestClassDiagramRelationRepair:
+    """LLMs often use flowchart-style -->|> arrows inside classDiagram."""
+
+    def test_repairs_flowchart_style_class_inheritance(self):
+        diagram = (
+            "classDiagram\n"
+            "    class TaskMapActivity\n"
+            "    class MapActivity\n"
+            "    TaskMapActivity -->|> MapActivity\n"
+            '    News -->|> Object : "普通 POJO"\n'
+        )
+
+        result = sanitize_mermaid(diagram)
+
+        assert "MapActivity <|-- TaskMapActivity" in result
+        assert 'Object <|-- News : "普通 POJO"' in result
+        assert "-->|>" not in result
+
+    def test_preserves_valid_class_relations_and_labels(self):
+        diagram = (
+            "classDiagram\n"
+            "    AroundStrangers ..|> Parcelable\n"
+            '    AroundStrangers ..> Creator : "包含静态 CREATOR 实例"\n'
+            '    NewsDbUtil *-- NewsHelper : "内部管理"\n'
+        )
+
+        assert sanitize_mermaid(diagram) == diagram.rstrip()
+
+    def test_flowchart_edge_labels_are_not_rewritten_as_class_relations(self):
+        diagram = "flowchart TD\n    A -->|> B\n    B -->|GET /x| C"
+
+        result = sanitize_mermaid(diagram)
+
+        assert "A -->|> B" in result
+        assert 'B -->|"GET /x"| C' in result
+
+
 # ── Code fences ──────────────────────────────────────────────────────
 
 

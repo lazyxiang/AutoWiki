@@ -77,6 +77,33 @@ describe("edge label quoting", () => {
   });
 });
 
+// ── Class diagram relation repair ────────────────────────────────────
+
+describe("class diagram relation repair", () => {
+  it("rewrites flowchart-style inheritance arrows in classDiagram", () => {
+    const input = [
+      "classDiagram",
+      "    TaskMapActivity -->|> MapActivity",
+      '    News -->|> Object : "普通 POJO"',
+    ].join("\n");
+
+    const result = sanitizeMermaid(input);
+
+    expect(result).toContain("MapActivity <|-- TaskMapActivity");
+    expect(result).toContain('Object <|-- News : "普通 POJO"');
+    expect(result).not.toContain("-->|>");
+  });
+
+  it("does not rewrite flowchart edge labels", () => {
+    const input = "flowchart TD\n    A -->|> B\n    B -->|GET /x| C";
+
+    const result = sanitizeMermaid(input);
+
+    expect(result).toContain("A -->|> B");
+    expect(result).toContain('B -->|"GET /x"| C');
+  });
+});
+
 // ── Compound shapes ──────────────────────────────────────────────────
 
 describe("compound shapes", () => {
