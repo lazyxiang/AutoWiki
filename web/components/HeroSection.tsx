@@ -1,5 +1,7 @@
 "use client";
 import { useState } from "react";
+import Link from "next/link";
+import { Settings } from "lucide-react";
 import { IndexForm } from "@/components/IndexForm";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 
@@ -32,7 +34,11 @@ function DebugToggle({ label, checked, onToggle, title, ariaLabel, activeColorCl
   );
 }
 
-export function HeroSection() {
+interface HeroSectionProps {
+  onQueryChange?: (q: string) => void;
+}
+
+export function HeroSection({ onQueryChange }: HeroSectionProps) {
   const [wikiLanguage, setWikiLanguage] = useState("en");
   const [reuseIndex, setReuseIndex] = useState(false);
   const [reusePlan, setReusePlan] = useState(false);
@@ -59,15 +65,29 @@ export function HeroSection() {
           activeDotClass="bg-violet-500"
         />
         <LanguageSwitcher value={wikiLanguage} onChange={setWikiLanguage} />
+        <Link
+          href="/settings"
+          title="Settings"
+          aria-label="Open settings"
+          className="p-1.5 rounded-lg border border-border bg-background text-muted-foreground hover:bg-muted transition-colors"
+        >
+          <Settings size={16} />
+        </Link>
       </div>
       <h1 className="text-5xl font-extrabold tracking-tight text-foreground">
         Explore Open Source Knowledge
       </h1>
       <p className="mt-4 text-xl text-muted-foreground max-w-2xl mx-auto">
-        AI-powered wiki generator for any GitHub repository. Search for a repo or paste a link to get started.
+        AI-powered wiki generator for any GitHub, GitLab, or Bitbucket repository.
+        Search for a repo or paste a link to get started.
       </p>
       <div className="mt-10 max-w-xl mx-auto">
-        <IndexForm wikiLanguage={wikiLanguage} reuseIndex={reuseIndex} reusePlan={reusePlan} />
+        <IndexForm
+          wikiLanguage={wikiLanguage}
+          reuseIndex={reuseIndex}
+          reusePlan={reusePlan}
+          onQueryChange={onQueryChange}
+        />
       </div>
     </section>
   );

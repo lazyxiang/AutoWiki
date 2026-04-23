@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-AutoWiki **Phases 1, 2, 2.5, 3, 4, 4.5, and 4.6 are complete**. Phase 1 tagged `v0.1.0-phase1`; Phase 2 (chat, diagrams, incremental refresh) merged via PR #4; Phase 2.5 (wiki quality enhancements) merged across PRs #15 and #17; Phase 3 (Deep Research) and Phase 4 (User Steering) merged via PR #20; Phase 4.5 (planner robustness hardening: Layer C1, validate-plan, feedback retries, Mermaid fixes, Docker startup fixes) merged via PR #22; Phase 4.6 (page-centric file selection) merged via PR #23.
+AutoWiki **Phases 1, 2, 2.5, 3, 4, 4.5, 4.6, and 5 are complete**. Phase 1 tagged `v0.1.0-phase1`; Phase 2 (chat, diagrams, incremental refresh) merged via PR #4; Phase 2.5 (wiki quality enhancements) merged across PRs #15 and #17; Phase 3 (Deep Research) and Phase 4 (User Steering) merged via PR #20; Phase 4.5 (planner robustness hardening: Layer C1, validate-plan, feedback retries, Mermaid fixes, Docker startup fixes) merged via PR #22; Phase 4.6 (page-centric file selection) merged via PR #23; Phase 5 (GitLab/Bitbucket multi-platform support + private repos + homepage search) merged via PR #30.
 
 ## What AutoWiki Is
 
@@ -144,7 +144,7 @@ WS    /ws/repos/{repo_id}/research/{job_id}           # Stream research events
   npm run lint          # run from web/
   ```
   All lint errors and format violations **must be fixed** before committing. Do not commit with outstanding `ruff` errors or `npm run lint` errors.
-- **PR Review Workflow (Required)**: After fixing issues raised in a pull request review, reply to each inline review comment thread describing what was fixed and in which commit. Mark each thread as resolved via the GraphQL API (since REST has no resolve endpoint). Use the node IDs from the review comments.
+- **PR Review Workflow (Required)**: After fixing issues raised in a pull request review, commit and push the fixes first. Then reply to each inline review comment thread describing what was fixed and include the corresponding commit id. Mark each thread as resolved via the GraphQL API (since REST has no resolve endpoint). Use the node IDs from the review comments.
 
 ## Testing
 
@@ -170,4 +170,5 @@ Non-Docker: `autowiki serve` spawns API + worker + Next.js as subprocesses.
 - **Phase 4** ✅ — User-steered wiki structure via `.autowiki/wiki.json`: override page hierarchy, assign modules to pages, inject repo/page notes into generation (PR #20)
 - **Phase 4.5** ✅ — Planner robustness hardening (PR #22): architectural anchors in Phase-1 outline prompt (Layer C1), `autowiki validate-plan` offline diagnostic CLI, feedback-retry loop in `_assign_files`, various bug fixes (Gemini JSON, Mermaid, Docker)
 - **Phase 4.6** ✅ — Page-centric file selection (PR #23): Phase 2 replaced from file-centric assignment to page-centric selection (5–8 files per page); scoring-based pre-filter + fallback (`_score_file_for_page`, `_heuristic_select_files`); `WikiPlan.all_repo_files` for correct refresh coverage; orphan enforcement removed
-- **Phase 5** — GitLab/Bitbucket + hybrid search + MCP server
+- **Phase 5** ✅ — GitLab/Bitbucket support (public + private repos, full API metadata) + homepage project search (PR #30)
+- **Phase 6** — Hybrid search (keyword + semantic BM25/FAISS fusion)

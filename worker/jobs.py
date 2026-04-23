@@ -23,7 +23,6 @@ import logging
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import select as sa_select
@@ -38,7 +37,6 @@ from worker.pipeline.dependency_graph import build_dependency_graph
 from worker.pipeline.ingestion import (
     clone_or_fetch,
     extract_readme,
-    fetch_github_metadata,
     filter_files,
     get_affected_pages,
     get_changed_files,
@@ -51,9 +49,8 @@ from worker.pipeline.page_generator import (
 from worker.pipeline.rag_indexer import FAISSStore, build_rag_index
 from worker.pipeline.user_steering import load_user_steering
 from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan, generate_wiki_plan
-
-if TYPE_CHECKING:
-    from worker.pipeline.dependency_graph import DependencyGraph
+from worker.platform.registry import get_platform_by_name
+from worker.platform.token_store import get_platform_token
 
 logger = logging.getLogger("worker.task")
 
@@ -108,6 +105,19 @@ async def _update_repo(db_path: str, repo_id: str, **kwargs) -> None:
         for k, v in kwargs.items():
             setattr(repo, k, v)
         await s.commit()
+
+
+def _repo_metadata_updates(meta, active_branch: str) -> dict:
+    default_branch = meta.default_branch or active_branch
+    updates = {"default_branch": default_branch}
+    if meta.complete:
+        updates.update(
+            description=meta.description,
+            stars=meta.stars,
+            language=meta.language,
+            is_private=meta.is_private,
+        )
+    return updates
 
 
 async def _write_text_async(path: Path, content: str) -> None:
@@ -175,69 +185,6 @@ def _make_on_retry(db_path: str, job_id: str):
         )
 
     return _on_retry
-
-
-def _collect_page_entities(
-    page_spec: WikiPageSpec, file_analysis: FileAnalysis
-) -> list[dict]:
-    """Collect all AST entities for the source files assigned to a wiki page.
-
-    Iterates over each file path listed in ``page_spec.files``, looks up
-    its ``FileInfo`` in ``file_analysis``, and flattens all entities into a
-    single list.  A ``"file"`` key is injected into each entity dict so
-    downstream consumers can attribute entities to their source file.
-
-    Args:
-        page_spec (WikiPageSpec): Wiki page specification containing the
-            list of relative file paths (``page_spec.files``) assigned to
-            this page.
-        file_analysis (FileAnalysis): Result of single-pass Tree-Sitter
-            analysis across all repository files, keyed by relative path.
-
-    Returns:
-        list[dict]: Flat list of entity dicts.  Each dict contains the
-            original entity fields (e.g. ``"name"``, ``"kind"``,
-            ``"signature"``) plus an added ``"file"`` key (str) holding
-            the relative path of the source file.
-
-    Example:
-        >>> entities = _collect_page_entities(page_spec, file_analysis)
-        >>> entities[0]
-        {"name": "run_full_index", "kind": "function", "file": "worker/jobs.py"}
-    """
-    entities = []
-    for rel_path in page_spec.files or []:
-        file_info = file_analysis.files.get(rel_path)
-        if file_info:
-            for e in file_info.entities:
-                entities.append({**e, "file": rel_path})
-    return entities
-
-
-def _collect_page_deps(page_spec: WikiPageSpec, dep_graph: DependencyGraph) -> dict:
-    """Collect dependency summary for the source files assigned to a wiki page.
-
-    Delegates to ``summarize_page_deps`` which aggregates import-level edges
-    from the dependency graph into human-readable buckets.
-
-    Args:
-        page_spec (WikiPageSpec): Wiki page specification containing the
-            list of relative file paths (``page_spec.files``) assigned to
-            this page.
-        dep_graph (DependencyGraph): File-level import graph built by
-            ``build_dependency_graph``.
-
-    Returns:
-        dict: Dependency summary with three keys:
-            - ``"depends_on"`` (list[str]): Files this page's code imports.
-            - ``"depended_by"`` (list[str]): Files that import this page's
-              code.
-            - ``"external_deps"`` (list[str]): Third-party packages
-              referenced by this page's files.
-    """
-    from worker.pipeline.dependency_graph import summarize_page_deps
-
-    return summarize_page_deps(page_spec.files or [], dep_graph)
 
 
 def asdict_s(obj) -> dict:
@@ -328,8 +275,8 @@ async def run_full_index(
         repo_id (str): UUID primary key of the repository row in SQLite.
         job_id (str): UUID primary key of the job row in SQLite; used for
             progress updates throughout the run.
-        owner (str): GitHub repository owner (username or organisation).
-        name (str): GitHub repository name.
+        owner (str): Repository owner (username or organisation).
+        name (str): Repository name.
         clone_root (Path | None): Override the default clone directory.
             Defaults to ``<data_dir>/repos/<repo_id>/clone``.
         reuse_index (bool): When ``True``, preserve any existing FAISS index
@@ -400,22 +347,26 @@ async def run_full_index(
             await s.execute(sa_delete(WikiPage).where(WikiPage.repo_id == repo_id))
             await s.commit()
 
-        # Stage 1: Ingestion — shallow-clone or fetch the repo; filter source files
+        # Stage 1: Ingestion — detect platform, fetch token, clone, filter files
         logger.info("Stage 1: Ingestion starting for %s/%s", owner, name)
         if clone_root is None:
             clone_root = repo_data_dir / "clone"
-        head_sha, active_branch = await clone_or_fetch(clone_root, owner, name)
+
+        async with get_session(db_path) as s:
+            repo_row = await s.get(Repository, repo_id)
+            platform_name = (repo_row.platform if repo_row else None) or "github"
+            token = await get_platform_token(platform_name, s)
+
+        platform = get_platform_by_name(platform_name)
+        meta = await platform.fetch_metadata(owner, name, token)
+        clone_url = platform.authenticated_clone_url(owner, name, token)
+        head_sha, active_branch = await clone_or_fetch(clone_root, clone_url)
         logger.info("Clone complete. HEAD SHA: %s, Branch: %s", head_sha, active_branch)
 
-        # Fetch GitHub metadata (description, stars, language, default_branch)
-        meta = await fetch_github_metadata(owner, name)
-        # Use active branch from clone as fallback if metadata fetch fails
-        if not meta.get("default_branch"):
-            meta["default_branch"] = active_branch
-
-        if any(meta.values()):
-            await _update_repo(db_path, repo_id, **meta)
-            logger.info("GitHub metadata fetched: %s", meta)
+        await _update_repo(
+            db_path, repo_id, **_repo_metadata_updates(meta, active_branch)
+        )
+        logger.info("Platform metadata fetched: %s", meta)
 
         loop = asyncio.get_running_loop()
         ignore_file = clone_root / ".autowikiignore"
@@ -749,8 +700,8 @@ async def run_refresh_index(
             ARQ worker; not used directly in this function).
         repo_id (str): UUID primary key of the repository row in SQLite.
         job_id (str): UUID primary key of the job row in SQLite.
-        owner (str): GitHub repository owner (username or organisation).
-        name (str): GitHub repository name.
+        owner (str): Repository owner (username or organisation).
+        name (str): Repository name.
         clone_root (Path | None): Override the default clone directory.
             Defaults to ``<data_dir>/repos/<repo_id>/clone``.
 
@@ -783,7 +734,13 @@ async def run_refresh_index(
         repo_data_dir = data_dir / "repos" / repo_id
         if clone_root is None:
             clone_root = repo_data_dir / "clone"
-        new_sha, _ = await clone_or_fetch(clone_root, owner, name)
+        async with get_session(db_path) as s:
+            repo_row = await s.get(Repository, repo_id)
+            platform_name = (repo_row.platform if repo_row else None) or "github"
+            token = await get_platform_token(platform_name, s)
+        platform = get_platform_by_name(platform_name)
+        clone_url = platform.authenticated_clone_url(owner, name, token)
+        new_sha, _ = await clone_or_fetch(clone_root, clone_url)
         logger.info("Fetch complete. New HEAD SHA: %s", new_sha)
 
         async with get_session(db_path) as s:

@@ -3,22 +3,24 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Progress } from "@/components/ui/progress";
 import { useJobProgress } from "@/lib/ws";
+import { repoPath } from "@/lib/utils";
 
 interface Props {
   jobId: string;
+  repoId: string;
   owner: string;
   repo: string;
 }
 
-export function JobProgressBar({ jobId, owner, repo }: Props) {
+export function JobProgressBar({ jobId, repoId, owner, repo }: Props) {
   const { progress, status, statusDescription, retrying } = useJobProgress(jobId);
   const router = useRouter();
 
   useEffect(() => {
     if (status === "done") {
-      router.push(`/${owner}/${repo}`);
+      router.push(repoPath(owner, repo, repoId));
     }
-  }, [status, owner, repo, router]);
+  }, [status, repoId, owner, repo, router]);
 
   return (
     <div className="flex flex-col gap-4 w-full max-w-xl">

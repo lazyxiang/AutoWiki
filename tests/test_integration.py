@@ -4,7 +4,7 @@ using mocked LLM and embedding providers. Verifies pages are stored in DB.
 """
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 FIXTURE_REPO = Path("tests/fixtures/simple-repo")
 
@@ -51,8 +51,23 @@ async def test_full_pipeline_produces_pages(
         s.add(job)
         await s.commit()
 
+    _mock_meta = MagicMock(
+        description="",
+        stars=0,
+        language="",
+        default_branch="main",
+        is_private=False,
+    )
+    _mock_platform = MagicMock(
+        fetch_metadata=AsyncMock(return_value=_mock_meta),
+        authenticated_clone_url=MagicMock(
+            return_value="https://github.com/t/simple-repo.git"
+        ),
+    )
     with (
         patch("worker.jobs.clone_or_fetch", return_value=("deadbeef", "main")),
+        patch("worker.jobs.get_platform_token", new=AsyncMock(return_value=None)),
+        patch("worker.jobs.get_platform_by_name", return_value=_mock_platform),
         patch("worker.jobs.make_llm_provider", return_value=mock_llm),
         patch("worker.jobs.make_fast_llm_provider", return_value=mock_fast_llm),
         patch("worker.jobs.make_embedding_provider", return_value=mock_embedding),

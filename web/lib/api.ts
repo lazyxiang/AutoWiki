@@ -11,6 +11,34 @@ const API_URL =
     ? (process.env.INTERNAL_API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001")
     : (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001");
 
+function settingsApiUrl(path: string): string {
+  if (typeof window !== "undefined") {
+    return path;
+  }
+  return `${API_URL}${path}`;
+}
+
+function settingsHeaders(extra: HeadersInit = {}): HeadersInit {
+  const authToken =
+    typeof window === "undefined"
+      ? process.env.AUTOWIKI_SERVER_AUTH_TOKEN
+      : undefined;
+  return authToken
+    ? { ...extra, Authorization: `Bearer ${authToken}` }
+    : extra;
+}
+
+/**
+ * Custom error class for API failures containing the HTTP status code.
+ */
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
 /**
  * Submits a repository URL for indexing.
  *
@@ -59,7 +87,7 @@ export async function getJob(jobId: string) {
  */
 export async function getRepo(repoId: string): Promise<Repository> {
   const res = await fetch(`${API_URL}/api/repos/${repoId}`);
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw new ApiError(await res.text(), res.status);
   const repo = await res.json() as RepoRaw;
   const indexedAt = repo.indexed_at || "";
   
@@ -67,6 +95,7 @@ export async function getRepo(repoId: string): Promise<Repository> {
     id: repo.id || "",
     owner: repo.owner || "unknown",
     name: repo.name || "unnamed",
+    platform: repo.platform || "github",
     description: repo.description || "",
     stars: repo.stars ?? 0,
     language: repo.language || "Unknown",
@@ -76,6 +105,7 @@ export async function getRepo(repoId: string): Promise<Repository> {
     indexed_at_formatted: repo.indexed_at_formatted || (indexedAt ? new Date(indexedAt).toLocaleString() : "Never"),
     wiki_language: repo.wiki_language || "en",
     last_commit: repo.last_commit || "",
+    is_private: repo.is_private ?? false,
   };
 }
 /**
@@ -86,19 +116,8 @@ export async function getRepo(repoId: string): Promise<Repository> {
  */
 export async function getRepoWiki(repoId: string) {
   const res = await fetch(`${API_URL}/api/repos/${repoId}/wiki`);
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw new ApiError(await res.text(), res.status);
   return res.json() as Promise<{ pages: { slug: string; title: string; parent_slug: string | null; has_user_notes?: boolean }[] }>;
-}
-
-/**
- * Custom error class for API failures containing the HTTP status code.
- */
-export class ApiError extends Error {
-  status: number;
-  constructor(message: string, status: number) {
-    super(message);
-    this.status = status;
-  }
 }
 
 /**
@@ -162,6 +181,7 @@ export interface Repository {
   id: string;
   owner: string;
   name: string;
+  platform: string;
   description: string;
   stars?: number;
   language?: string;
@@ -171,6 +191,7 @@ export interface Repository {
   indexed_at_formatted: string;
   wiki_language: string;
   last_commit?: string;
+  is_private?: boolean;
 }
 
 /**
@@ -180,6 +201,7 @@ interface RepoRaw {
   id?: string;
   owner?: string;
   name?: string;
+  platform?: string;
   description?: string;
   stars?: number;
   language?: string;
@@ -189,6 +211,7 @@ interface RepoRaw {
   indexed_at_formatted?: string;
   wiki_language?: string;
   last_commit?: string;
+  is_private?: boolean;
 }
 
 /**
@@ -260,6 +283,7 @@ export async function getRepositories(): Promise<Repository[]> {
       id: repo.id || "",
       owner: repo.owner || "unknown",
       name: repo.name || "unnamed",
+      platform: repo.platform || "github",
       description: repo.description || "",
       stars: repo.stars ?? 0,
       language: repo.language || "Unknown",
@@ -269,6 +293,38 @@ export async function getRepositories(): Promise<Repository[]> {
       indexed_at_formatted: repo.indexed_at_formatted || (indexedAt ? new Date(indexedAt).toLocaleString() : "Never"),
       wiki_language: repo.wiki_language || "en",
       last_commit: repo.last_commit || "",
+      is_private: repo.is_private ?? false,
     };
   });
+}
+
+export interface PlatformTokenStatus {
+  platform: string;
+  has_token: boolean;
+  masked_token: string | null;
+}
+
+export async function getTokens(): Promise<PlatformTokenStatus[]> {
+  const res = await fetch(settingsApiUrl("/api/settings/tokens"), {
+    headers: settingsHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json() as Promise<PlatformTokenStatus[]>;
+}
+
+export async function upsertToken(platform: string, token: string): Promise<void> {
+  const res = await fetch(settingsApiUrl(`/api/settings/tokens/${platform}`), {
+    method: "PUT",
+    headers: settingsHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ token }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+export async function deleteToken(platform: string): Promise<void> {
+  const res = await fetch(settingsApiUrl(`/api/settings/tokens/${platform}`), {
+    method: "DELETE",
+    headers: settingsHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
 }

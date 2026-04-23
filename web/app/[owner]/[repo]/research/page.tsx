@@ -1,5 +1,5 @@
 import ResearchPanel from "@/components/ResearchPanel";
-import { repoId } from "@/lib/utils";
+import { resolveRouteRepo } from "@/lib/repo-route.server";
 
 export default async function ResearchPage({
   params,
@@ -7,15 +7,16 @@ export default async function ResearchPage({
   params: Promise<{ owner: string; repo: string }>;
 }) {
   const { owner, repo } = await params;
+  const { repoId, repoMeta } = await resolveRouteRepo(owner, repo);
 
   return (
     <div style={{ padding: "1rem" }}>
       <h1
         style={{ fontSize: "1.25rem", fontWeight: "bold", marginBottom: "1rem" }}
       >
-        Deep Research — {owner}/{repo}
+        Deep Research — {repoMeta?.owner ?? owner}/{repoMeta?.name ?? repo}
       </h1>
-      <ResearchPanel repoId={repoId(owner, repo)} />
+      <ResearchPanel repoId={repoId} />
     </div>
   );
 }

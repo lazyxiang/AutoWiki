@@ -54,6 +54,7 @@ services:
       - NEXT_PUBLIC_API_URL=http://localhost:3001
       # Server-side SSR calls within Docker network
       - INTERNAL_API_URL=http://api:3001
+      - AUTOWIKI_SERVER_AUTH_TOKEN=${AUTOWIKI_SERVER_AUTH_TOKEN:-}
 
   redis:
     image: redis:7-alpine

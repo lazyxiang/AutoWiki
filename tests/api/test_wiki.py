@@ -73,6 +73,41 @@ async def test_get_wiki_page(client_with_wiki):
     assert resp.json()["content"].startswith("# Overview")
 
 
+async def test_get_wiki_page_sanitizes_legacy_unclosed_mermaid(client_with_wiki):
+    from shared.config import get_config
+
+    cfg = get_config()
+    broken = (
+        "# Broken\n\n"
+        "```mermaid\n"
+        "flowchart TD\n"
+        "    A --> B\n"
+        "\n"
+        "*Source: src/app.py:1-2*\n\n"
+        "## Still Markdown\n"
+    )
+    async with get_session(str(cfg.database_path)) as s:
+        page = WikiPage(
+            id=str(uuid.uuid4()),
+            repo_id="r1",
+            slug="broken",
+            title="Broken",
+            content=broken,
+            page_order=2,
+        )
+        s.add(page)
+        await s.commit()
+
+    resp = await client_with_wiki.get("/api/repos/r1/wiki/broken")
+
+    assert resp.status_code == 200
+    content = resp.json()["content"]
+    assert "```\n\n*Source:" in content
+    mermaid_body = content.split("```mermaid\n", 1)[1].split("\n```", 1)[0]
+    assert "*Source:" not in mermaid_body
+    assert "## Still Markdown" in content
+
+
 async def test_get_wiki_page_not_found(client_with_wiki):
     resp = await client_with_wiki.get("/api/repos/r1/wiki/nonexistent")
     assert resp.status_code == 404

@@ -131,30 +131,21 @@ class TestFullDiagramNodeLabels:
         "    G <-->|Mount| I[~/.codewiki/config.json]"
     )
 
-    def test_parens_quoted(self):
+    @pytest.mark.parametrize(
+        "expected",
+        [
+            'C["MCP Server (stdio)"]',
+            'A["Claude Desktop / Cursor"]',
+            'Docker_Container["Docker Container (codewiki)"]',
+            "H[(Persistent Output Volume)]",
+            "B[Web Browser]",
+            "D[FastAPI Web App]",
+            'I["~/.codewiki/config.json"]',
+        ],
+    )
+    def test_full_diagram_sanitized_as_expected(self, expected):
         result = sanitize_mermaid(self.DIAGRAM)
-        assert 'C["MCP Server (stdio)"]' in result
-
-    def test_slash_quoted(self):
-        result = sanitize_mermaid(self.DIAGRAM)
-        assert 'A["Claude Desktop / Cursor"]' in result
-
-    def test_already_quoted_subgraph_unchanged(self):
-        result = sanitize_mermaid(self.DIAGRAM)
-        assert 'Docker_Container["Docker Container (codewiki)"]' in result
-
-    def test_cylinder_preserved(self):
-        result = sanitize_mermaid(self.DIAGRAM)
-        assert "H[(Persistent Output Volume)]" in result
-
-    def test_clean_nodes_unchanged(self):
-        result = sanitize_mermaid(self.DIAGRAM)
-        assert "B[Web Browser]" in result
-        assert "D[FastAPI Web App]" in result
-
-    def test_slash_in_node_text(self):
-        result = sanitize_mermaid(self.DIAGRAM)
-        assert 'I["~/.codewiki/config.json"]' in result
+        assert expected in result
 
 
 # ── Full diagram: issue #2 (edge labels with braces/slashes) ─────────
@@ -178,28 +169,22 @@ class TestFullDiagramEdgeLabels:
         "    Visualiser -->|HTML| User"
     )
 
-    def test_braces_in_edge_quoted(self):
+    @pytest.mark.parametrize(
+        "expected",
+        [
+            '|"GET /job-status/{id}"|',
+            '|"GET /static-docs/{id}"|',
+            '|"POST /repo_url"|',
+            "|Start Job|",
+            "|Query|",
+            "|HTML|",
+            'FS[("FileSystem /docs")]',
+            "User([User Browser])",
+        ],
+    )
+    def test_full_diagram_sanitized_as_expected(self, expected):
         result = sanitize_mermaid(self.DIAGRAM)
-        assert '|"GET /job-status/{id}"|' in result
-        assert '|"GET /static-docs/{id}"|' in result
-
-    def test_slash_in_edge_quoted(self):
-        result = sanitize_mermaid(self.DIAGRAM)
-        assert '|"POST /repo_url"|' in result
-
-    def test_clean_edge_unchanged(self):
-        result = sanitize_mermaid(self.DIAGRAM)
-        assert "|Start Job|" in result
-        assert "|Query|" in result
-        assert "|HTML|" in result
-
-    def test_cylinder_inner_slash_quoted(self):
-        result = sanitize_mermaid(self.DIAGRAM)
-        assert 'FS[("FileSystem /docs")]' in result
-
-    def test_stadium_shape_preserved(self):
-        result = sanitize_mermaid(self.DIAGRAM)
-        assert "User([User Browser])" in result
+        assert expected in result
 
 
 # ── Code fences ──────────────────────────────────────────────────────
@@ -248,6 +233,64 @@ class TestSanitizeMermaidBlocks:
         result = sanitize_mermaid_blocks(md)
         assert 'A["Foo (x)"]' in result
         assert '|"GET /y"|' in result
+
+    def test_unclosed_mermaid_block_closes_before_source_annotation(self):
+        md = (
+            "# Application UI Layer\n\n"
+            "**Diagram: UI Navigation and Activity Flow**\n\n"
+            "```mermaid\n"
+            "flowchart TD\n"
+            '    Start(["App Start"]) --> Main["MainActivity (Dashboard)"]\n'
+            '    Main -->|"onKeyDown (Back)"| ExitDialog{"Exit Dialog"}\n'
+            '    ExitDialog -->|"No"| Main\n'
+            "\n"
+            "*Source: src/com/seven/network/ericliu/MainActivity.java:71-745*\n\n"
+            "## MainActivity Lifecycle and Core Responsibilities\n\n"
+            "The lifecycle section must remain Markdown."
+        )
+
+        result = sanitize_mermaid_blocks(md)
+
+        assert result.count("```") == 2
+        assert "```\n\n*Source:" in result
+        assert "## MainActivity Lifecycle" in result
+        mermaid_body = result.split("```mermaid\n", 1)[1].split("\n```", 1)[0]
+        assert "*Source:" not in mermaid_body
+        assert "## MainActivity" not in mermaid_body
+
+    def test_unclosed_mermaid_block_closes_before_next_heading(self):
+        md = (
+            "```mermaid\n"
+            "flowchart TD\n"
+            "    A --> B\n"
+            "\n"
+            "## Next Section\n\n"
+            "Text after the diagram."
+        )
+
+        result = sanitize_mermaid_blocks(md)
+
+        assert result.count("```") == 2
+        assert "```\n\n## Next Section" in result
+
+    def test_unclosed_state_diagram_block_closes_state_before_markdown_fence(self):
+        md = (
+            "```mermaid\n"
+            "stateDiagram-v2\n"
+            '    [*] --> Created: "onCreate()"\n'
+            "\n"
+            "    state Started {\n"
+            '        D["User Interaction"] --> E["onActivityResult()"]\n'
+            '        D --> F["onKeyDown()"]\n'
+            "\n"
+            "*Source: src/MainActivity.java:114-153*\n"
+        )
+
+        result = sanitize_mermaid_blocks(md)
+
+        mermaid_body = result.split("```mermaid\n", 1)[1].split("\n```", 1)[0]
+        assert mermaid_body.rstrip().endswith("}")
+        assert "}\n```\n\n*Source:" in result
 
 
 # ── Edge cases ───────────────────────────────────────────────────────

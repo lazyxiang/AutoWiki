@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README-zh.md)
 
-Self-hosted, open-source AI-powered wiki generator for GitHub repositories. Point it at a repo and get a browsable, source-linked wiki in minutes — running entirely on your own machine with your own API keys.
+Self-hosted, open-source AI-powered wiki generator for GitHub, GitLab, and Bitbucket repositories. Point it at a repo and get a browsable, source-linked wiki in minutes — running entirely on your own machine with your own API keys.
 
 ## What it does
 
@@ -54,7 +54,7 @@ redis-server --daemonize yes
 autowiki serve
 ```
 
-Open http://localhost:3000, paste a GitHub URL, and click **Generate Wiki**.
+Open http://localhost:3000, paste a GitHub, GitLab, or Bitbucket URL, and click **Generate Wiki**.
 
 To use a different LLM or embedding provider, set the relevant variables before step 5:
 
@@ -258,7 +258,8 @@ WS /ws/jobs/{job_id}                 → streams {progress, status} every second
 - **Phase 4** ✅ — User-steered wiki structure via `.autowiki/wiki.json`: override page hierarchy, assign modules to pages, inject repo/page notes into generation (PR #20)
 - **Phase 4.5** ✅ — Planner robustness hardening (PR #22): architectural anchors in Phase-1 outline prompt (Layer C1), `autowiki validate-plan` offline diagnostic CLI, feedback-retry loop in `_assign_files`, various bug fixes (Gemini JSON, Mermaid, Docker)
 - **Phase 4.6** ✅ — Page-centric file selection (PR #23): Phase 2 replaced from file-centric assignment to page-centric selection (5–8 files per page); scoring-based pre-filter + fallback (`_score_file_for_page`, `_heuristic_select_files`); `WikiPlan.all_repo_files` for correct refresh coverage; orphan enforcement removed
-- **Phase 5** — GitLab/Bitbucket, hybrid search, MCP server
+- **Phase 5** ✅ — GitLab/Bitbucket support (public + private repos, full API metadata) + homepage project search (PR #30)
+- **Phase 6** — Hybrid search (keyword + semantic BM25/FAISS fusion)
 
 ---
 

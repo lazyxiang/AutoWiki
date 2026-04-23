@@ -88,3 +88,96 @@ async def test_chat_models_created(tmp_path):
         assert "chat_messages" in tables
     finally:
         await dispose_db(db_path)
+
+
+async def test_platform_token_crud(tmp_path):
+    from datetime import UTC, datetime
+
+    from shared.database import dispose_db, get_session, init_db
+    from shared.models import PlatformToken
+
+    db = str(tmp_path / "t.db")
+    await init_db(db)
+    try:
+        now = datetime.now(UTC)
+
+        async with get_session(db) as s:
+            s.add(
+                PlatformToken(
+                    platform="github",
+                    token="ghp_test",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            await s.commit()
+
+        async with get_session(db) as s:
+            row = await s.get(PlatformToken, "github")
+            assert row is not None
+            assert row.token == "ghp_test"
+    finally:
+        await dispose_db(db)
+
+
+async def test_repository_has_is_private(tmp_path):
+    from shared.database import dispose_db, get_session, init_db
+    from shared.models import Repository
+
+    db = str(tmp_path / "t2.db")
+    await init_db(db)
+    try:
+        async with get_session(db) as s:
+            s.add(
+                Repository(
+                    id="abc123",
+                    owner="owner",
+                    name="repo",
+                    status="pending",
+                    platform="github",
+                    is_private=True,
+                )
+            )
+            await s.commit()
+
+        async with get_session(db) as s:
+            repo = await s.get(Repository, "abc123")
+            assert repo.is_private is True
+    finally:
+        await dispose_db(db)
+
+
+async def test_init_db_applies_private_file_permissions(tmp_path):
+    from shared.database import dispose_db, init_db
+
+    db_path = tmp_path / "private" / "autowiki.db"
+    db = str(db_path)
+    await init_db(db)
+    try:
+        assert oct(db_path.parent.stat().st_mode & 0o777) == "0o700"
+        assert oct(db_path.stat().st_mode & 0o777) == "0o600"
+    finally:
+        await dispose_db(db)
+
+
+async def test_init_db_does_not_chmod_cwd_for_relative_database(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from shared.database import dispose_db, init_db
+
+    monkeypatch.chdir(tmp_path)
+    original_chmod = Path.chmod
+
+    def forbid_cwd_chmod(self: Path, mode: int):
+        if self == Path("."):
+            raise AssertionError("init_db must not chmod the current directory")
+        return original_chmod(self, mode)
+
+    monkeypatch.setattr(Path, "chmod", forbid_cwd_chmod)
+
+    db = "autowiki.db"
+    await init_db(db)
+    try:
+        assert Path(db).exists()
+    finally:
+        await dispose_db(db)

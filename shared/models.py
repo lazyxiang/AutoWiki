@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -23,6 +23,7 @@ class Repository(Base):
     last_commit: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String, nullable=False)
     default_branch: Mapped[str | None] = mapped_column(String, nullable=True)
+    is_private: Mapped[bool] = mapped_column(Boolean, default=False)
     indexed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     wiki_path: Mapped[str | None] = mapped_column(String, nullable=True)
     wiki_structure: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -110,3 +111,17 @@ class ResearchReport(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     repository: Mapped[Repository] = relationship("Repository")
     job: Mapped[Job] = relationship("Job")
+
+
+class PlatformToken(Base):
+    __tablename__ = "platform_tokens"
+    platform: Mapped[str] = mapped_column(String, primary_key=True)
+    # PATs are stored locally in SQLite; init_db locks the data dir to 0700
+    # and the database file to 0600, and API responses only expose masked values.
+    token: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+    )

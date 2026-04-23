@@ -43,8 +43,8 @@ class WorkerSettings:
     ARQ reads class attributes directly; no instantiation occurs.
 
     Registered job functions:
-        - ``run_full_index``: Full 7-stage wiki generation pipeline for a
-          repository (clone → AST → deps → RAG → plan → pages → diagram).
+        - ``run_full_index``: Full 6-stage wiki generation pipeline for a
+          repository (clone → AST → deps → RAG → plan → pages).
         - ``run_refresh_index``: Incremental refresh that re-runs the pipeline
           only for pages whose source files have changed since the last index.
 

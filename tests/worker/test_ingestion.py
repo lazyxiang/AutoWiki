@@ -1,23 +1,10 @@
-import pytest
-
 from worker.pipeline.ingestion import (
     extract_readme,
     filter_files,
     get_repo_hash,
-    parse_github_url,
+    public_clone_url,
+    redacted_git_error,
 )
-
-
-def test_parse_github_url():
-    owner, name = parse_github_url("https://github.com/psf/requests")
-    assert owner == "psf"
-    assert name == "requests"
-
-
-def test_parse_github_url_without_scheme():
-    owner, name = parse_github_url("github.com/psf/requests")
-    assert owner == "psf"
-    assert name == "requests"
 
 
 def test_get_repo_hash_is_deterministic():
@@ -25,6 +12,44 @@ def test_get_repo_hash_is_deterministic():
     h2 = get_repo_hash("github", "psf", "requests")
     assert h1 == h2
     assert len(h1) == 16  # truncated sha256
+
+
+def test_get_repo_hash_differs_across_platforms():
+    h_github = get_repo_hash("github", "owner", "repo")
+    h_gitlab = get_repo_hash("gitlab", "owner", "repo")
+    h_bitbucket = get_repo_hash("bitbucket", "owner", "repo")
+    assert h_github != h_gitlab
+    assert h_github != h_bitbucket
+    assert h_gitlab != h_bitbucket
+
+
+def test_public_clone_url_strips_embedded_credentials():
+    assert (
+        public_clone_url("https://token@github.com/owner/repo.git")
+        == "https://github.com/owner/repo.git"
+    )
+    assert (
+        public_clone_url("https://oauth2:token@gitlab.com/group/repo.git")
+        == "https://gitlab.com/group/repo.git"
+    )
+
+
+def test_redacted_git_error_removes_embedded_clone_credentials():
+    import git
+
+    raw_url = "https://secret-token@github.com/owner/repo.git"
+    safe_url = "https://github.com/owner/repo.git"
+    error = git.exc.GitCommandError(
+        ["git", "clone", raw_url],
+        128,
+        stderr=f"fatal: could not read from {raw_url}",
+    )
+
+    message = str(redacted_git_error(error, raw_url, safe_url))
+
+    assert raw_url not in message
+    assert "secret-token" not in message
+    assert safe_url in message
 
 
 def test_filter_files_excludes_binaries(tmp_path):
@@ -47,16 +72,6 @@ def test_filter_files_respects_size_limit(tmp_path):
     files = filter_files(tmp_path, max_file_bytes=1024 * 1024)
     assert small in files
     assert large not in files
-
-
-def test_parse_github_url_invalid_raises():
-    with pytest.raises(ValueError, match="Cannot parse GitHub URL"):
-        parse_github_url("not-a-url")
-
-
-def test_parse_github_url_rejects_non_github():
-    with pytest.raises(ValueError):
-        parse_github_url("https://gitlab.com/owner/repo")
 
 
 def test_filter_files_uses_relative_parts(tmp_path):

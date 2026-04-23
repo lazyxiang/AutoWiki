@@ -5,6 +5,8 @@ import Link from "next/link";
  * Props for the RepoCard component.
  */
 interface RepoCardProps {
+  /** Stable repository ID used for routing. */
+  id: string;
   /** The owner of the repository. */
   owner: string;
   /** The name of the repository. */
@@ -25,9 +27,9 @@ interface RepoCardProps {
  * A card component that displays summary information about a repository.
  * Used on the home page for discovery.
  */
-export function RepoCard({ owner, name, description, stars, language, updatedAt, wikiLanguage }: RepoCardProps) {
+export function RepoCard({ id, owner, name, description, stars, language, updatedAt, wikiLanguage }: RepoCardProps) {
   return (
-    <Link href={`/${owner}/${name}`} className="group block p-5 bg-card border border-border rounded-xl hover:border-primary/50 hover:shadow-sm transition-all">
+    <Link href={`/${id}/${encodeURIComponent(name)}`} className="group block p-5 bg-card border border-border rounded-xl hover:border-primary/50 hover:shadow-sm transition-all">
       <h3 className="text-lg font-bold group-hover:text-primary transition-colors">
         <span className="text-muted-foreground font-normal">{owner}/</span>{name}
       </h3>

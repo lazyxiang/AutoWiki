@@ -5,7 +5,6 @@ All routes are mounted under the ``/api/repos`` prefix.
 
 from __future__ import annotations
 
-import hashlib
 import uuid
 
 from fastapi import APIRouter, HTTPException
@@ -16,7 +15,9 @@ from api.queue import enqueue_full_index, enqueue_refresh_index
 from shared.config import get_config
 from shared.database import get_session
 from shared.models import Job, Repository
-from worker.pipeline.ingestion import parse_github_url
+from worker.pipeline.ingestion import get_repo_hash
+from worker.platform.base import UnsupportedPlatformError
+from worker.platform.registry import detect_platform
 
 router = APIRouter(prefix="/api/repos")
 
@@ -25,11 +26,11 @@ class IndexRequest(BaseModel):
     """Request body for submitting a repository for indexing.
 
     Attributes:
-        url (str): Full GitHub repository URL in any commonly accepted form,
-            e.g. ``"https://github.com/owner/repo"`` or
-            ``"github.com/owner/repo"``.  The URL is parsed by
-            :func:`worker.pipeline.ingestion.parse_github_url` which accepts
-            both ``https://`` and bare ``github.com/`` prefixes.
+        url (str): Repository URL to index.  Accepted formats:
+            ``https://github.com/owner/repo``,
+            ``https://gitlab.com/group/repo``,
+            ``https://bitbucket.org/owner/repo`` (with or without ``.git``
+            suffix).
         wiki_language (str): ISO-639-1 language code for the generated wiki
             content.  Defaults to ``"en"`` (English).  Use ``"zh"`` to
             generate the wiki in Chinese (简体中文).
@@ -105,16 +106,20 @@ async def submit_repo(req: IndexRequest):
             }
     """
     try:
-        owner, name = parse_github_url(req.url)
-    except ValueError:
-        raise HTTPException(status_code=422, detail="Invalid GitHub URL")
+        platform = detect_platform(req.url)
+        owner, name = platform.parse_url(req.url)
+    except (ValueError, UnsupportedPlatformError):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Invalid or unsupported repository URL"
+                " (supported: github.com, gitlab.com, bitbucket.org)"
+            ),
+        )
+    repo_id = get_repo_hash(platform.name, owner, name)
 
     cfg = get_config()
     db_path = str(cfg.database_path)
-    # Derive a stable, short identifier from the canonical repo key so the same
-    # repo always maps to the same storage directory regardless of how the URL
-    # was typed.
-    repo_id = hashlib.sha256(f"github:{owner}/{name}".encode()).hexdigest()[:16]
     job_id = str(uuid.uuid4())
 
     async with get_session(db_path) as s:
@@ -136,7 +141,7 @@ async def submit_repo(req: IndexRequest):
                 owner=owner,
                 name=name,
                 status="pending",
-                platform="github",
+                platform=platform.name,
                 wiki_language=req.wiki_language,
             )
             s.add(repo)
@@ -225,6 +230,7 @@ async def list_repos():
                 "id": r.id,
                 "owner": r.owner,
                 "name": r.name,
+                "platform": r.platform or "github",
                 "description": r.description or "",
                 "stars": r.stars or 0,
                 "language": r.language or "",
@@ -233,6 +239,7 @@ async def list_repos():
                 "indexed_at": r.indexed_at.isoformat() if r.indexed_at else None,
                 "wiki_language": r.wiki_language or "en",
                 "last_commit": r.last_commit or "",
+                "is_private": bool(r.is_private),
             }
             for r in repos
         ]
@@ -289,6 +296,7 @@ async def get_repo(repo_id: str):
             "id": repo.id,
             "owner": repo.owner,
             "name": repo.name,
+            "platform": repo.platform or "github",
             "description": repo.description or "",
             "stars": repo.stars or 0,
             "language": repo.language or "",
@@ -297,6 +305,7 @@ async def get_repo(repo_id: str):
             "indexed_at": repo.indexed_at.isoformat() if repo.indexed_at else None,
             "wiki_language": repo.wiki_language or "en",
             "last_commit": repo.last_commit or "",
+            "is_private": bool(repo.is_private),
         }
 
 
