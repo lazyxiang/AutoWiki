@@ -1,6 +1,5 @@
 import ResearchPanel from "@/components/ResearchPanel";
-import { getRepo } from "@/lib/api";
-import { repoId } from "@/lib/repo-id.server";
+import { resolveRouteRepo } from "@/lib/repo-route.server";
 
 export default async function ResearchPage({
   params,
@@ -8,12 +7,7 @@ export default async function ResearchPage({
   params: Promise<{ owner: string; repo: string }>;
 }) {
   const { owner, repo } = await params;
-  let rid = owner;
-  let repoMeta = await getRepo(rid).catch(() => null);
-  if (repoMeta === null) {
-    rid = repoId(owner, repo);
-    repoMeta = await getRepo(rid).catch(() => null);
-  }
+  const { repoId, repoMeta } = await resolveRouteRepo(owner, repo);
 
   return (
     <div style={{ padding: "1rem" }}>
@@ -22,7 +16,7 @@ export default async function ResearchPage({
       >
         Deep Research — {repoMeta?.owner ?? owner}/{repoMeta?.name ?? repo}
       </h1>
-      <ResearchPanel repoId={rid} />
+      <ResearchPanel repoId={repoId} />
     </div>
   );
 }

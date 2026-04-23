@@ -2,7 +2,11 @@ from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-_FAKE_META = MagicMock(
+from worker.platform.base import RepoMetadata
+
+_FAKE_META = RepoMetadata(
+    owner="o",
+    name="r",
     description="",
     stars=0,
     language="",
@@ -30,7 +34,9 @@ def test_repo_metadata_updates_skip_empty_fallback_values():
 def test_repo_metadata_updates_include_non_empty_metadata():
     from worker.jobs import _repo_metadata_updates
 
-    meta = MagicMock(
+    meta = RepoMetadata(
+        owner="o",
+        name="r",
         description="A repo",
         stars=42,
         language="Python",

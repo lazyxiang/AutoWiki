@@ -1,8 +1,7 @@
-import { getRepoWiki, getRepo } from "@/lib/api";
 import { WikiSidebar } from "@/components/WikiSidebar";
 import { TableOfContents } from "@/components/TableOfContents";
 import { ChatDrawer } from "@/components/ChatDrawer";
-import { repoId } from "@/lib/repo-id.server";
+import { resolveRouteWiki } from "@/lib/repo-route.server";
 
 export default async function WikiLayout({
   children,
@@ -12,18 +11,7 @@ export default async function WikiLayout({
   params: Promise<{ owner: string; repo: string }>;
 }) {
   const { owner, repo } = await params;
-  let rid = owner;
-  let [{ pages }, repoMeta] = await Promise.all([
-    getRepoWiki(rid).catch(() => ({ pages: [] })),
-    getRepo(rid).catch(() => null),
-  ]);
-  if (repoMeta === null) {
-    rid = repoId(owner, repo);
-    [{ pages }, repoMeta] = await Promise.all([
-      getRepoWiki(rid).catch(() => ({ pages: [] })),
-      getRepo(rid).catch(() => null),
-    ]);
-  }
+  const { repoId, repoMeta, pages } = await resolveRouteWiki(owner, repo);
   const displayOwner = repoMeta?.owner ?? owner;
   const displayRepo = repoMeta?.name ?? repo;
 
@@ -33,7 +21,7 @@ export default async function WikiLayout({
         pages={pages}
         owner={displayOwner}
         repo={displayRepo}
-        repoId={rid}
+        repoId={repoId}
         lastCommit={repoMeta?.last_commit ?? ""}
         indexedAt={repoMeta?.indexed_at ?? ""}
       />
@@ -41,7 +29,7 @@ export default async function WikiLayout({
         {children}
       </main>
       <TableOfContents />
-      <ChatDrawer repoId={rid} />
+      <ChatDrawer repoId={repoId} />
     </div>
   );
 }

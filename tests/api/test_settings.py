@@ -3,38 +3,41 @@
 import pytest
 
 
-def test_settings_auth_allows_requests_when_token_unset(monkeypatch):
+def _verify_settings_auth(monkeypatch, configured_token, authorization):
     from api.routers.settings import verify_settings_auth
     from shared.config import reset_config
 
-    monkeypatch.delenv("AUTOWIKI_SERVER_AUTH_TOKEN", raising=False)
+    if configured_token is None:
+        monkeypatch.delenv("AUTOWIKI_SERVER_AUTH_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("AUTOWIKI_SERVER_AUTH_TOKEN", configured_token)
     reset_config()
     try:
-        verify_settings_auth(None)
+        verify_settings_auth(authorization)
     finally:
         reset_config()
 
 
-def test_settings_auth_requires_bearer_token_when_configured(monkeypatch):
+def test_settings_auth_allows_requests_when_token_unset(monkeypatch):
+    _verify_settings_auth(monkeypatch, None, None)
+
+
+@pytest.mark.parametrize(
+    ("authorization", "status_code"),
+    [(None, 401), ("Bearer wrong", 403)],
+)
+def test_settings_auth_rejects_bad_bearer_token(
+    monkeypatch, authorization, status_code
+):
     from fastapi import HTTPException
 
-    from api.routers.settings import verify_settings_auth
-    from shared.config import reset_config
+    with pytest.raises(HTTPException) as exc:
+        _verify_settings_auth(monkeypatch, "secret", authorization)
+    assert exc.value.status_code == status_code
 
-    monkeypatch.setenv("AUTOWIKI_SERVER_AUTH_TOKEN", "secret")
-    reset_config()
-    try:
-        with pytest.raises(HTTPException) as exc:
-            verify_settings_auth(None)
-        assert exc.value.status_code == 401
 
-        with pytest.raises(HTTPException) as bad:
-            verify_settings_auth("Bearer wrong")
-        assert bad.value.status_code == 403
-
-        verify_settings_auth("Bearer secret")
-    finally:
-        reset_config()
+def test_settings_auth_accepts_valid_bearer_token(monkeypatch):
+    _verify_settings_auth(monkeypatch, "secret", "Bearer secret")
 
 
 async def test_get_tokens_empty(client):

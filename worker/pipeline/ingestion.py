@@ -118,6 +118,11 @@ def public_clone_url(clone_url: str) -> str:
     return urlunsplit((parsed.scheme, host, parsed.path, parsed.query, parsed.fragment))
 
 
+def redacted_git_error(exc: Exception, clone_url: str, stored_url: str) -> RuntimeError:
+    safe_message = str(exc).replace(clone_url, stored_url)
+    return RuntimeError(f"Git clone/fetch failed for {stored_url}: {safe_message}")
+
+
 def filter_files(
     root: Path,
     max_file_bytes: int = 1024 * 1024,  # 1MB per file
@@ -254,10 +259,7 @@ async def clone_or_fetch(clone_dir: Path, clone_url: str) -> tuple[str, str]:
                     raise
                 repo.remotes.origin.set_url(stored_url)
         except git.exc.GitCommandError as exc:
-            safe_message = str(exc).replace(clone_url, stored_url)
-            raise RuntimeError(
-                f"Git clone/fetch failed for {stored_url}: {safe_message}"
-            ) from None
+            raise redacted_git_error(exc, clone_url, stored_url) from None
         return repo.head.commit.hexsha, repo.active_branch.name
 
     loop = asyncio.get_running_loop()
