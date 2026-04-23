@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { Progress } from "@/components/ui/progress";
 import { useJobProgress } from "@/lib/ws";
 import { repoPath } from "@/lib/utils";
+import { parseJobProgressDetail } from "@/lib/job-progress";
 
 interface Props {
   jobId: string;
@@ -15,16 +16,9 @@ interface Props {
 export function JobProgressBar({ jobId, repoId, owner, repo }: Props) {
   const { progress, status, statusDescription, retrying } = useJobProgress(jobId);
   const router = useRouter();
-
-  const pageMatch =
-    statusDescription?.match(
-      /^(?:Generating|Regenerating) page "(.+)" \((\d+)\/(\d+)\)(?: \[level (\d+)\/(\d+)\])?/,
-    ) ?? null;
-  const currentPageTitle = pageMatch?.[1] ?? null;
-  const pageIndex = pageMatch ? Number(pageMatch[2]) : null;
-  const totalPages = pageMatch ? Number(pageMatch[3]) : null;
-  const levelIndex = pageMatch?.[4] ? Number(pageMatch[4]) : null;
-  const totalLevels = pageMatch?.[5] ? Number(pageMatch[5]) : null;
+  const progressDetail = parseJobProgressDetail(statusDescription);
+  const visibleStatusDescription =
+    progressDetail && !retrying ? null : statusDescription;
 
   useEffect(() => {
     if (status === "done") {
@@ -41,13 +35,13 @@ export function JobProgressBar({ jobId, repoId, owner, repo }: Props) {
         aria-atomic="true"
       >
         <p className="text-sm font-medium text-foreground capitalize">{status}…</p>
-        {statusDescription && (
+        {visibleStatusDescription && (
           <p
             className={`text-xs animate-pulse ${
               retrying ? "text-amber-500" : "text-muted-foreground"
             }`}
           >
-            {retrying ? "⟳ " : ""}{statusDescription}
+            {retrying ? "⟳ " : ""}{visibleStatusDescription}
           </p>
         )}
       </div>
@@ -56,13 +50,40 @@ export function JobProgressBar({ jobId, repoId, owner, repo }: Props) {
         className={`h-2 ${retrying ? "opacity-60" : ""}`}
       />
       <p className="text-xs text-muted-foreground">{progress}%</p>
-      {currentPageTitle && pageIndex && totalPages && (
-        <div className="rounded-md border bg-muted/30 px-3 py-2">
-          <p className="text-xs text-muted-foreground">
-            Page {pageIndex} of {totalPages}
-            {levelIndex && totalLevels ? ` • Level ${levelIndex}/${totalLevels}` : ""}
+      {progressDetail?.kind === "page" && (
+        <div className="flex flex-col gap-2">
+          <p className="rounded-md border bg-muted/30 px-3 py-2 text-sm font-medium text-foreground">
+            {progressDetail.title}
           </p>
-          <p className="text-sm font-medium text-foreground">{currentPageTitle}</p>
+        </div>
+      )}
+      {progressDetail?.kind === "batch" && (
+        <div className="flex flex-col gap-2">
+          <ul className="space-y-2">
+            {progressDetail.titles.map((title) => (
+              <li
+                key={title}
+                className="rounded-md border bg-muted/30 px-3 py-2 text-sm font-medium text-foreground"
+              >
+                {title}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {progressDetail?.kind === "active" && (
+        <div className="flex flex-col gap-2">
+          <ul className="space-y-2">
+            {progressDetail.pages.map((page) => (
+              <li
+                key={page.title}
+                className="rounded-md border bg-muted/30 px-3 py-2"
+              >
+                <p className="text-sm font-medium text-foreground">{page.title}</p>
+                <p className="text-xs text-muted-foreground">{page.stage}</p>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
       {status === "failed" && (

@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock
 
 import numpy as np
@@ -6,6 +7,7 @@ import pytest
 from worker.pipeline.page_generator import (
     PageResult,
     _append_source_files_table,
+    _strip_code_blocks,
     _strip_preamble_and_ensure_header,
     compute_generation_order,
     generate_page,
@@ -277,6 +279,54 @@ async def test_generate_page_batch_returns_all_results(page_store, mock_embeddin
         assert len(r.content) > 0
 
 
+async def test_generate_page_batch_calls_on_result_as_each_page_finishes(
+    page_store, mock_embedding, monkeypatch
+):
+    from worker.pipeline import page_generator
+    from worker.pipeline.ast_analysis import FileAnalysis
+    from worker.pipeline.dependency_graph import DependencyGraph
+
+    slow_can_finish = asyncio.Event()
+    persisted: list[str] = []
+
+    async def fake_generate_page(spec, *args, **kwargs):
+        if spec.title == "Slow Page":
+            await slow_can_finish.wait()
+        return PageResult(slug=spec.slug, title=spec.title, content=spec.title)
+
+    async def on_result(result: PageResult, spec: WikiPageSpec):
+        persisted.append(result.title)
+
+    monkeypatch.setattr(page_generator, "generate_page", fake_generate_page)
+
+    spec_fast = WikiPageSpec(title="Fast Page", purpose=".", files=["fast.py"])
+    spec_slow = WikiPageSpec(title="Slow Page", purpose=".", files=["slow.py"])
+    batch_task = asyncio.create_task(
+        generate_page_batch(
+            specs_with_children=[(spec_fast, None), (spec_slow, None)],
+            store=page_store,
+            llm=AsyncMock(),
+            fast_llm=AsyncMock(),
+            embedding=mock_embedding,
+            repo_name="testrepo",
+            file_analysis=FileAnalysis(files={}),
+            dep_graph=DependencyGraph(),
+            on_result=on_result,
+        )
+    )
+
+    try:
+        for _ in range(20):
+            if persisted == ["Fast Page"]:
+                break
+            await asyncio.sleep(0.01)
+
+        assert persisted == ["Fast Page"]
+    finally:
+        slow_can_finish.set()
+        await batch_task
+
+
 def test_append_source_files_table_adds_table():
     content = "# My Page\n\n## Overview\n\nSome content."
     result = _append_source_files_table(content, ["src/foo.py", "src/bar.py"])
@@ -284,6 +334,15 @@ def test_append_source_files_table_adds_table():
     assert "| `src/foo.py` |" in result
     assert "| `src/bar.py` |" in result
     assert result.index("## Source Files") > result.index("## Overview")
+
+
+def test_strip_code_blocks_preserves_mermaid_closing_fence():
+    content = "# Page\n\n```mermaid\nflowchart TD\n  A-->B\n```\n\n*Source: a.py:1-2*\n"
+
+    result = _strip_code_blocks(content)
+
+    assert result.count("```") == 2
+    assert "```\n\n*Source:" in result
 
 
 def test_append_source_files_table_empty_files_unchanged():

@@ -143,6 +143,47 @@ async def _write_text_async(path: Path, content: str) -> None:
     await loop.run_in_executor(None, path.write_text, content)
 
 
+def _format_active_page_status(verb: str, active_pages: dict[str, str]) -> str:
+    """Format pages currently inside the generation pipeline."""
+
+    page_states = ", ".join(
+        f"{_quote_page_title(title)} [{stage}]" for title, stage in active_pages.items()
+    )
+    return f"{verb} active pages: {page_states}"
+
+
+def _quote_page_title(title: str) -> str:
+    clean_title = title.replace(chr(34), "'")
+    return f'"{clean_title}"'
+
+
+def _make_page_progress_callback(db_path: str, job_id: str, verb: str):
+    """Return a callback that writes active page/stage progress to the job row."""
+
+    lock = asyncio.Lock()
+    active_pages: dict[str, str] = {}
+    idle_status = f"{verb} wiki pages..."
+
+    async def _on_progress(title: str, stage: str | None) -> None:
+        async with lock:
+            if stage is None:
+                active_pages.pop(title, None)
+            else:
+                active_pages[title] = stage
+            status_description = (
+                _format_active_page_status(verb, active_pages)
+                if active_pages
+                else idle_status
+            )
+            await _update_job(
+                db_path,
+                job_id,
+                status_description=status_description,
+            )
+
+    return _on_progress
+
+
 # ---------------------------------------------------------------------------
 # Pipeline stage helpers (shared by full-index and refresh)
 # ---------------------------------------------------------------------------
@@ -807,8 +848,10 @@ async def run_full_index(
         generated: dict[str, PageResult] = {}
         page_order_counter = 0
         pages_done = 0
+        on_page_progress = _make_page_progress_callback(db_path, job_id, "Generating")
+        save_lock = asyncio.Lock()
 
-        for depth_idx, level in enumerate(levels):
+        for level in levels:
             specs_with_children: list[tuple[WikiPageSpec, list[PageResult] | None]] = []
             for page_spec in level:
                 children = [
@@ -818,7 +861,53 @@ async def run_full_index(
                 ]
                 specs_with_children.append((page_spec, children or None))
 
-            results = await generate_page_batch(
+            page_order_by_slug = {
+                page_spec.slug: page_order_counter + idx
+                for idx, (page_spec, _) in enumerate(specs_with_children)
+            }
+            page_order_counter += len(specs_with_children)
+
+            async def _save_generated_page(
+                result: PageResult, page_spec: WikiPageSpec
+            ) -> None:
+                nonlocal pages_done
+                async with save_lock:
+                    generated[result.slug] = result
+                    logger.info(
+                        "Page generated and persisted: %s (%s), %d chars",
+                        result.title,
+                        result.slug,
+                        len(result.content),
+                    )
+                    async with get_session(db_path) as s:
+                        s.add(
+                            WikiPage(
+                                id=str(uuid.uuid4()),
+                                repo_id=repo_id,
+                                slug=result.slug,
+                                title=result.title,
+                                content=result.content,
+                                page_order=page_order_by_slug[result.slug],
+                                parent_slug=page_spec.parent_slug,
+                                description=page_spec.purpose,
+                            )
+                        )
+                        await s.commit()
+                    await _write_text_async(
+                        wiki_dir / f"{result.slug}.md", result.content
+                    )
+                    pages_done += 1
+                    progress = 70 + int(27 * pages_done / total) if total > 0 else 97
+                    await _update_job(
+                        db_path,
+                        job_id,
+                        progress=progress,
+                        status_description=(
+                            f'Generating page "{result.title}" ({pages_done}/{total})'
+                        ),
+                    )
+
+            await generate_page_batch(
                 specs_with_children,
                 store,
                 llm,
@@ -830,44 +919,9 @@ async def run_full_index(
                 on_retry=_on_retry,
                 wiki_language=wiki_language,
                 repo_notes=plan.repo_notes or None,
+                on_progress=on_page_progress,
+                on_result=_save_generated_page,
             )
-
-            for result, (page_spec, _) in zip(results, specs_with_children):
-                generated[result.slug] = result
-                logger.info(
-                    "Page generated: %s (%s), %d chars",
-                    result.title,
-                    result.slug,
-                    len(result.content),
-                )
-                async with get_session(db_path) as s:
-                    s.add(
-                        WikiPage(
-                            id=str(uuid.uuid4()),
-                            repo_id=repo_id,
-                            slug=result.slug,
-                            title=result.title,
-                            content=result.content,
-                            page_order=page_order_counter,
-                            parent_slug=page_spec.parent_slug,
-                            description=page_spec.purpose,
-                        )
-                    )
-                    await s.commit()
-                await _write_text_async(wiki_dir / f"{result.slug}.md", result.content)
-                page_order_counter += 1
-                pages_done += 1
-                progress = 70 + int(27 * pages_done / total) if total > 0 else 97
-                level_info = f"{depth_idx + 1}/{len(levels)}"
-                await _update_job(
-                    db_path,
-                    job_id,
-                    progress=progress,
-                    status_description=(
-                        f'Generating page "{result.title}" '
-                        f"({pages_done}/{total}) [level {level_info}]"
-                    ),
-                )
 
         structure_data = plan.to_api_structure()
         now = datetime.now(UTC)
@@ -1379,8 +1433,10 @@ async def run_refresh_index(
         refresh_order_counter = 0
         pages_done = 0
         total_pages = len(plan.pages)
+        on_page_progress = _make_page_progress_callback(db_path, job_id, "Regenerating")
+        save_lock = asyncio.Lock()
 
-        for depth_idx, level in enumerate(levels):
+        for level in levels:
             specs_with_children: list[tuple[WikiPageSpec, list[PageResult] | None]] = []
             for page_spec in level:
                 children = []
@@ -1397,7 +1453,62 @@ async def run_refresh_index(
                             children.append(preserved_content[p.slug])
                 specs_with_children.append((page_spec, children or None))
 
-            results = await generate_page_batch(
+            page_order_by_slug: dict[str, int] = {}
+            for page_spec, _ in specs_with_children:
+                if page_spec.slug in old_page_orders:
+                    page_order_by_slug[page_spec.slug] = old_page_orders[page_spec.slug]
+                else:
+                    page_order_by_slug[page_spec.slug] = (
+                        max_existing_order + 1 + refresh_order_counter
+                    )
+                    refresh_order_counter += 1
+
+            async def _save_regenerated_page(
+                result: PageResult, page_spec: WikiPageSpec
+            ) -> None:
+                nonlocal pages_done
+                async with save_lock:
+                    generated[result.slug] = result
+                    logger.info(
+                        "Page regenerated and persisted: %s (%s), %d chars",
+                        result.title,
+                        result.slug,
+                        len(result.content),
+                    )
+                    async with get_session(db_path) as s:
+                        s.add(
+                            WikiPage(
+                                id=str(uuid.uuid4()),
+                                repo_id=repo_id,
+                                slug=result.slug,
+                                title=result.title,
+                                content=result.content,
+                                page_order=page_order_by_slug[result.slug],
+                                parent_slug=page_spec.parent_slug,
+                                description=page_spec.purpose,
+                            )
+                        )
+                        await s.commit()
+                    await _write_text_async(
+                        wiki_dir / f"{result.slug}.md", result.content
+                    )
+                    pages_done += 1
+                    progress = (
+                        65 + int(30 * pages_done / total_pages)
+                        if total_pages > 0
+                        else 95
+                    )
+                    await _update_job(
+                        db_path,
+                        job_id,
+                        progress=progress,
+                        status_description=(
+                            f'Regenerating page "{result.title}" '
+                            f"({pages_done}/{total_pages})"
+                        ),
+                    )
+
+            await generate_page_batch(
                 specs_with_children,
                 store,
                 llm,
@@ -1409,49 +1520,9 @@ async def run_refresh_index(
                 on_retry=_on_retry,
                 wiki_language=wiki_language,
                 repo_notes=plan.repo_notes or None,
+                on_progress=on_page_progress,
+                on_result=_save_regenerated_page,
             )
-
-            for result, (page_spec, _) in zip(results, specs_with_children):
-                generated[result.slug] = result
-                logger.info(
-                    "Page updated: %s (%s), %d chars",
-                    result.title,
-                    result.slug,
-                    len(result.content),
-                )
-                page_order = old_page_orders.get(
-                    result.slug, max_existing_order + 1 + refresh_order_counter
-                )
-                async with get_session(db_path) as s:
-                    s.add(
-                        WikiPage(
-                            id=str(uuid.uuid4()),
-                            repo_id=repo_id,
-                            slug=result.slug,
-                            title=result.title,
-                            content=result.content,
-                            page_order=page_order,
-                            parent_slug=page_spec.parent_slug,
-                            description=page_spec.purpose,
-                        )
-                    )
-                    await s.commit()
-                refresh_order_counter += 1
-                await _write_text_async(wiki_dir / f"{result.slug}.md", result.content)
-                pages_done += 1
-                progress = (
-                    65 + int(30 * pages_done / total_pages) if total_pages > 0 else 95
-                )
-                level_info = f"{depth_idx + 1}/{len(levels)}"
-                await _update_job(
-                    db_path,
-                    job_id,
-                    progress=progress,
-                    status_description=(
-                        f'Regenerating page "{result.title}" '
-                        f"({pages_done}/{total_pages}) [level {level_info}]"
-                    ),
-                )
 
         # Build a merged plan reflecting the full updated wiki structure.
         # Unchanged pages are identified by title, not slug, so a retitled page
