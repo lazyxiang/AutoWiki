@@ -63,6 +63,32 @@ async def test_gemini_embed_batch_converts_429_client_error_to_timeout():
             await provider.embed_batch(["hello"])
 
 
+async def test_gemini_embed_batch_uses_50_item_sub_batches():
+    from worker.embedding import gemini_embed
+
+    fake_client = MagicMock()
+    fake_client.models.embed_content.side_effect = [
+        MagicMock(embeddings=[MagicMock(values=[0.0] * 768) for _ in range(50)]),
+        MagicMock(embeddings=[MagicMock(values=[0.0] * 768)]),
+    ]
+
+    with (
+        patch.object(gemini_embed, "_GENAI_AVAILABLE", True),
+        patch.object(gemini_embed.genai, "Client", return_value=fake_client),
+    ):
+        provider = gemini_embed.GeminiEmbedding(api_key="test-key")
+        result = await provider.embed_batch(["text"] * 51)
+
+    assert len(result) == 51
+    assert fake_client.models.embed_content.call_count == 2
+    assert (
+        len(fake_client.models.embed_content.call_args_list[0].kwargs["contents"]) == 50
+    )
+    assert (
+        len(fake_client.models.embed_content.call_args_list[1].kwargs["contents"]) == 1
+    )
+
+
 def test_make_embedding_provider_openai():
     from worker.embedding import make_embedding_provider
 

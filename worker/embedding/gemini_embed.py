@@ -33,7 +33,7 @@ class GeminiEmbedding(EmbeddingProvider):
         )
         self._model = model
         self._dim = 768
-        self._max_batch_size = 100  # Gemini limit
+        self._max_batch_size = 50
 
     @property
     def dimension(self) -> int:
@@ -65,7 +65,7 @@ class GeminiEmbedding(EmbeddingProvider):
         task_type = "CODE_RETRIEVAL_QUERY" if is_code else "RETRIEVAL_DOCUMENT"
 
         results = []
-        # Gemini has a 100 item limit per batch request
+        # Keep requests below Gemini's hard limit to reduce quota spike risk.
         for i in range(0, len(texts), self._max_batch_size):
             batch = texts[i : i + self._max_batch_size]
             try:
