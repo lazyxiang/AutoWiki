@@ -160,6 +160,7 @@ WS    /ws/repos/{repo_id}/research/{job_id}           # Stream research events
 - **Coverage target**: ≥80% on `worker/` and `api/` — currently at 80%
 - **Run**: `pytest tests/ --ignore=tests/e2e` AND `npm test --prefix web`
 - **Fixtures**: `mock_llm`, `mock_embedding` in `tests/conftest.py`; fixture repo at `tests/fixtures/simple-repo/`
+- **Test Review**: After adding or changing tests, re-read the new assertions and simplify them if they are overfitted to implementation details. Keep only the smallest set of assertions that proves the intended behavior, and remove duplicate helpers or brittle call-shape checks unless they are the behavior under test.
 
 ## Deployment
 

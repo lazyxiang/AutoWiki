@@ -52,6 +52,9 @@ _MARKDOWN_BOUNDARY_RE = re.compile(
 # -->|"label"|  (directed arrow).  Convert  --\|  that is not already
 # preceded by  >  or  -  (so  -->|  and  ---|  are left untouched).
 _UNDIRECTED_LABELED_EDGE_RE = re.compile(r"(?<![->])--(\|)")
+_CLASS_INHERITANCE_FLOWCHART_RE = re.compile(
+    r"^(\s*)([A-Za-z_][\w~$-]*)\s+-->\|>\s+([A-Za-z_][\w~$-]*)(\s*:\s*.*)?$"
+)
 
 # ── Block-opener patterns by diagram type ────────────────────────────
 # Maps the lowercased diagram-type keyword to the regex that matches
@@ -60,6 +63,7 @@ _BLOCK_OPENERS_BY_TYPE: dict[str, re.Pattern[str]] = {
     "flowchart": re.compile(r"^subgraph\b", re.I),
     "graph": re.compile(r"^subgraph\b", re.I),
     "sequencediagram": re.compile(r"^(rect|alt|opt|loop|par|critical|break)\b", re.I),
+    "classdiagram": re.compile(r"a^"),
     # stateDiagram-v2 uses `{ }` braces for composite states — no `end` keyword.
     # Simple `state "Label" as Id` declarations must not be balanced with `end`.
     "statediagram": re.compile(r"a^"),
@@ -172,7 +176,19 @@ def _strip_embedded_fence(line: str) -> tuple[str, str] | None:
     return remainder, remainder
 
 
-def _sanitize_mermaid_line(line: str) -> str:
+def _repair_class_diagram_relation(line: str, diagram_type: str) -> str:
+    if diagram_type != "classdiagram":
+        return line
+    match = _CLASS_INHERITANCE_FLOWCHART_RE.match(line)
+    if not match:
+        return line
+
+    indent, child, parent, label = match.groups()
+    return f"{indent}{parent} <|-- {child}{label or ''}"
+
+
+def _sanitize_mermaid_line(line: str, diagram_type: str) -> str:
+    line = _repair_class_diagram_relation(line, diagram_type)
     line = _UNDIRECTED_LABELED_EDGE_RE.sub(r"-->|", line)
     line = _EDGE_LABEL_RE.sub(_edge_replacer, line)
     line = _DOUBLE_ROUND_RE.sub(_double_bracket_replacer, line)
@@ -275,7 +291,7 @@ def sanitize_mermaid(text: str) -> str:
             stripped, diagram_type, block_opener, block_depth, state_brace_depth
         )
         if keep_line:
-            result.append(_sanitize_mermaid_line(line))
+            result.append(_sanitize_mermaid_line(line, diagram_type))
 
     result.extend("end" for _ in range(block_depth))
     result.extend("}" for _ in range(state_brace_depth))

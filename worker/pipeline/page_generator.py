@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -44,6 +45,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("worker.page_generator")
 
 _HEADING_RE = re.compile(r"^#{1,6}\s", re.MULTILINE)
+PageProgressCallback = Callable[[str, str | None], Awaitable[None]]
 
 
 def _append_source_files_table(content: str, files: list[str]) -> str:
@@ -82,6 +84,9 @@ def _strip_code_blocks(draft: str) -> str:
     for line in draft.splitlines(keepends=True):
         stripped = line.rstrip("\n").rstrip("\r")
         if not inside_non_mermaid:
+            if _FENCE_CLOSE_RE.match(stripped):
+                result.append(line)
+                continue
             m = _FENCE_OPEN_RE.match(stripped)
             lang = (m.group(1) or "").lower() if m else ""
             if m and lang != "mermaid":
@@ -179,6 +184,9 @@ class PageResult:
     content: str  # Markdown
 
 
+PageResultCallback = Callable[[PageResult, WikiPageSpec], Awaitable[None]]
+
+
 async def generate_page(
     spec: WikiPageSpec,
     store: FAISSStore,
@@ -193,6 +201,7 @@ async def generate_page(
     wiki_language: str = "en",
     child_contents: list[PageResult] | None = None,
     repo_notes: list[dict] | None = None,
+    on_progress: PageProgressCallback | None = None,
 ) -> PageResult:
     """Generate a wiki page using the 4-pass pipeline.
 
@@ -253,6 +262,7 @@ async def generate_page(
     child_titles = [c.title for c in child_contents] if child_contents else None
 
     # ── Pass 1: Outline (fast model) ──
+    await _report_page_progress(on_progress, spec.title, "Outline")
     outline = await generate_page_outline(
         spec=spec,
         entity_summaries=entity_summaries,
@@ -264,6 +274,7 @@ async def generate_page(
     )
 
     # ── Pass 2: Draft (main model) ──
+    await _report_page_progress(on_progress, spec.title, "Draft")
     draft = await generate_draft(
         spec=spec,
         outline=outline,
@@ -279,6 +290,7 @@ async def generate_page(
     )
 
     # ── Pass 3: Fact-check (fast model) ──
+    await _report_page_progress(on_progress, spec.title, "Fact-check")
     targeted_chunks = _format_context_chunks(context_chunks)
     fc_result = await run_fact_check(
         draft=draft,
@@ -293,6 +305,7 @@ async def generate_page(
 
     # ── Pass 4: Targeted revision (main model, conditional) ──
     if fc_result.verdict == "fail" and fc_result.issues:
+        await _report_page_progress(on_progress, spec.title, "Revision")
         context_segments = build_draft_prompt(
             spec=spec,
             outline=outline,
@@ -347,6 +360,13 @@ async def generate_page(
     return PageResult(slug=spec.slug, title=spec.title, content=draft)
 
 
+async def _report_page_progress(
+    on_progress: PageProgressCallback | None, title: str, stage: str | None
+) -> None:
+    if on_progress is not None:
+        await on_progress(title, stage)
+
+
 async def generate_page_batch(
     specs_with_children: list[tuple[WikiPageSpec, list[PageResult] | None]],
     store: FAISSStore,
@@ -359,6 +379,8 @@ async def generate_page_batch(
     on_retry: OnRetryCallback | None = None,
     wiki_language: str = "en",
     repo_notes: list[dict] | None = None,
+    on_progress: PageProgressCallback | None = None,
+    on_result: PageResultCallback | None = None,
 ) -> list[PageResult]:
     """Generate all pages in a batch using the multi-pass pipeline."""
     import asyncio
@@ -392,6 +414,7 @@ async def generate_page_batch(
             wiki_language=wiki_language,
             child_contents=children,
             repo_notes=repo_notes,
+            on_progress=on_progress,
         )
 
     try:
@@ -406,7 +429,13 @@ async def generate_page_batch(
         spec: WikiPageSpec, children: list[PageResult] | None
     ) -> PageResult:
         async with sem:
-            return await _gen_one(spec, children)
+            try:
+                result = await _gen_one(spec, children)
+                if on_result is not None:
+                    await on_result(result, spec)
+                return result
+            finally:
+                await _report_page_progress(on_progress, spec.title, None)
 
     results = await asyncio.gather(
         *[_bounded(spec, children) for spec, children in specs_with_children]

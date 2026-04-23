@@ -1,8 +1,18 @@
 import { describe, it, expect } from "vitest";
-import { matchesQuery, parseRepoUrl } from "./repo-search";
+import {
+  filterRepositoriesForQuery,
+  matchesQuery,
+  parseRepoUrl,
+  sortRepositoriesByIndexedAt,
+} from "./repo-search";
 import type { Repository } from "./api";
 
-function makeRepo(owner: string, name: string, description = ""): Repository {
+function makeRepo(
+  owner: string,
+  name: string,
+  description = "",
+  indexedAt = "",
+): Repository {
   return {
     id: "test",
     owner,
@@ -10,8 +20,8 @@ function makeRepo(owner: string, name: string, description = ""): Repository {
     platform: "github",
     description,
     status: "ready",
-    indexed_at: "",
-    indexed_at_formatted: "Never",
+    indexed_at: indexedAt,
+    indexed_at_formatted: indexedAt || "Never",
     wiki_language: "en",
   };
 }
@@ -44,6 +54,14 @@ describe("matchesQuery", () => {
   it("is case-insensitive", () => {
     expect(matchesQuery("PSF", makeRepo("psf", "requests"))).toBe(true);
   });
+  it("does not treat repository URLs as per-repo match-all queries", () => {
+    expect(
+      matchesQuery(
+        "https://github.com/unknown/project",
+        makeRepo("psf", "requests"),
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("parseRepoUrl", () => {
@@ -65,6 +83,9 @@ describe("parseRepoUrl", () => {
   it("parses host URLs without scheme", () => {
     expect(parseRepoUrl("gitlab.com/group/repo")).toEqual({ owner: "group", name: "repo" });
   });
+  it("parses explicit self-hosted GitLab URLs", () => {
+    expect(parseRepoUrl("gitlab+https://gitlab.example.com/group/repo")).toEqual({ owner: "group", name: "repo" });
+  });
   it("returns null for too-short url", () => {
     expect(parseRepoUrl("github.com/owner")).toBeNull();
   });
@@ -76,5 +97,59 @@ describe("parseRepoUrl", () => {
   });
   it("strips trailing slash", () => {
     expect(parseRepoUrl("https://github.com/owner/repo/")).toEqual({ owner: "owner", name: "repo" });
+  });
+});
+
+describe("sortRepositoriesByIndexedAt", () => {
+  it("sorts repositories by indexed_at descending with missing dates last", () => {
+    const old = makeRepo("old", "repo", "", "2024-01-01T00:00:00+00:00");
+    const missing = makeRepo("missing", "repo");
+    const recent = makeRepo("recent", "repo", "", "2024-02-01T00:00:00+00:00");
+
+    expect(sortRepositoriesByIndexedAt([old, missing, recent])).toEqual([
+      recent,
+      old,
+      missing,
+    ]);
+  });
+
+  it("treats invalid indexed_at values as missing dates", () => {
+    const old = makeRepo("old", "repo", "", "2024-01-01T00:00:00+00:00");
+    const invalid = makeRepo("bad", "repo", "", "not-a-date");
+    const recent = makeRepo("recent", "repo", "", "2024-02-01T00:00:00+00:00");
+
+    expect(sortRepositoriesByIndexedAt([old, invalid, recent])).toEqual([
+      recent,
+      old,
+      invalid,
+    ]);
+  });
+});
+
+describe("filterRepositoriesForQuery", () => {
+  it("keeps the recent repository list when query looks like a repo URL", () => {
+    const recent = makeRepo(
+      "recent",
+      "repo",
+      "",
+      "2024-02-01T00:00:00+00:00",
+    );
+    const old = makeRepo("old", "repo", "", "2024-01-01T00:00:00+00:00");
+
+    expect(
+      filterRepositoriesForQuery("https://github.com/unknown/project", [
+        old,
+        recent,
+      ]),
+    ).toEqual([recent, old]);
+  });
+
+  it("uses fuzzy filtering for non-url search text", () => {
+    const requests = makeRepo("psf", "requests", "", "2024-01-01T00:00:00+00:00");
+    const django = makeRepo("django", "django", "", "2024-02-01T00:00:00+00:00");
+
+    expect(filterRepositoriesForQuery("psf", [requests, django])).toEqual([
+      requests,
+    ]);
   });
 });

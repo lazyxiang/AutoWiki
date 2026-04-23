@@ -33,7 +33,7 @@ import faiss
 import numpy as np
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
+from worker.utils.retry import OnRetryCallback
 
 _DOC_EXTENSIONS = frozenset({".md", ".rst", ".txt", ".adoc"})
 
@@ -613,8 +613,8 @@ async def build_rag_index(
             provided, entity-aware chunking is used for files that have
             entities, yielding chunks tagged with ``entity`` and
             ``entity_type`` keys.
-        on_retry: Optional callback invoked each time ``async_retry`` retries
-            an embedding call (useful for progress reporting).
+        on_retry: Optional callback forwarded to the embedding provider retry
+            layer (useful for progress reporting).
 
     Returns:
         None: This function has a side-effect only — it populates and saves
@@ -642,11 +642,9 @@ async def build_rag_index(
             continue
 
         texts = [c["text"] for c in chunk_data]
-        vectors = await async_retry(
-            embedding_provider.embed_batch,
+        vectors = await embedding_provider.embed_batch(
             texts,
             is_code=is_code,
-            transient_exceptions=TRANSIENT_EXCEPTIONS,
             on_retry=on_retry,
         )
 

@@ -27,6 +27,8 @@ const EDGE_LABEL_RE = /(\|)([^"|][^|]*?)(\|)/g;
  * plain undirected lines are left untouched.
  */
 const UNDIRECTED_EDGE_RE = /(?<![->])--\|/g;
+const CLASS_INHERITANCE_FLOWCHART_RE =
+  /^(\s*)([A-Za-z_][\w~$-]*)\s+-->\|>\s+([A-Za-z_][\w~$-]*)(\s*:\s*.*)?$/;
 
 const COMPOUND_PAIRS: Record<string, string> = { "(": ")", "[": "]", "{": "}" };
 
@@ -69,12 +71,32 @@ function edgeReplacer(_match: string, open: string, label: string, close: string
   return _match;
 }
 
+function diagramType(lines: string[]): string {
+  for (const line of lines) {
+    const first = line.trim().toLowerCase();
+    if (!first) continue;
+    if (first.startsWith("classdiagram")) return "classdiagram";
+    return "";
+  }
+  return "";
+}
+
+function repairClassDiagramRelation(line: string, type: string): string {
+  if (type !== "classdiagram") return line;
+  const match = CLASS_INHERITANCE_FLOWCHART_RE.exec(line);
+  if (!match) return line;
+  const [, indent, child, parent, label = ""] = match;
+  return `${indent}${parent} <|-- ${child}${label}`;
+}
+
 /**
  * Sanitise Mermaid diagram text by quoting node and edge labels that
  * contain special characters (parentheses, pipes, braces, angle brackets).
  */
 export function sanitizeMermaid(text: string): string {
-  return text.split("\n")
+  const lines = text.split("\n");
+  const type = diagramType(lines);
+  return lines
     .flatMap(line => {
       // Strip embedded code-fence markers, e.g. ```mermaid text| NodeScanner["..."]
       // Keep any Mermaid content that follows the | separator; drop plain ```.
@@ -85,6 +107,7 @@ export function sanitizeMermaid(text: string): string {
       return [line];
     })
     .map(line => {
+      line = repairClassDiagramRelation(line, type);
       line = line.replace(UNDIRECTED_EDGE_RE, "-->|");
       line = line.replace(EDGE_LABEL_RE, edgeReplacer);
       line = line.replace(DOUBLE_ROUND_RE, doubleBracketReplacer);

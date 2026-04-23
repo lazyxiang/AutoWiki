@@ -57,12 +57,15 @@ class WorkerSettings:
         job_timeout (int): Set to 7200s (2 hours) as a generous upper bound.
             Each pipeline stage uses ``async_retry`` for its own timeout/retry
             logic, so this acts as a safety net rather than the primary timeout.
+        max_jobs (int): Limit concurrent jobs per worker process. Keeping this
+            low avoids multiplying LLM/embedding provider quota pressure.
     """
 
     functions = [run_full_index, run_refresh_index, run_deep_research]
     on_startup = startup
     on_shutdown = shutdown
     redis_settings = None  # set from REDIS_URL env at runtime
+    max_jobs = 2
     # Set a generous timeout (2 hours) — per-call retries in async_retry handle
     # finer-grained timeouts.  ARQ requires a non-None value for max() calculation.
     job_timeout = 7200

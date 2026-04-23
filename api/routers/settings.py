@@ -13,8 +13,8 @@ from shared.config import get_config
 from shared.database import get_session
 from shared.models import PlatformToken
 
-VALID_PLATFORMS = {"github", "gitlab", "bitbucket"}
-_ORDERED_PLATFORMS = ("github", "gitlab", "bitbucket")
+VALID_PLATFORMS = {"github", "gitlab", "bitbucket", "gitee"}
+_ORDERED_PLATFORMS = ("github", "gitlab", "bitbucket", "gitee")
 
 
 def verify_settings_auth(authorization: str | None = Header(default=None)) -> None:

@@ -179,6 +179,32 @@ async def test_build_rag_index_with_entities(tmp_path):
     assert "hello" in entities_found or "goodbye" in entities_found
 
 
+async def test_build_rag_index_uses_provider_embedding_retry(tmp_path):
+    src = tmp_path / "hello.py"
+    src.write_text("def hello():\n    return 'world'\n")
+
+    store = FAISSStore(
+        dimension=4,
+        index_path=tmp_path / "rag.index",
+        meta_path=tmp_path / "rag.meta.pkl",
+    )
+    mock_embed = AsyncMock()
+    mock_embed.embed_batch = AsyncMock(
+        side_effect=lambda texts, **kwargs: [
+            np.array([1, 0, 0, 0], dtype=np.float32) for _ in texts
+        ]
+    )
+
+    async def on_retry(attempt, max_retries, wait, exc):
+        pass
+
+    await build_rag_index([src], tmp_path, store, mock_embed, on_retry=on_retry)
+
+    mock_embed.embed_batch.assert_awaited_once()
+    assert mock_embed.embed_batch.await_args.kwargs["on_retry"] is on_retry
+    assert "max_retries" not in mock_embed.embed_batch.await_args.kwargs
+
+
 def _make_store_with_docs_and_code(tmp_path):
     """Create a store with 3 code chunks and 2 doc chunks."""
     store = FAISSStore(

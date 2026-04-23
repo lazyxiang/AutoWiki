@@ -1,4 +1,5 @@
 import os
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 
@@ -45,6 +46,49 @@ async def test_list_repos_after_index(client):
     assert len(repos) == 1
     assert repos[0]["owner"] == "psf"
     assert repos[0]["platform"] == "github"
+
+
+async def test_list_repos_orders_by_indexed_at_desc_with_nulls_last(client):
+    from shared.config import get_config
+    from shared.database import get_session
+    from shared.models import Repository
+
+    async with get_session(str(get_config().database_path)) as s:
+        s.add_all(
+            [
+                Repository(
+                    id="old",
+                    owner="old",
+                    name="repo",
+                    status="ready",
+                    indexed_at=datetime(2024, 1, 1, tzinfo=UTC),
+                ),
+                Repository(
+                    id="missing",
+                    owner="missing",
+                    name="repo",
+                    status="pending",
+                    indexed_at=None,
+                ),
+                Repository(
+                    id="recent",
+                    owner="recent",
+                    name="repo",
+                    status="ready",
+                    indexed_at=datetime(2024, 2, 1, tzinfo=UTC),
+                ),
+            ]
+        )
+        await s.commit()
+
+    resp = await client.get("/api/repos")
+
+    assert resp.status_code == 200
+    assert [repo["id"] for repo in resp.json()["repos"]] == [
+        "recent",
+        "old",
+        "missing",
+    ]
 
 
 async def test_refresh_repo_returns_job(client):
@@ -109,6 +153,56 @@ async def test_post_repos_bitbucket_url(client):
         repo = await s.get(Repository, repo_id)
         assert repo is not None
         assert repo.platform == "bitbucket"
+
+
+async def test_post_repos_gitee_url(client):
+    from shared.config import get_config
+    from shared.database import get_session
+    from shared.models import Repository
+
+    with patch("api.routers.repos.enqueue_full_index", new_callable=AsyncMock):
+        resp = await client.post(
+            "/api/repos", json={"url": "https://gitee.com/owner/repo"}
+        )
+    assert resp.status_code == 202
+    repo_id = resp.json()["repo_id"]
+
+    async with get_session(str(get_config().database_path)) as s:
+        repo = await s.get(Repository, repo_id)
+        assert repo is not None
+        assert repo.platform == "gitee"
+
+
+async def test_post_repos_custom_gitlab_domain_url(client):
+    from shared.config import get_config
+    from shared.database import get_session
+    from shared.models import Repository
+
+    with patch("api.routers.repos.enqueue_full_index", new_callable=AsyncMock):
+        resp = await client.post(
+            "/api/repos",
+            json={"url": "gitlab+https://gitlab.internal.example.com/group/repo"},
+        )
+    assert resp.status_code == 202
+    repo_id = resp.json()["repo_id"]
+
+    async with get_session(str(get_config().database_path)) as s:
+        repo = await s.get(Repository, repo_id)
+        assert repo is not None
+        assert repo.platform == "gitlab:gitlab.internal.example.com"
+
+
+async def test_post_repos_rejects_implicit_custom_gitlab_domain_url(client):
+    with patch(
+        "api.routers.repos.enqueue_full_index", new_callable=AsyncMock
+    ) as mock_enqueue:
+        resp = await client.post(
+            "/api/repos",
+            json={"url": "https://gitlab.internal.example.com/group/repo"},
+        )
+
+    assert resp.status_code == 422
+    mock_enqueue.assert_not_called()
 
 
 async def test_get_repo_includes_platform(client):
