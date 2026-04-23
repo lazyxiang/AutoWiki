@@ -1,6 +1,9 @@
 "use client";
 import { RepoCard } from "@/components/RepoCard";
-import { matchesQuery } from "@/lib/repo-search";
+import {
+  filterRepositoriesForQuery,
+  isRepositoryUrl,
+} from "@/lib/repo-search";
 import type { Repository } from "@/lib/api";
 
 interface RepoGridProps {
@@ -9,8 +12,8 @@ interface RepoGridProps {
 }
 
 export function RepoGrid({ repos, query }: RepoGridProps) {
-  const filtered = repos.filter((r) => matchesQuery(query, r));
-  const hasQuery = query.trim().length > 0;
+  const filtered = filterRepositoriesForQuery(query, repos);
+  const hasQuery = query.trim().length > 0 && !isRepositoryUrl(query);
 
   return (
     <section className="max-w-7xl mx-auto px-6 py-16">

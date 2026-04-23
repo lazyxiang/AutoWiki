@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import urllib.parse
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -13,16 +14,22 @@ from worker.platform.base import (
 
 
 class GitLabPlatform(Platform):
-    name = "gitlab"
+    def __init__(self, host: str = "gitlab.com"):
+        self.host = host.lower()
+        self.name = "gitlab" if self.host == "gitlab.com" else f"gitlab:{self.host}"
 
     def parse_url(self, url: str) -> tuple[str, str]:
-        cleaned = url.replace("https://", "").replace("http://", "").rstrip("/")
-        parts = cleaned.split("/")
-        try:
-            idx = next(i for i, p in enumerate(parts) if p.lower() == "gitlab.com")
-            segments = [p.removesuffix(".git") for p in parts[idx + 1 :]]
-        except StopIteration:
+        cleaned = url
+        for prefix in ("gitlab+https://", "gitlab+http://", "https://", "http://"):
+            if cleaned.startswith(prefix):
+                cleaned = cleaned[len(prefix) :]
+                break
+        parsed = urlsplit(f"https://{cleaned}" if "://" not in cleaned else cleaned)
+        if parsed.netloc.lower() != self.host:
             raise ValueError(f"Cannot parse GitLab URL: {url!r}")
+        segments = [
+            p.removesuffix(".git") for p in parsed.path.split("/") if p and p != "/"
+        ]
         if len(segments) < 2:
             raise ValueError(f"Cannot parse GitLab URL: {url!r}")
         name = segments[-1]
@@ -31,8 +38,8 @@ class GitLabPlatform(Platform):
 
     def authenticated_clone_url(self, owner: str, name: str, token: str | None) -> str:
         if token:
-            return f"https://oauth2:{token}@gitlab.com/{owner}/{name}.git"
-        return f"https://gitlab.com/{owner}/{name}.git"
+            return f"https://oauth2:{token}@{self.host}/{owner}/{name}.git"
+        return f"https://{self.host}/{owner}/{name}.git"
 
     async def fetch_metadata(
         self, owner: str, name: str, token: str | None
@@ -45,7 +52,7 @@ class GitLabPlatform(Platform):
         async with httpx.AsyncClient(timeout=10) as client:
             try:
                 resp = await client.get(
-                    f"https://gitlab.com/api/v4/projects/{encoded_path}",
+                    f"https://{self.host}/api/v4/projects/{encoded_path}",
                     headers=headers,
                 )
                 resp.raise_for_status()
@@ -76,7 +83,7 @@ class GitLabPlatform(Platform):
             language = ""
             try:
                 lang_resp = await client.get(
-                    f"https://gitlab.com/api/v4/projects/{encoded_path}/languages",
+                    f"https://{self.host}/api/v4/projects/{encoded_path}/languages",
                     headers=headers,
                 )
                 lang_resp.raise_for_status()

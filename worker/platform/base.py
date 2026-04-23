@@ -29,7 +29,7 @@ class UnsupportedPlatformError(Exception):
 
 
 class Platform(ABC):
-    name: str  # "github" | "gitlab" | "bitbucket"
+    name: str  # "github" | "gitlab" | "bitbucket" | "gitee" | "gitlab:<host>"
 
     @abstractmethod
     def parse_url(self, url: str) -> tuple[str, str]:

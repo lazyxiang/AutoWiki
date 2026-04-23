@@ -60,9 +60,9 @@ async def test_get_tokens_empty(client, settings_auth):
     resp = await client.get("/api/settings/tokens", headers=settings_auth)
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data) == 3
+    assert len(data) == 4
     platforms = {item["platform"] for item in data}
-    assert platforms == {"github", "gitlab", "bitbucket"}
+    assert platforms == {"github", "gitlab", "bitbucket", "gitee"}
     assert all(not item["has_token"] for item in data)
     assert all(item["masked_token"] is None for item in data)
 

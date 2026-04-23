@@ -29,8 +29,10 @@ class IndexRequest(BaseModel):
         url (str): Repository URL to index.  Accepted formats:
             ``https://github.com/owner/repo``,
             ``https://gitlab.com/group/repo``,
-            ``https://bitbucket.org/owner/repo`` (with or without ``.git``
-            suffix).
+            ``https://bitbucket.org/owner/repo``,
+            ``https://gitee.com/owner/repo`` (with or without ``.git`` suffix).
+            Self-hosted GitLab URLs are also supported when the hostname
+            contains ``gitlab`` (for example ``https://gitlab.company.com/group/repo``).
         wiki_language (str): ISO-639-1 language code for the generated wiki
             content.  Defaults to ``"en"`` (English).  Use ``"zh"`` to
             generate the wiki in Chinese (简体中文).
@@ -113,7 +115,8 @@ async def submit_repo(req: IndexRequest):
             status_code=422,
             detail=(
                 "Invalid or unsupported repository URL"
-                " (supported: github.com, gitlab.com, bitbucket.org)"
+                " (supported: github.com, gitlab.com + self-hosted gitlab domains,"
+                " bitbucket.org, gitee.com)"
             ),
         )
     repo_id = get_repo_hash(platform.name, owner, name)
@@ -222,7 +225,12 @@ async def list_repos():
     """
     cfg = get_config()
     async with get_session(str(cfg.database_path)) as s:
-        result = await s.execute(select(Repository))
+        result = await s.execute(
+            select(Repository).order_by(
+                Repository.indexed_at.is_(None),
+                Repository.indexed_at.desc(),
+            )
+        )
         repos = result.scalars().all()
     return {
         "repos": [

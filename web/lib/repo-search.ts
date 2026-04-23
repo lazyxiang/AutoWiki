@@ -1,11 +1,38 @@
 import type { Repository } from "@/lib/api";
 
 export function matchesQuery(query: string, repo: Repository): boolean {
-  if (!query.trim()) return true;
+  if (!query.trim() || isRepositoryUrl(query)) return true;
   const tokens = query.toLowerCase().split(/\s+/);
   const haystack =
     `${repo.owner} ${repo.name} ${repo.description}`.toLowerCase();
   return tokens.every((t) => haystack.includes(t));
+}
+
+export function isRepositoryUrl(query: string): boolean {
+  return parseRepoUrl(query.trim()) !== null;
+}
+
+export function sortRepositoriesByIndexedAt(
+  repos: Repository[],
+): Repository[] {
+  return [...repos].sort((a, b) => {
+    const aTime = indexedAtTime(a);
+    const bTime = indexedAtTime(b);
+
+    if (aTime === null && bTime === null) return 0;
+    if (aTime === null) return 1;
+    if (bTime === null) return -1;
+    return bTime - aTime;
+  });
+}
+
+export function filterRepositoriesForQuery(
+  query: string,
+  repos: Repository[],
+): Repository[] {
+  const sorted = sortRepositoriesByIndexedAt(repos);
+  if (isRepositoryUrl(query)) return sorted;
+  return sorted.filter((repo) => matchesQuery(query, repo));
 }
 
 export function parseRepoUrl(
@@ -31,4 +58,10 @@ export function parseRepoUrl(
   const owner = parts.slice(0, parts.length - 1).join("/");
   if (!name || !owner) return null;
   return { owner, name };
+}
+
+function indexedAtTime(repo: Repository): number | null {
+  if (!repo.indexed_at) return null;
+  const time = Date.parse(repo.indexed_at);
+  return Number.isNaN(time) ? null : time;
 }

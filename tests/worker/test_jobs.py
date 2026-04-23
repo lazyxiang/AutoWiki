@@ -1,6 +1,9 @@
 from contextlib import ExitStack
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from worker.platform.base import RepoMetadata
 
@@ -329,5 +332,201 @@ async def test_always_clears_existing_artifacts(
         async with get_session(db_path) as s:
             job = await s.get(Job, "j2")
             assert job.status == "done"
+        assert not (repo_data / ".full-index-backup-j2").exists()
+    finally:
+        await dispose_db(db_path)
+
+
+async def test_full_index_first_time_failure_deletes_repository_metadata(tmp_path):
+    """Failed first-time index removes the repo row so no homepage card appears."""
+    from shared.database import dispose_db, get_session
+    from shared.models import Job, Repository, WikiPage
+
+    db_path = await _setup_db(tmp_path)
+
+    async with get_session(db_path) as s:
+        s.add(
+            Repository(
+                id="first-fail",
+                owner="testowner",
+                name="simple-repo",
+                platform="github",
+                status="pending",
+            )
+        )
+        s.add(
+            Job(
+                id="first-job",
+                repo_id="first-fail",
+                type="full_index",
+                status="queued",
+                progress=0,
+            )
+        )
+        await s.commit()
+
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch(
+                "worker.jobs.clone_or_fetch",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("clone failed"),
+            )
+        )
+        _enter_platform_patches(stack)
+
+        from worker.jobs import run_full_index
+
+        with pytest.raises(RuntimeError, match="clone failed"):
+            await run_full_index(
+                ctx={},
+                repo_id="first-fail",
+                job_id="first-job",
+                owner="testowner",
+                name="simple-repo",
+                clone_root=Path("tests/fixtures/simple-repo"),
+            )
+
+    try:
+        async with get_session(db_path) as s:
+            assert await s.get(Repository, "first-fail") is None
+            job = await s.get(Job, "first-job")
+            assert job.status == "failed"
+
+            from sqlalchemy import select
+
+            result = await s.execute(
+                select(WikiPage).where(WikiPage.repo_id == "first-fail")
+            )
+            assert result.scalars().all() == []
+    finally:
+        await dispose_db(db_path)
+
+
+async def test_full_index_previously_indexed_failure_restores_db_and_files(
+    tmp_path, mock_embedding
+):
+    """Failed reindex restores the last successful wiki state and ready status."""
+    from shared.database import dispose_db, get_session
+    from shared.models import Job, Repository, WikiPage
+
+    mock_embedding.dimension = 1536
+    db_path = await _setup_db(tmp_path)
+    indexed_at = datetime(2026, 1, 2, tzinfo=UTC)
+
+    async with get_session(db_path) as s:
+        s.add(
+            Repository(
+                id="restore-repo",
+                owner="testowner",
+                name="simple-repo",
+                description="old description",
+                stars=7,
+                language="Python",
+                platform="github",
+                last_commit="oldsha",
+                status="ready",
+                default_branch="main",
+                is_private=False,
+                indexed_at=indexed_at,
+                wiki_path=str(tmp_path / "repos" / "restore-repo" / "wiki"),
+                wiki_structure='{"pages":[{"title":"Old"}]}',
+            )
+        )
+        s.add(
+            Job(
+                id="restore-job",
+                repo_id="restore-repo",
+                type="full_index",
+                status="queued",
+                progress=0,
+            )
+        )
+        s.add(
+            WikiPage(
+                id="old-page-id",
+                repo_id="restore-repo",
+                slug="old-page",
+                title="Old Page",
+                content="old db content",
+                description="old page description",
+                page_order=3,
+                parent_slug="parent",
+            )
+        )
+        await s.commit()
+
+    repo_data = tmp_path / "repos" / "restore-repo"
+    wiki_dir = repo_data / "wiki"
+    ast_dir = repo_data / "ast"
+    wiki_dir.mkdir(parents=True)
+    ast_dir.mkdir()
+    (wiki_dir / "old-page.md").write_text("old file content")
+    (wiki_dir / "wiki.json").write_text('{"pages":[{"title":"Old"}]}')
+    (repo_data / "faiss.index").write_bytes(b"old-index")
+    (repo_data / "faiss.meta.pkl").write_bytes(b"old-meta")
+    (ast_dir / "wiki_plan.json").write_text('{"pages":[{"title":"Old"}]}')
+
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch(
+                "worker.jobs.clone_or_fetch",
+                new_callable=AsyncMock,
+                return_value=("newsha", "main"),
+            )
+        )
+        _enter_platform_patches(stack)
+        stack.enter_context(
+            patch("worker.jobs.make_embedding_provider", return_value=mock_embedding)
+        )
+        stack.enter_context(
+            patch(
+                "worker.jobs.analyze_all_files",
+                side_effect=RuntimeError("analysis failed"),
+            )
+        )
+
+        from worker.jobs import run_full_index
+
+        with pytest.raises(RuntimeError, match="analysis failed"):
+            await run_full_index(
+                ctx={},
+                repo_id="restore-repo",
+                job_id="restore-job",
+                owner="testowner",
+                name="simple-repo",
+                clone_root=Path("tests/fixtures/simple-repo"),
+            )
+
+    try:
+        async with get_session(db_path) as s:
+            repo = await s.get(Repository, "restore-repo")
+            assert repo.status == "ready"
+            assert repo.description == "old description"
+            assert repo.stars == 7
+            assert repo.language == "Python"
+            assert repo.last_commit == "oldsha"
+            assert repo.indexed_at == indexed_at.replace(tzinfo=None)
+            assert repo.wiki_structure == '{"pages":[{"title":"Old"}]}'
+
+            from sqlalchemy import select
+
+            result = await s.execute(
+                select(WikiPage).where(WikiPage.repo_id == "restore-repo")
+            )
+            pages = result.scalars().all()
+            assert len(pages) == 1
+            assert pages[0].id == "old-page-id"
+            assert pages[0].content == "old db content"
+
+            job = await s.get(Job, "restore-job")
+            assert job.status == "failed"
+
+        assert (wiki_dir / "old-page.md").read_text() == "old file content"
+        assert (repo_data / "faiss.index").read_bytes() == b"old-index"
+        assert (repo_data / "faiss.meta.pkl").read_bytes() == b"old-meta"
+        assert (ast_dir / "wiki_plan.json").read_text() == (
+            '{"pages":[{"title":"Old"}]}'
+        )
     finally:
         await dispose_db(db_path)

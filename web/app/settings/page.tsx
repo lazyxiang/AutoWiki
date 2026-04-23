@@ -8,6 +8,7 @@ const PLATFORMS = [
   { id: "github", label: "GitHub" },
   { id: "gitlab", label: "GitLab" },
   { id: "bitbucket", label: "Bitbucket" },
+  { id: "gitee", label: "Gitee" },
 ];
 
 export default async function SettingsPage() {

@@ -20,7 +20,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import shutil
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -224,6 +226,250 @@ async def _load_faiss_for_research(repo_data_dir: Path, embedding) -> FAISSStore
     return store
 
 
+@dataclass
+class _FullIndexBackup:
+    """Snapshot of the last successful wiki state before a destructive reindex."""
+
+    backup_dir: Path
+    repo_values: dict
+    wiki_pages: list[dict]
+    had_wiki_dir: bool
+    snapshot_faiss: bool
+    snapshot_plan: bool
+
+
+_REPOSITORY_BACKUP_FIELDS = (
+    "owner",
+    "name",
+    "description",
+    "stars",
+    "language",
+    "wiki_language",
+    "platform",
+    "last_commit",
+    "status",
+    "default_branch",
+    "is_private",
+    "indexed_at",
+    "wiki_path",
+    "wiki_structure",
+)
+
+_WIKI_PAGE_BACKUP_FIELDS = (
+    "id",
+    "repo_id",
+    "slug",
+    "title",
+    "content",
+    "description",
+    "page_order",
+    "parent_slug",
+    "updated_at",
+)
+
+
+def _remove_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    elif path.exists() or path.is_symlink():
+        path.unlink()
+
+
+def _copy_file_if_exists(src: Path, dest: Path) -> None:
+    if src.exists():
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
+
+
+def _restore_file_from_backup(src: Path, dest: Path, should_restore: bool) -> None:
+    _remove_path(dest)
+    if should_restore and src.exists():
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
+
+
+def _wiki_dir_has_content(repo_data_dir: Path) -> bool:
+    wiki_dir = repo_data_dir / "wiki"
+    return wiki_dir.is_dir() and any(wiki_dir.iterdir())
+
+
+async def _repo_has_previous_success(
+    db_path: str, repo_id: str, repo_data_dir: Path
+) -> bool:
+    """Return whether a repo has a prior successful wiki state to protect."""
+    async with get_session(db_path) as s:
+        repo = await s.get(Repository, repo_id)
+        if repo is None:
+            return False
+        result = await s.execute(
+            sa_select(WikiPage.id).where(WikiPage.repo_id == repo_id).limit(1)
+        )
+        has_page_rows = result.scalar_one_or_none() is not None
+        return bool(
+            repo.indexed_at
+            or repo.wiki_path
+            or repo.wiki_structure
+            or has_page_rows
+            or _wiki_dir_has_content(repo_data_dir)
+        )
+
+
+async def _snapshot_full_index_state(
+    db_path: str,
+    repo_id: str,
+    repo_data_dir: Path,
+    job_id: str,
+    *,
+    reuse_index: bool,
+    reuse_plan: bool,
+) -> _FullIndexBackup:
+    """Snapshot DB rows and mutable artifacts before full-index cleanup."""
+    backup_dir = repo_data_dir / f".full-index-backup-{job_id}"
+
+    def _snapshot_files() -> tuple[bool, bool, bool]:
+        _remove_path(backup_dir)
+        backup_dir.mkdir(parents=True, exist_ok=True)
+
+        wiki_dir = repo_data_dir / "wiki"
+        had_wiki_dir = wiki_dir.exists()
+        if had_wiki_dir:
+            shutil.copytree(wiki_dir, backup_dir / "wiki", symlinks=True)
+
+        snapshot_faiss = not reuse_index
+        if snapshot_faiss:
+            _copy_file_if_exists(
+                repo_data_dir / "faiss.index", backup_dir / "faiss.index"
+            )
+            _copy_file_if_exists(
+                repo_data_dir / "faiss.meta.pkl", backup_dir / "faiss.meta.pkl"
+            )
+
+        snapshot_plan = not reuse_plan
+        if snapshot_plan:
+            _copy_file_if_exists(
+                repo_data_dir / "ast" / "wiki_plan.json",
+                backup_dir / "ast" / "wiki_plan.json",
+            )
+        return had_wiki_dir, snapshot_faiss, snapshot_plan
+
+    loop = asyncio.get_running_loop()
+    had_wiki_dir, snapshot_faiss, snapshot_plan = await loop.run_in_executor(
+        None, _snapshot_files
+    )
+
+    async with get_session(db_path) as s:
+        repo = await s.get(Repository, repo_id)
+        if repo is None:
+            raise ValueError(f"Repository not found for backup: {repo_id}")
+        repo_values = {
+            field: getattr(repo, field) for field in _REPOSITORY_BACKUP_FIELDS
+        }
+        result = await s.execute(
+            sa_select(WikiPage)
+            .where(WikiPage.repo_id == repo_id)
+            .order_by(WikiPage.page_order)
+        )
+        wiki_pages = [
+            {field: getattr(page, field) for field in _WIKI_PAGE_BACKUP_FIELDS}
+            for page in result.scalars().all()
+        ]
+
+    return _FullIndexBackup(
+        backup_dir=backup_dir,
+        repo_values=repo_values,
+        wiki_pages=wiki_pages,
+        had_wiki_dir=had_wiki_dir,
+        snapshot_faiss=snapshot_faiss,
+        snapshot_plan=snapshot_plan,
+    )
+
+
+async def _restore_full_index_state(
+    db_path: str, repo_id: str, backup: _FullIndexBackup
+) -> None:
+    """Restore a previously indexed repo after a failed destructive reindex."""
+
+    def _restore_files() -> None:
+        wiki_dir = repo_data_dir / "wiki"
+        _remove_path(wiki_dir)
+        if backup.had_wiki_dir:
+            shutil.copytree(backup.backup_dir / "wiki", wiki_dir, symlinks=True)
+
+        if backup.snapshot_faiss:
+            _restore_file_from_backup(
+                backup.backup_dir / "faiss.index",
+                repo_data_dir / "faiss.index",
+                (backup.backup_dir / "faiss.index").exists(),
+            )
+            _restore_file_from_backup(
+                backup.backup_dir / "faiss.meta.pkl",
+                repo_data_dir / "faiss.meta.pkl",
+                (backup.backup_dir / "faiss.meta.pkl").exists(),
+            )
+
+        if backup.snapshot_plan:
+            _restore_file_from_backup(
+                backup.backup_dir / "ast" / "wiki_plan.json",
+                repo_data_dir / "ast" / "wiki_plan.json",
+                (backup.backup_dir / "ast" / "wiki_plan.json").exists(),
+            )
+
+    repo_data_dir = backup.backup_dir.parent
+    await asyncio.get_running_loop().run_in_executor(None, _restore_files)
+
+    async with get_session(db_path) as s:
+        repo = await s.get(Repository, repo_id)
+        if repo is not None:
+            for field, value in backup.repo_values.items():
+                setattr(repo, field, value)
+            repo.status = "ready"
+
+        await s.execute(sa_delete(WikiPage).where(WikiPage.repo_id == repo_id))
+        for page_values in backup.wiki_pages:
+            s.add(WikiPage(**page_values))
+        await s.commit()
+
+
+async def _cleanup_first_time_index_failure(
+    db_path: str,
+    repo_id: str,
+    repo_data_dir: Path,
+    *,
+    reuse_index: bool,
+    reuse_plan: bool,
+) -> None:
+    """Remove first-time failed repo metadata and generated wiki artifacts."""
+
+    def _cleanup_files() -> None:
+        _remove_path(repo_data_dir / "wiki")
+        if not reuse_index:
+            _remove_path(repo_data_dir / "faiss.index")
+            _remove_path(repo_data_dir / "faiss.meta.pkl")
+        if not reuse_plan:
+            _remove_path(repo_data_dir / "ast" / "wiki_plan.json")
+
+    await asyncio.get_running_loop().run_in_executor(None, _cleanup_files)
+    async with get_session(db_path) as s:
+        await s.execute(sa_delete(WikiPage).where(WikiPage.repo_id == repo_id))
+        await s.execute(sa_delete(Repository).where(Repository.id == repo_id))
+        await s.commit()
+
+
+async def _discard_full_index_backup(backup: _FullIndexBackup | None) -> None:
+    if backup is None:
+        return
+
+    def _discard() -> None:
+        _remove_path(backup.backup_dir)
+
+    try:
+        await asyncio.get_running_loop().run_in_executor(None, _discard)
+    except Exception:
+        logger.warning(
+            "Failed to remove full-index backup at %s", backup.backup_dir, exc_info=True
+        )
+
+
 # ---------------------------------------------------------------------------
 # Job entry points
 # ---------------------------------------------------------------------------
@@ -242,10 +488,10 @@ async def run_full_index(
 ) -> None:
     """Run the complete 6-stage wiki generation pipeline for a repository.
 
-    This is the primary ARQ job function.  It clears all existing artifacts
-    at the start of each run to ensure a clean, reproducible output, then
-    executes each pipeline stage in sequence, writing progress to the DB
-    after each one.
+    This is the primary ARQ job function.  For repositories with an existing
+    successful wiki, it snapshots the artifacts that a full index may mutate,
+    clears those artifacts to ensure a clean output, then executes each
+    pipeline stage in sequence while writing progress to the DB.
 
     Artifact clearing (before Stage 1):
         Removes all Markdown files in ``wiki/`` and ``wiki_plan.json``.
@@ -293,17 +539,34 @@ async def run_full_index(
 
     Raises:
         Exception: Any unhandled exception from a pipeline stage sets the
-            job status to ``"failed"`` and the repository status to
-            ``"error"`` in SQLite before re-raising.
+            job status to ``"failed"`` before re-raising.  First-time failed
+            repos are removed from repository metadata; previously indexed
+            repos are restored to their prior wiki state and ``"ready"`` status.
     """
     cfg = get_config()
     db_path = str(cfg.database_path)
     data_dir = cfg.data_dir
     await init_db(db_path)
     _on_retry = _make_on_retry(db_path, job_id)
+    repo_data_dir = data_dir / "repos" / repo_id
+    repo_data_dir.mkdir(parents=True, exist_ok=True)
+    full_index_backup: _FullIndexBackup | None = None
+    previously_indexed = False
 
     try:
         logger.info("Job starting for %s/%s", owner, name)
+        previously_indexed = await _repo_has_previous_success(
+            db_path, repo_id, repo_data_dir
+        )
+        if previously_indexed:
+            full_index_backup = await _snapshot_full_index_state(
+                db_path,
+                repo_id,
+                repo_data_dir,
+                job_id,
+                reuse_index=reuse_index,
+                reuse_plan=reuse_plan,
+            )
         await _update_job(
             db_path,
             job_id,
@@ -314,9 +577,6 @@ async def run_full_index(
         await _update_repo(db_path, repo_id, status="indexing")
 
         # Clear all artifacts from any previous run before starting fresh.
-        repo_data_dir = data_dir / "repos" / repo_id
-        repo_data_dir.mkdir(parents=True, exist_ok=True)
-
         def _clear_repo_artifacts() -> None:
             """Remove generated wiki files and optionally the search index.
 
@@ -334,8 +594,7 @@ async def run_full_index(
                         p.unlink()
             if wiki_dir.exists():
                 for f in wiki_dir.iterdir():
-                    if f.is_file():
-                        f.unlink()
+                    _remove_path(f)
             if not reuse_plan:
                 wiki_plan = ast_dir / "wiki_plan.json"
                 if wiki_plan.exists():
@@ -471,7 +730,9 @@ async def run_full_index(
         # Stage 5: Wiki Planner — LLM generates logical page tree (WikiPlan)
         logger.info("Stage 5: Wiki Planner starting")
         wiki_plan_path = ast_dir / "wiki_plan.json"
+        reused_existing_plan = False
         if reuse_plan and wiki_plan_path.exists():
+            reused_existing_plan = True
             logger.info(
                 "Reusing existing wiki plan at %s (skipping LLM planning)",
                 wiki_plan_path,
@@ -525,11 +786,11 @@ async def run_full_index(
             "Wiki plan generated: %d pages planned for %s", len(plan.pages), name
         )
         wiki_dir.mkdir(exist_ok=True)
-        # Write both the internal plan (with file assignments) and the user-facing JSON
-        await _write_text_async(
-            ast_dir / "wiki_plan.json",
-            json.dumps(plan.to_internal_json(), indent=2, ensure_ascii=False),
-        )
+        if not reused_existing_plan:
+            await _write_text_async(
+                ast_dir / "wiki_plan.json",
+                json.dumps(plan.to_internal_json(), indent=2, ensure_ascii=False),
+            )
         await _write_text_async(
             wiki_dir / "wiki.json",
             json.dumps(plan.to_wiki_json(), indent=2, ensure_ascii=False),
@@ -548,6 +809,7 @@ async def run_full_index(
         levels = compute_generation_order(plan)
         generated: dict[str, PageResult] = {}
         page_order_counter = 0
+        pages_done = 0
 
         for depth_idx, level in enumerate(levels):
             specs_with_children: list[tuple[WikiPageSpec, list[PageResult] | None]] = []
@@ -597,16 +859,18 @@ async def run_full_index(
                     await s.commit()
                 await _write_text_async(wiki_dir / f"{result.slug}.md", result.content)
                 page_order_counter += 1
-
-            pages_done = sum(len(lvl) for lvl in levels[: depth_idx + 1])
-            progress = 70 + int(27 * pages_done / total) if total > 0 else 97
-            level_info = f"{depth_idx + 1}/{len(levels)}"
-            await _update_job(
-                db_path,
-                job_id,
-                progress=progress,
-                status_description=f"Generating pages (level {level_info})...",
-            )
+                pages_done += 1
+                progress = 70 + int(27 * pages_done / total) if total > 0 else 97
+                level_info = f"{depth_idx + 1}/{len(levels)}"
+                await _update_job(
+                    db_path,
+                    job_id,
+                    progress=progress,
+                    status_description=(
+                        f'Generating page "{result.title}" '
+                        f"({pages_done}/{total}) [level {level_info}]"
+                    ),
+                )
 
         structure_data = plan.to_api_structure()
         now = datetime.now(UTC)
@@ -628,6 +892,7 @@ async def run_full_index(
             wiki_path=str(wiki_dir),
             wiki_structure=json.dumps(structure_data, ensure_ascii=False),
         )
+        await _discard_full_index_backup(full_index_backup)
 
     except Exception as e:
         now = datetime.now(UTC)
@@ -640,7 +905,19 @@ async def run_full_index(
             finished_at=now,
             status_description=f"Error: {str(e)}",
         )
-        await _update_repo(db_path, repo_id, status="error")
+        if full_index_backup is not None:
+            await _restore_full_index_state(db_path, repo_id, full_index_backup)
+            await _discard_full_index_backup(full_index_backup)
+        elif previously_indexed:
+            await _update_repo(db_path, repo_id, status="ready")
+        else:
+            await _cleanup_first_time_index_failure(
+                db_path,
+                repo_id,
+                repo_data_dir,
+                reuse_index=reuse_index,
+                reuse_plan=reuse_plan,
+            )
         raise
 
 
@@ -1103,6 +1380,8 @@ async def run_refresh_index(
         levels = compute_generation_order(plan)
         generated: dict[str, PageResult] = {}
         refresh_order_counter = 0
+        pages_done = 0
+        total_pages = len(plan.pages)
 
         for depth_idx, level in enumerate(levels):
             specs_with_children: list[tuple[WikiPageSpec, list[PageResult] | None]] = []
@@ -1162,15 +1441,20 @@ async def run_refresh_index(
                     await s.commit()
                 refresh_order_counter += 1
                 await _write_text_async(wiki_dir / f"{result.slug}.md", result.content)
-
-            progress = 65 + int(30 * (depth_idx + 1) / len(levels)) if levels else 95
-            level_info = f"{depth_idx + 1}/{len(levels)}"
-            await _update_job(
-                db_path,
-                job_id,
-                progress=progress,
-                status_description=f"Regenerating pages (level {level_info})...",
-            )
+                pages_done += 1
+                progress = (
+                    65 + int(30 * pages_done / total_pages) if total_pages > 0 else 95
+                )
+                level_info = f"{depth_idx + 1}/{len(levels)}"
+                await _update_job(
+                    db_path,
+                    job_id,
+                    progress=progress,
+                    status_description=(
+                        f'Regenerating page "{result.title}" '
+                        f"({pages_done}/{total_pages}) [level {level_info}]"
+                    ),
+                )
 
         # Build a merged plan reflecting the full updated wiki structure.
         # Unchanged pages are identified by title, not slug, so a retitled page

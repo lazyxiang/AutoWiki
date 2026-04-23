@@ -69,7 +69,7 @@ export function IndexForm({
         <div className="flex items-center gap-2 p-2 bg-white dark:bg-zinc-900 rounded-2xl border border-border shadow-sm focus-within:ring-2 focus-within:ring-primary/20 focus-within:border-primary transition-all duration-200">
           <Input
             type="text"
-            placeholder="Search or paste a repo URL (github.com, gitlab.com, bitbucket.org)"
+            placeholder="Search or paste a repo URL (github.com, gitlab.com/self-hosted, bitbucket.org, gitee.com)"
             value={url}
             onChange={(e) => handleChange(e.target.value)}
             disabled={loading}
