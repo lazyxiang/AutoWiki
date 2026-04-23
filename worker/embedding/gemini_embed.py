@@ -4,7 +4,11 @@ import asyncio
 
 import numpy as np
 
-from worker.embedding.base import EmbeddingProvider
+from worker.embedding.base import (
+    EmbeddingProvider,
+    iter_embedding_batches,
+    retry_embedding_call,
+)
 
 try:
     from google import genai
@@ -33,7 +37,6 @@ class GeminiEmbedding(EmbeddingProvider):
         )
         self._model = model
         self._dim = 768
-        self._max_batch_size = 50
 
     @property
     def dimension(self) -> int:
@@ -43,15 +46,7 @@ class GeminiEmbedding(EmbeddingProvider):
         # Map generic is_code to Gemini-specific task types
         task_type = "CODE_RETRIEVAL_QUERY" if is_code else "RETRIEVAL_DOCUMENT"
 
-        try:
-            res = await asyncio.to_thread(
-                self._client.models.embed_content,
-                model=self._model,
-                contents=text,
-                config={"task_type": task_type, "output_dimensionality": self._dim},
-            )
-        except Exception as exc:
-            raise _unwrap_genai_error(exc) from exc
+        res = await retry_embedding_call(self._embed_content, text, task_type)
         vec = np.array(res.embeddings[0].values, dtype=np.float32)
         return vec
 
@@ -66,20 +61,22 @@ class GeminiEmbedding(EmbeddingProvider):
 
         results = []
         # Keep requests below Gemini's hard limit to reduce quota spike risk.
-        for i in range(0, len(texts), self._max_batch_size):
-            batch = texts[i : i + self._max_batch_size]
-            try:
-                res = await asyncio.to_thread(
-                    self._client.models.embed_content,
-                    model=self._model,
-                    contents=batch,
-                    config={"task_type": task_type, "output_dimensionality": self._dim},
-                )
-            except Exception as exc:
-                raise _unwrap_genai_error(exc) from exc
+        for batch in iter_embedding_batches(texts):
+            res = await retry_embedding_call(self._embed_content, batch, task_type)
             batch_vectors = [
                 np.array(e.values, dtype=np.float32) for e in res.embeddings
             ]
             results.extend(batch_vectors)
 
         return results
+
+    async def _embed_content(self, contents: str | list[str], task_type: str):
+        try:
+            return await asyncio.to_thread(
+                self._client.models.embed_content,
+                model=self._model,
+                contents=contents,
+                config={"task_type": task_type, "output_dimensionality": self._dim},
+            )
+        except Exception as exc:
+            raise _unwrap_genai_error(exc) from exc

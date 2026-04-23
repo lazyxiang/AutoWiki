@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import numpy as np
 
@@ -177,6 +177,32 @@ async def test_build_rag_index_with_entities(tmp_path):
     # Entity-aware chunks should have entity metadata
     entities_found = [r.get("entity") for r in results if r.get("entity")]
     assert "hello" in entities_found or "goodbye" in entities_found
+
+
+async def test_build_rag_index_uses_conservative_embedding_retry(tmp_path):
+    src = tmp_path / "hello.py"
+    src.write_text("def hello():\n    return 'world'\n")
+
+    store = FAISSStore(
+        dimension=4,
+        index_path=tmp_path / "rag.index",
+        meta_path=tmp_path / "rag.meta.pkl",
+    )
+    mock_embed = AsyncMock()
+
+    async def fake_retry(fn, texts, **kwargs):
+        return [np.array([1, 0, 0, 0], dtype=np.float32) for _ in texts]
+
+    with patch(
+        "worker.pipeline.rag_indexer.async_retry", side_effect=fake_retry
+    ) as retry:
+        await build_rag_index([src], tmp_path, store, mock_embed)
+
+    assert retry.await_count == 1
+    assert retry.await_args.kwargs["max_retries"] == 6
+    assert retry.await_args.kwargs["initial_delay"] == 10.0
+    assert retry.await_args.kwargs["backoff_factor"] == 2.0
+    assert retry.await_args.kwargs["max_delay"] == 120.0
 
 
 def _make_store_with_docs_and_code(tmp_path):

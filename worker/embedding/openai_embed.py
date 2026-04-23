@@ -3,7 +3,11 @@ from __future__ import annotations
 import numpy as np
 from openai import AsyncOpenAI
 
-from worker.embedding.base import EmbeddingProvider
+from worker.embedding.base import (
+    EmbeddingProvider,
+    iter_embedding_batches,
+    retry_embedding_call,
+)
 
 
 class OpenAIEmbedding(EmbeddingProvider):
@@ -17,7 +21,9 @@ class OpenAIEmbedding(EmbeddingProvider):
         return self._dim
 
     async def embed(self, text: str, is_code: bool = False) -> np.ndarray:
-        response = await self._client.embeddings.create(input=[text], model=self._model)
+        response = await retry_embedding_call(
+            self._client.embeddings.create, input=[text], model=self._model
+        )
         return np.array(response.data[0].embedding, dtype=np.float32)
 
     async def embed_batch(
@@ -25,5 +31,12 @@ class OpenAIEmbedding(EmbeddingProvider):
     ) -> list[np.ndarray]:
         if not texts:
             return []
-        response = await self._client.embeddings.create(input=texts, model=self._model)
-        return [np.array(d.embedding, dtype=np.float32) for d in response.data]
+        results = []
+        for batch in iter_embedding_batches(texts):
+            response = await retry_embedding_call(
+                self._client.embeddings.create, input=batch, model=self._model
+            )
+            results.extend(
+                np.array(d.embedding, dtype=np.float32) for d in response.data
+            )
+        return results

@@ -33,6 +33,12 @@ import faiss
 import numpy as np
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+from worker.embedding.base import (
+    EMBEDDING_BACKOFF_FACTOR,
+    EMBEDDING_INITIAL_DELAY,
+    EMBEDDING_MAX_DELAY,
+    EMBEDDING_MAX_RETRIES,
+)
 from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
 
 _DOC_EXTENSIONS = frozenset({".md", ".rst", ".txt", ".adoc"})
@@ -646,6 +652,10 @@ async def build_rag_index(
             embedding_provider.embed_batch,
             texts,
             is_code=is_code,
+            max_retries=EMBEDDING_MAX_RETRIES,
+            initial_delay=EMBEDDING_INITIAL_DELAY,
+            backoff_factor=EMBEDDING_BACKOFF_FACTOR,
+            max_delay=EMBEDDING_MAX_DELAY,
             transient_exceptions=TRANSIENT_EXCEPTIONS,
             on_retry=on_retry,
         )

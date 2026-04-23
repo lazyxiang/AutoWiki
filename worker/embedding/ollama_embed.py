@@ -3,7 +3,7 @@ from __future__ import annotations
 import httpx
 import numpy as np
 
-from worker.embedding.base import EmbeddingProvider
+from worker.embedding.base import EmbeddingProvider, retry_embedding_call
 
 
 class OllamaEmbedding(EmbeddingProvider):
@@ -30,4 +30,7 @@ class OllamaEmbedding(EmbeddingProvider):
     async def embed_batch(
         self, texts: list[str], is_code: bool = False
     ) -> list[np.ndarray]:
-        return [await self.embed(t, is_code=is_code) for t in texts]
+        return [
+            await retry_embedding_call(self.embed, text, is_code=is_code)
+            for text in texts
+        ]
