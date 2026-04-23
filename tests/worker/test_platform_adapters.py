@@ -62,6 +62,13 @@ def test_github_parse_url_git_suffix():
     assert _gh.parse_url("github.com/psf/requests.git") == ("psf", "requests")
 
 
+def test_github_parse_url_git_prefixed_https_with_query():
+    assert _gh.parse_url("git+https://github.com/psf/requests.git?tab=readme") == (
+        "psf",
+        "requests",
+    )
+
+
 def test_github_parse_url_invalid():
     with pytest.raises(ValueError):
         _gh.parse_url("https://github.com/only-one-segment")

@@ -158,3 +158,26 @@ async def test_init_db_applies_private_file_permissions(tmp_path):
         assert oct(db_path.stat().st_mode & 0o777) == "0o600"
     finally:
         await dispose_db(db)
+
+
+async def test_init_db_does_not_chmod_cwd_for_relative_database(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from shared.database import dispose_db, init_db
+
+    monkeypatch.chdir(tmp_path)
+    chmod_paths: list[Path] = []
+    original_chmod = Path.chmod
+
+    def record_chmod(self: Path, mode: int):
+        chmod_paths.append(self)
+        return original_chmod(self, mode)
+
+    monkeypatch.setattr(Path, "chmod", record_chmod)
+
+    db = "autowiki.db"
+    await init_db(db)
+    try:
+        assert Path(".") not in chmod_paths
+    finally:
+        await dispose_db(db)

@@ -17,7 +17,8 @@ async def init_db(database_path: str) -> None:
     path = Path(database_path)
     if database_path != ":memory:":
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.parent.chmod(0o700)
+        if path.parent.resolve() != Path.cwd().resolve():
+            path.parent.chmod(0o700)
     url = f"sqlite+aiosqlite:///{database_path}"
     engine = create_async_engine(url, echo=False)
     _engines[database_path] = engine

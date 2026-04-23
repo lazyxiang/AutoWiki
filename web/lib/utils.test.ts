@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { repoId, repoPath } from "./utils";
+import { describe, expect, it, vi } from "vitest";
+import { repoId } from "./repo-id.server";
+import { repoPath } from "./utils";
+
+vi.mock("server-only", () => ({}));
 
 describe("repoId", () => {
   it("includes platform in the stable repository hash", () => {
@@ -10,6 +13,15 @@ describe("repoId", () => {
 
   it("defaults to GitHub for legacy routes", () => {
     expect(repoId("owner", "repo")).toEqual(repoId("owner", "repo", "github"));
+  });
+
+  it("does not treat a 16-hex owner as a repo id unless explicit", () => {
+    expect(repoId("deadbeefdeadbeef", "repo-a")).not.toEqual(
+      repoId("deadbeefdeadbeef", "repo-b"),
+    );
+    expect(
+      repoId("deadbeefdeadbeef", "repo-a", "github", { ownerIsRepoId: true }),
+    ).toEqual("deadbeefdeadbeef");
   });
 });
 

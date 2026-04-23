@@ -19,6 +19,34 @@ _PLATFORM_PATCHES = [
 ]
 
 
+def test_repo_metadata_updates_skip_empty_fallback_values():
+    from worker.jobs import _repo_metadata_updates
+
+    updates = _repo_metadata_updates(_FAKE_META, active_branch="main")
+
+    assert updates == {"default_branch": "main"}
+
+
+def test_repo_metadata_updates_include_non_empty_metadata():
+    from worker.jobs import _repo_metadata_updates
+
+    meta = MagicMock(
+        description="A repo",
+        stars=42,
+        language="Python",
+        default_branch="trunk",
+        is_private=False,
+    )
+
+    assert _repo_metadata_updates(meta, active_branch="main") == {
+        "description": "A repo",
+        "stars": 42,
+        "language": "Python",
+        "default_branch": "trunk",
+        "is_private": False,
+    }
+
+
 def _enter_platform_patches(stack: ExitStack) -> None:
     """Enter platform adapter patches using an ExitStack."""
     for target, kwargs in _PLATFORM_PATCHES:

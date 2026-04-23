@@ -232,26 +232,32 @@ async def clone_or_fetch(clone_dir: Path, clone_url: str) -> tuple[str, str]:
 
     def _do_clone_or_fetch() -> tuple[str, str]:
         stored_url = public_clone_url(clone_url)
-        if (clone_dir / ".git").exists():
-            repo = git.Repo(clone_dir)
-            repo.remotes.origin.set_url(clone_url)
-            try:
-                repo.remotes.origin.fetch()
-                repo.head.reset("FETCH_HEAD", index=True, working_tree=True)
-            finally:
+        try:
+            if (clone_dir / ".git").exists():
+                repo = git.Repo(clone_dir)
+                repo.remotes.origin.set_url(clone_url)
+                try:
+                    repo.remotes.origin.fetch()
+                    repo.head.reset("FETCH_HEAD", index=True, working_tree=True)
+                finally:
+                    repo.remotes.origin.set_url(stored_url)
+            else:
+                clone_dir.mkdir(parents=True, exist_ok=True)
+                try:
+                    repo = git.Repo.clone_from(clone_url, clone_dir, depth=1)
+                except Exception:
+                    if (clone_dir / ".git").exists():
+                        try:
+                            git.Repo(clone_dir).remotes.origin.set_url(stored_url)
+                        except Exception:
+                            pass
+                    raise
                 repo.remotes.origin.set_url(stored_url)
-        else:
-            clone_dir.mkdir(parents=True, exist_ok=True)
-            try:
-                repo = git.Repo.clone_from(clone_url, clone_dir, depth=1)
-            except Exception:
-                if (clone_dir / ".git").exists():
-                    try:
-                        git.Repo(clone_dir).remotes.origin.set_url(stored_url)
-                    except Exception:
-                        pass
-                raise
-            repo.remotes.origin.set_url(stored_url)
+        except git.exc.GitCommandError as exc:
+            safe_message = str(exc).replace(clone_url, stored_url)
+            raise RuntimeError(
+                f"Git clone/fetch failed for {stored_url}: {safe_message}"
+            ) from None
         return repo.head.commit.hexsha, repo.active_branch.name
 
     loop = asyncio.get_running_loop()

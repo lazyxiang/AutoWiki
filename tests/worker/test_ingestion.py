@@ -1,4 +1,5 @@
 from worker.pipeline.ingestion import (
+    clone_or_fetch,
     extract_readme,
     filter_files,
     get_repo_hash,
@@ -31,6 +32,81 @@ def test_public_clone_url_strips_embedded_credentials():
         public_clone_url("https://oauth2:token@gitlab.com/group/repo.git")
         == "https://gitlab.com/group/repo.git"
     )
+
+
+async def test_clone_or_fetch_redacts_token_from_git_clone_errors(
+    tmp_path, monkeypatch
+):
+    import git
+
+    raw_url = "https://secret-token@github.com/owner/repo.git"
+    safe_url = "https://github.com/owner/repo.git"
+    error = git.exc.GitCommandError(
+        ["git", "clone", raw_url],
+        128,
+        stderr=f"fatal: could not read from {raw_url}",
+    )
+
+    def fail_clone(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(git.Repo, "clone_from", fail_clone)
+
+    try:
+        await clone_or_fetch(tmp_path / "clone", raw_url)
+    except RuntimeError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("clone_or_fetch should raise RuntimeError")
+
+    assert raw_url not in message
+    assert "secret-token" not in message
+    assert safe_url in message
+
+
+async def test_clone_or_fetch_redacts_token_from_git_fetch_errors(
+    tmp_path, monkeypatch
+):
+    import types
+
+    import git
+
+    clone_dir = tmp_path / "clone"
+    (clone_dir / ".git").mkdir(parents=True)
+    raw_url = "https://secret-token@github.com/owner/repo.git"
+    safe_url = "https://github.com/owner/repo.git"
+    error = git.exc.GitCommandError(
+        ["git", "fetch", raw_url],
+        128,
+        stderr=f"fatal: could not fetch {raw_url}",
+    )
+    urls: list[str] = []
+
+    class FakeOrigin:
+        def set_url(self, url):
+            urls.append(url)
+
+        def fetch(self):
+            raise error
+
+    class FakeRepo:
+        def __init__(self, path):
+            self.remotes = types.SimpleNamespace(origin=FakeOrigin())
+            self.head = types.SimpleNamespace(reset=lambda *args, **kwargs: None)
+
+    monkeypatch.setattr(git, "Repo", FakeRepo)
+
+    try:
+        await clone_or_fetch(clone_dir, raw_url)
+    except RuntimeError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("clone_or_fetch should raise RuntimeError")
+
+    assert raw_url not in message
+    assert "secret-token" not in message
+    assert safe_url in message
+    assert urls[-1] == safe_url
 
 
 def test_filter_files_excludes_binaries(tmp_path):

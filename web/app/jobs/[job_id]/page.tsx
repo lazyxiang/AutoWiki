@@ -6,9 +6,9 @@ import { JobProgressBar } from "@/components/JobProgressBar";
 export default function JobPage({ params }: { params: Promise<{ job_id: string }> }) {
   const { job_id } = use(params);
   const searchParams = useSearchParams();
-  const repoId = searchParams.get("repo_id") ?? "";
   const owner = searchParams.get("owner") ?? "";
   const repo = searchParams.get("repo") ?? "";
+  const repoId = searchParams.get("repo_id") ?? owner;
 
   return (
     <main className="min-h-screen flex flex-col items-center justify-center gap-8 p-8">

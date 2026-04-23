@@ -1,5 +1,41 @@
 """Tests for /api/settings/tokens CRUD endpoints."""
 
+import pytest
+
+
+def test_settings_auth_allows_requests_when_token_unset(monkeypatch):
+    from api.routers.settings import verify_settings_auth
+    from shared.config import reset_config
+
+    monkeypatch.delenv("AUTOWIKI_SERVER_AUTH_TOKEN", raising=False)
+    reset_config()
+    try:
+        verify_settings_auth(None)
+    finally:
+        reset_config()
+
+
+def test_settings_auth_requires_bearer_token_when_configured(monkeypatch):
+    from fastapi import HTTPException
+
+    from api.routers.settings import verify_settings_auth
+    from shared.config import reset_config
+
+    monkeypatch.setenv("AUTOWIKI_SERVER_AUTH_TOKEN", "secret")
+    reset_config()
+    try:
+        with pytest.raises(HTTPException) as exc:
+            verify_settings_auth(None)
+        assert exc.value.status_code == 401
+
+        with pytest.raises(HTTPException) as bad:
+            verify_settings_auth("Bearer wrong")
+        assert bad.value.status_code == 403
+
+        verify_settings_auth("Bearer secret")
+    finally:
+        reset_config()
+
 
 async def test_get_tokens_empty(client):
     resp = await client.get("/api/settings/tokens")

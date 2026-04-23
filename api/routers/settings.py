@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import secrets
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -12,10 +13,22 @@ from shared.config import get_config
 from shared.database import get_session
 from shared.models import PlatformToken
 
-router = APIRouter(prefix="/api/settings")
-
 VALID_PLATFORMS = {"github", "gitlab", "bitbucket"}
 _ORDERED_PLATFORMS = ("github", "gitlab", "bitbucket")
+
+
+def verify_settings_auth(authorization: str | None = Header(default=None)) -> None:
+    token = get_config().server.auth_token
+    if not token:
+        return
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+    supplied = authorization.removeprefix("Bearer ").strip()
+    if not secrets.compare_digest(supplied, token):
+        raise HTTPException(status_code=403, detail="Invalid bearer token")
+
+
+router = APIRouter(prefix="/api/settings", dependencies=[Depends(verify_settings_auth)])
 
 
 def _mask(token: str) -> str:

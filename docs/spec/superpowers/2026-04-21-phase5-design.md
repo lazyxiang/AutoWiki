@@ -258,7 +258,7 @@ async with get_session(cfg.database_path) as s:
 metadata = await platform.fetch_metadata(owner, name, token)
 
 clone_url = platform.authenticated_clone_url(owner, name, token)
-await clone_or_fetch(clone_url, clone_path)   # already run_in_executor wrapped
+await clone_or_fetch(clone_path, clone_url)   # already run_in_executor wrapped
 ```
 
 `PrivateRepoError` and `AuthenticationError` propagate to `run_full_index`, which catches them and stores the message in `job.error` — identical to how existing pipeline errors surface to the frontend.
@@ -371,9 +371,9 @@ DEL  /api/settings/tokens/{platform}
 ### Modified endpoints
 
 ```
-POST /api/repos               — accepts github.com, gitlab.com, bitbucket.org URLs
-GET  /api/repos               — response includes is_private field per repo
-GET  /api/repos/{repo_id}     — response includes is_private field
+POST /api/repos               — accepts github.com, gitlab.com, bitbucket.org URLs; response includes platform
+GET  /api/repos               — response includes platform and is_private fields per repo
+GET  /api/repos/{repo_id}     — response includes platform and is_private fields
 ```
 
 ### Unchanged endpoints

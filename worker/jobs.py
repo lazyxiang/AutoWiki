@@ -107,6 +107,19 @@ async def _update_repo(db_path: str, repo_id: str, **kwargs) -> None:
         await s.commit()
 
 
+def _repo_metadata_updates(meta, active_branch: str) -> dict:
+    default_branch = meta.default_branch or active_branch
+    updates = {"default_branch": default_branch}
+    if meta.description or meta.stars or meta.language or meta.is_private:
+        updates.update(
+            description=meta.description,
+            stars=meta.stars,
+            language=meta.language,
+            is_private=meta.is_private,
+        )
+    return updates
+
+
 async def _write_text_async(path: Path, content: str) -> None:
     """Write a string to a file without blocking the event loop.
 
@@ -350,15 +363,8 @@ async def run_full_index(
         head_sha, active_branch = await clone_or_fetch(clone_root, clone_url)
         logger.info("Clone complete. HEAD SHA: %s, Branch: %s", head_sha, active_branch)
 
-        default_branch = meta.default_branch or active_branch
         await _update_repo(
-            db_path,
-            repo_id,
-            description=meta.description,
-            stars=meta.stars,
-            language=meta.language,
-            default_branch=default_branch,
-            is_private=meta.is_private,
+            db_path, repo_id, **_repo_metadata_updates(meta, active_branch)
         )
         logger.info("Platform metadata fetched: %s", meta)
 

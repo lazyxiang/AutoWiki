@@ -8,7 +8,7 @@ AutoWiki **Phases 1, 2, 2.5, 3, 4, 4.5, 4.6, and 5 are complete**. Phase 1 tagge
 
 ## What AutoWiki Is
 
-A self-hosted, open-source AI-powered wiki generator for software repositories. Given a GitHub URL, it generates a browsable wiki with architecture overviews, module breakdowns, source-linked documentation, and a conversational Q&A interface — running locally with user-supplied API keys.
+A self-hosted, open-source AI-powered wiki generator for software repositories. Given a supported GitHub, GitLab, or Bitbucket repository URL, it generates a browsable wiki with architecture overviews, module breakdowns, source-linked documentation, and a conversational Q&A interface — running locally with user-supplied API keys.
 
 ## Architecture
 

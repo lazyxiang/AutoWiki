@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { upsertToken, deleteToken } from "@/lib/api";
@@ -23,11 +23,15 @@ export function TokenForm({
   maskedToken,
 }: TokenFormProps) {
   const [token, setToken] = useState("");
-  // State initialized from server props; parent must use key={platform} to remount on prop changes.
   const [currentHas, setCurrentHas] = useState(hasToken);
   const [currentMasked, setCurrentMasked] = useState(maskedToken);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    setCurrentHas(hasToken);
+    setCurrentMasked(maskedToken);
+  }, [hasToken, maskedToken]);
 
   async function handleSave() {
     if (!token.trim()) return;

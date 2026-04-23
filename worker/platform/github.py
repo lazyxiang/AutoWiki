@@ -14,14 +14,19 @@ class GitHubPlatform(Platform):
     name = "github"
 
     def parse_url(self, url: str) -> tuple[str, str]:
-        cleaned = url.replace("https://", "").replace("http://", "").rstrip("/")
+        cleaned = url
+        for prefix in ("git+https://", "git+http://", "https://", "http://"):
+            if cleaned.startswith(prefix):
+                cleaned = cleaned[len(prefix) :]
+                break
+        cleaned = cleaned.split("?", 1)[0].split("#", 1)[0].rstrip("/")
         parts = cleaned.split("/")
         try:
             idx = next(i for i, p in enumerate(parts) if p.lower() == "github.com")
             owner = parts[idx + 1]
             name = parts[idx + 2].removesuffix(".git")
-        except (StopIteration, IndexError):
-            raise ValueError(f"Cannot parse GitHub URL: {url!r}")
+        except (StopIteration, IndexError) as exc:
+            raise ValueError(f"Cannot parse GitHub URL: {url!r}") from exc
         if not owner or not name:
             raise ValueError(f"Cannot parse GitHub URL: {url!r}")
         return owner, name

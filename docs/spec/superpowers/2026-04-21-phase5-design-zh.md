@@ -263,7 +263,7 @@ async with get_session(cfg.database_path) as s:
 metadata = await platform.fetch_metadata(owner, name, token)
 
 clone_url = platform.authenticated_clone_url(owner, name, token)
-await clone_or_fetch(clone_url, clone_path)   # 已由 run_in_executor 包装
+await clone_or_fetch(clone_path, clone_url)   # 已由 run_in_executor 包装
 ```
 
 `PrivateRepoError` 和 `AuthenticationError` 传播到 `run_full_index`，后者捕获它们并将消息存储在 `job.error` 中 —— 这与现有流水线错误呈现给前端的方式一致。
@@ -372,9 +372,9 @@ DEL  /api/settings/tokens/{platform}
 ### 修改的端点
 
 ```http
-POST /api/repos               — 接受 github.com, gitlab.com, bitbucket.org URL
-GET  /api/repos               — 每个仓库的响应包含 is_private 字段
-GET  /api/repos/{repo_id}     — 响应包含 is_private 字段
+POST /api/repos               — 接受 github.com, gitlab.com, bitbucket.org URL；响应包含 platform
+GET  /api/repos               — 每个仓库的响应包含 platform 和 is_private 字段
+GET  /api/repos/{repo_id}     — 响应包含 platform 和 is_private 字段
 ```
 
 ### 未修改的端点

@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README-zh.md)
 
-Self-hosted, open-source AI-powered wiki generator for GitHub repositories. Point it at a repo and get a browsable, source-linked wiki in minutes — running entirely on your own machine with your own API keys.
+Self-hosted, open-source AI-powered wiki generator for GitHub, GitLab, and Bitbucket repositories. Point it at a repo and get a browsable, source-linked wiki in minutes — running entirely on your own machine with your own API keys.
 
 ## What it does
 
@@ -54,7 +54,7 @@ redis-server --daemonize yes
 autowiki serve
 ```
 
-Open http://localhost:3000, paste a GitHub URL, and click **Generate Wiki**.
+Open http://localhost:3000, paste a GitHub, GitLab, or Bitbucket URL, and click **Generate Wiki**.
 
 To use a different LLM or embedding provider, set the relevant variables before step 5:
 

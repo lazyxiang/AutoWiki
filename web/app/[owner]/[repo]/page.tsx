@@ -1,14 +1,22 @@
 import { redirect } from "next/navigation";
 import { getRepoWiki, getRepo } from "@/lib/api";
-import { repoId, repoPath } from "@/lib/utils";
+import { repoId } from "@/lib/repo-id.server";
+import { repoPath } from "@/lib/utils";
 
 export default async function WikiIndex({ params }: { params: Promise<{ owner: string; repo: string }> }) {
   const { owner, repo } = await params;
-  const rid = repoId(owner, repo);
-  const [{ pages }, repoMeta] = await Promise.all([
+  let rid = owner;
+  let [{ pages }, repoMeta] = await Promise.all([
     getRepoWiki(rid).catch(() => ({ pages: [] })),
     getRepo(rid).catch(() => null),
   ]);
+  if (repoMeta === null) {
+    rid = repoId(owner, repo);
+    [{ pages }, repoMeta] = await Promise.all([
+      getRepoWiki(rid).catch(() => ({ pages: [] })),
+      getRepo(rid).catch(() => null),
+    ]);
+  }
   
   if (pages.length > 0) {
     // Look for an "overview" page or a page with "Overview" in the title

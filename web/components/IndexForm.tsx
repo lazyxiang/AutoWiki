@@ -1,5 +1,5 @@
 "use client";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,6 +25,12 @@ export function IndexForm({
   const router = useRouter();
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, []);
+
   function handleChange(value: string) {
     setUrl(value);
     if (onQueryChange) {
@@ -44,11 +50,12 @@ export function IndexForm({
         reusePlan,
       });
       const parsed = parseRepoUrl(url);
-      const owner = parsed?.owner ?? "";
-      const repo = parsed?.name ?? "";
-      router.push(
-        `/jobs/${job_id}?repo_id=${repo_id}&owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`,
-      );
+      const query = new URLSearchParams({ repo_id });
+      if (parsed) {
+        query.set("owner", parsed.owner);
+        query.set("repo", parsed.name);
+      }
+      router.push(`/jobs/${job_id}?${query.toString()}`);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {

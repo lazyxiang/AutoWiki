@@ -1,6 +1,6 @@
 import ChatPanel from "@/components/ChatPanel";
 import { getRepo } from "@/lib/api";
-import { repoId } from "@/lib/utils";
+import { repoId } from "@/lib/repo-id.server";
 
 export default async function ChatPage({
   params,
@@ -8,8 +8,12 @@ export default async function ChatPage({
   params: Promise<{ owner: string; repo: string }>;
 }) {
   const { owner, repo } = await params;
-  const rid = repoId(owner, repo);
-  const repoMeta = await getRepo(rid).catch(() => null);
+  let rid = owner;
+  let repoMeta = await getRepo(rid).catch(() => null);
+  if (repoMeta === null) {
+    rid = repoId(owner, repo);
+    repoMeta = await getRepo(rid).catch(() => null);
+  }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 4rem)", padding: "1rem" }}>
