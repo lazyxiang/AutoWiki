@@ -11,6 +11,23 @@ const API_URL =
     ? (process.env.INTERNAL_API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001")
     : (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001");
 
+function settingsApiUrl(path: string): string {
+  if (typeof window !== "undefined") {
+    return path;
+  }
+  return `${API_URL}${path}`;
+}
+
+function settingsHeaders(extra: HeadersInit = {}): HeadersInit {
+  const authToken =
+    typeof window === "undefined"
+      ? process.env.AUTOWIKI_SERVER_AUTH_TOKEN
+      : undefined;
+  return authToken
+    ? { ...extra, Authorization: `Bearer ${authToken}` }
+    : extra;
+}
+
 /**
  * Custom error class for API failures containing the HTTP status code.
  */
@@ -288,23 +305,26 @@ export interface PlatformTokenStatus {
 }
 
 export async function getTokens(): Promise<PlatformTokenStatus[]> {
-  const res = await fetch(`${API_URL}/api/settings/tokens`);
+  const res = await fetch(settingsApiUrl("/api/settings/tokens"), {
+    headers: settingsHeaders(),
+  });
   if (!res.ok) throw new Error(await res.text());
   return res.json() as Promise<PlatformTokenStatus[]>;
 }
 
 export async function upsertToken(platform: string, token: string): Promise<void> {
-  const res = await fetch(`${API_URL}/api/settings/tokens/${platform}`, {
+  const res = await fetch(settingsApiUrl(`/api/settings/tokens/${platform}`), {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: settingsHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ token }),
   });
   if (!res.ok) throw new Error(await res.text());
 }
 
 export async function deleteToken(platform: string): Promise<void> {
-  const res = await fetch(`${API_URL}/api/settings/tokens/${platform}`, {
+  const res = await fetch(settingsApiUrl(`/api/settings/tokens/${platform}`), {
     method: "DELETE",
+    headers: settingsHeaders(),
   });
   if (!res.ok) throw new Error(await res.text());
 }
