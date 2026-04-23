@@ -20,7 +20,10 @@ _ORDERED_PLATFORMS = ("github", "gitlab", "bitbucket")
 def verify_settings_auth(authorization: str | None = Header(default=None)) -> None:
     token = get_config().server.auth_token
     if not token:
-        return
+        raise HTTPException(
+            status_code=401,
+            detail="Settings token management requires AUTOWIKI_SERVER_AUTH_TOKEN",
+        )
     if authorization is None or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing bearer token")
     supplied = authorization.removeprefix("Bearer ").strip()

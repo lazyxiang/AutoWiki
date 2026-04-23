@@ -64,6 +64,7 @@ that steering config, not to the generated wiki output.
 - `repositories` — repo metadata, status, last-indexed commit SHA
 - `jobs` — indexing job tracking with 0–100 progress
 - `wiki_pages` — hierarchical page structure with slugs and parent refs
+- `platform_tokens` — persisted PATs per platform for private-repo access
 
 ## Configuration
 
@@ -98,7 +99,7 @@ Default LLM: `claude-sonnet-4-6`. Supported providers: `anthropic`, `openai`, `o
 - **Planner fallback semantics**: when `_select_files` exhausts retries, `_heuristic_select_files` preserves valid pages from the partial LLM result and fills the remainder via scoring; `_directory_cluster_assign` is retained as a last resort.
 - **Planner batched selection**: `_select_files_in_batches` processes pages in batches of 12, reusing a cacheable system segment (outline + file summary + dep info) across batches for Anthropic prompt caching.
 - **`WikiPlan.all_repo_files`**: persisted in `ast/wiki_plan.json`; incremental refresh reads this to detect added/removed files (each page only carries 5–10 files, so the per-page union is too small to derive the full file list).
-- **Outline anchors (Layer C1)**: worker/pipeline/outline_anchors.py synthesises a directory tree, package-entry docstrings, and README headings, injected into the Phase-1 outline prompt to reduce cross-page fragmentation.
+- **Outline anchors (Layer C1)**: worker/pipeline/outline_anchors.py synthesized a directory tree, package-entry docstrings, and README headings, injected into the Phase-1 outline prompt to reduce cross-page fragmentation.
 - **Mermaid sanitization** (`worker/utils/mermaid.py`): `sanitize_mermaid` quotes node/edge labels containing `(){}|<>/`, handles compound shapes, strips code fences, and removes orphaned `end` keywords (an `end` with no matching `subgraph` opening) that LLMs sometimes emit when using a node definition instead of a proper `subgraph … end` block.
 
 ## API Surface

@@ -1,6 +1,6 @@
 import "server-only";
 
-import { getRepo, getRepoWiki, type Repository } from "@/lib/api";
+import { ApiError, getRepo, getRepoWiki, type Repository } from "@/lib/api";
 import { repoId } from "@/lib/repo-id.server";
 
 type WikiPageSummary = {
@@ -14,7 +14,7 @@ export async function resolveRouteRepo(owner: string, repo: string) {
   const ids = routeRepoIds(owner, repo);
 
   for (const id of ids) {
-    const repoMeta = await getRepo(id).catch(() => null);
+    const repoMeta = await resolveMissingAsNull(() => getRepo(id));
     if (repoMeta) {
       return { repoId: id, repoMeta };
     }
@@ -33,8 +33,8 @@ export async function resolveRouteWiki(owner: string, repo: string) {
 
   for (const id of ids) {
     const [{ pages }, repoMeta] = await Promise.all([
-      getRepoWiki(id).catch(() => ({ pages: [] })),
-      getRepo(id).catch(() => null),
+      resolveMissingAsNull(() => getRepoWiki(id)).then((wiki) => wiki ?? { pages: [] }),
+      resolveMissingAsNull(() => getRepo(id)),
     ]);
     const result = { repoId: id, repoMeta, pages };
     fallback = result;
@@ -49,4 +49,15 @@ export async function resolveRouteWiki(owner: string, repo: string) {
 function routeRepoIds(owner: string, repo: string) {
   const legacyId = repoId(owner, repo);
   return legacyId === owner ? [owner] : [owner, legacyId];
+}
+
+async function resolveMissingAsNull<T>(fn: () => Promise<T>): Promise<T | null> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) {
+      return null;
+    }
+    throw err;
+  }
 }

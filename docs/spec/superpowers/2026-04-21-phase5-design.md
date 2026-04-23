@@ -24,7 +24,7 @@ Phase 5 redefines the previously-planned roadmap entry ("GitLab/Bitbucket + hybr
 
 ### New files / modules
 
-```
+```text
 worker/platform/
   __init__.py
   base.py          ← Platform ABC + RepoMetadata dataclass + custom exceptions
@@ -43,7 +43,7 @@ web/components/RepoGrid.tsx       ← filtered + rendered repo card grid
 
 ### Modified files
 
-```
+```text
 worker/pipeline/ingestion.py    ← use platform adapter; remove GitHub-only code
 shared/models.py                ← + is_private field on Repository model
 api/routers/repos.py            ← URL validation extended to GitLab/Bitbucket
@@ -59,7 +59,7 @@ README.md                       ← Phase 5/6 roadmap updated
 ### End-to-end data flows
 
 **Private repo indexing:**
-```
+```text
 User submits gitlab.com/group/sub/repo
   → detect_platform() → GitLabPlatform
   → look up token from platform_tokens table
@@ -70,7 +70,7 @@ User submits gitlab.com/group/sub/repo
 ```
 
 **Homepage search:**
-```
+```text
 Server fetches repos → passed as props to HomepageClient
 User types "fast" → IndexForm fires onQueryChange("fast")
   → HomepageClient updates query state
@@ -209,7 +209,7 @@ Called from `ingestion.py` to retrieve the token before any API or clone operati
 
 ### 4.3 Settings REST API (`api/routers/settings.py`)
 
-```
+```http
 GET    /api/settings/tokens
        → [{ platform, has_token, masked_token }]
        masked_token: last 4 chars visible, e.g. "••••••••1234" (null if no token)
@@ -304,7 +304,7 @@ function parseRepoUrl(url: string): { owner: string; name: string } | null {
 
 ### 6.1 Component architecture
 
-```
+```text
 web/app/page.tsx (Server Component)
   → fetches repos via getRepositories()
   → <HomepageClient repos={repos} />
@@ -362,7 +362,7 @@ The "Get Started" button remains for URL submission only. It is disabled when th
 
 ### New endpoints
 
-```
+```http
 GET  /api/settings/tokens
 PUT  /api/settings/tokens/{platform}    body: { token: str }
 DEL  /api/settings/tokens/{platform}
@@ -370,7 +370,7 @@ DEL  /api/settings/tokens/{platform}
 
 ### Modified endpoints
 
-```
+```http
 POST /api/repos               — accepts github.com, gitlab.com, bitbucket.org URLs; response includes platform
 GET  /api/repos               — response includes platform and is_private fields per repo
 GET  /api/repos/{repo_id}     — response includes platform and is_private fields
@@ -387,12 +387,12 @@ All wiki, chat, research, job, and WebSocket endpoints are unaffected.
 ### CLAUDE.md + README.md
 
 Replace:
-```
+```text
 - **Phase 5** — GitLab/Bitbucket + hybrid search + MCP server
 ```
 
 With:
-```
+```text
 - **Phase 5** — GitLab/Bitbucket support (public + private repos, full API metadata) + homepage project search
 - **Phase 6** — Hybrid search (keyword + semantic BM25/FAISS fusion)
 ```

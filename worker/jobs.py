@@ -110,7 +110,7 @@ async def _update_repo(db_path: str, repo_id: str, **kwargs) -> None:
 def _repo_metadata_updates(meta, active_branch: str) -> dict:
     default_branch = meta.default_branch or active_branch
     updates = {"default_branch": default_branch}
-    if meta.description or meta.stars or meta.language or meta.is_private:
+    if meta.complete:
         updates.update(
             description=meta.description,
             stars=meta.stars,

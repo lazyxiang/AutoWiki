@@ -23,32 +23,32 @@ _PLATFORM_PATCHES = [
 ]
 
 
-def test_repo_metadata_updates_skip_empty_fallback_values():
-    from worker.jobs import _repo_metadata_updates
-
-    updates = _repo_metadata_updates(_FAKE_META, active_branch="main")
-
-    assert updates == {"default_branch": "main"}
-
-
-def test_repo_metadata_updates_include_non_empty_metadata():
+def test_repo_metadata_updates_skip_incomplete_fallback_values():
     from worker.jobs import _repo_metadata_updates
 
     meta = RepoMetadata(
         owner="o",
         name="r",
-        description="A repo",
-        stars=42,
-        language="Python",
-        default_branch="trunk",
+        description="",
+        stars=0,
+        language="",
+        default_branch="main",
         is_private=False,
+        complete=False,
     )
+    updates = _repo_metadata_updates(meta, active_branch="main")
 
-    assert _repo_metadata_updates(meta, active_branch="main") == {
-        "description": "A repo",
-        "stars": 42,
-        "language": "Python",
-        "default_branch": "trunk",
+    assert updates == {"default_branch": "main"}
+
+
+def test_repo_metadata_updates_include_complete_falsy_metadata():
+    from worker.jobs import _repo_metadata_updates
+
+    assert _repo_metadata_updates(_FAKE_META, active_branch="main") == {
+        "description": "",
+        "stars": 0,
+        "language": "",
+        "default_branch": "main",
         "is_private": False,
     }
 

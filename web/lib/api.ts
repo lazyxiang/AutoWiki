@@ -12,6 +12,17 @@ const API_URL =
     : (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001");
 
 /**
+ * Custom error class for API failures containing the HTTP status code.
+ */
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
+/**
  * Submits a repository URL for indexing.
  *
  * @param url - The GitHub repository URL.
@@ -59,7 +70,7 @@ export async function getJob(jobId: string) {
  */
 export async function getRepo(repoId: string): Promise<Repository> {
   const res = await fetch(`${API_URL}/api/repos/${repoId}`);
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw new ApiError(await res.text(), res.status);
   const repo = await res.json() as RepoRaw;
   const indexedAt = repo.indexed_at || "";
   
@@ -88,19 +99,8 @@ export async function getRepo(repoId: string): Promise<Repository> {
  */
 export async function getRepoWiki(repoId: string) {
   const res = await fetch(`${API_URL}/api/repos/${repoId}/wiki`);
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw new ApiError(await res.text(), res.status);
   return res.json() as Promise<{ pages: { slug: string; title: string; parent_slug: string | null; has_user_notes?: boolean }[] }>;
-}
-
-/**
- * Custom error class for API failures containing the HTTP status code.
- */
-export class ApiError extends Error {
-  status: number;
-  constructor(message: string, status: number) {
-    super(message);
-    this.status = status;
-  }
 }
 
 /**

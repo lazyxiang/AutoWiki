@@ -13,6 +13,7 @@ class RepoMetadata:
     language: str
     default_branch: str
     is_private: bool
+    complete: bool = True
 
 
 class PrivateRepoError(Exception):

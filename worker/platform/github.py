@@ -73,6 +73,7 @@ class GitHubPlatform(Platform):
                         language="",
                         default_branch="main",
                         is_private=False,
+                        complete=False,
                     )
                 raise
         data = resp.json()
