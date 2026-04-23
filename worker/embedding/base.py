@@ -3,7 +3,7 @@ from collections.abc import Awaitable, Callable
 
 import numpy as np
 
-from worker.utils.retry import TRANSIENT_EXCEPTIONS, async_retry
+from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
 
 EMBEDDING_BATCH_SIZE = 50
 EMBEDDING_MAX_RETRIES = 6
@@ -20,7 +20,10 @@ def iter_embedding_batches(texts: list[str]) -> list[list[str]]:
 
 
 async def retry_embedding_call[T](
-    fn: Callable[..., Awaitable[T]], *args, **kwargs
+    fn: Callable[..., Awaitable[T]],
+    *args,
+    on_retry: OnRetryCallback | None = None,
+    **kwargs,
 ) -> T:
     return await async_retry(
         fn,
@@ -30,6 +33,7 @@ async def retry_embedding_call[T](
         backoff_factor=EMBEDDING_BACKOFF_FACTOR,
         max_delay=EMBEDDING_MAX_DELAY,
         transient_exceptions=TRANSIENT_EXCEPTIONS,
+        on_retry=on_retry,
         **kwargs,
     )
 
@@ -41,7 +45,10 @@ class EmbeddingProvider(ABC):
 
     @abstractmethod
     async def embed_batch(
-        self, texts: list[str], is_code: bool = False
+        self,
+        texts: list[str],
+        is_code: bool = False,
+        on_retry: OnRetryCallback | None = None,
     ) -> list[np.ndarray]:
         """Embed multiple texts. Returns list of float32 arrays."""
 

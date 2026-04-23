@@ -9,6 +9,7 @@ from worker.embedding.base import (
     iter_embedding_batches,
     retry_embedding_call,
 )
+from worker.utils.retry import OnRetryCallback
 
 try:
     from google import genai
@@ -51,7 +52,10 @@ class GeminiEmbedding(EmbeddingProvider):
         return vec
 
     async def embed_batch(
-        self, texts: list[str], is_code: bool = False
+        self,
+        texts: list[str],
+        is_code: bool = False,
+        on_retry: OnRetryCallback | None = None,
     ) -> list[np.ndarray]:
         if not texts:
             return []
@@ -62,7 +66,9 @@ class GeminiEmbedding(EmbeddingProvider):
         results = []
         # Keep requests below Gemini's hard limit to reduce quota spike risk.
         for batch in iter_embedding_batches(texts):
-            res = await retry_embedding_call(self._embed_content, batch, task_type)
+            res = await retry_embedding_call(
+                self._embed_content, batch, task_type, on_retry=on_retry
+            )
             batch_vectors = [
                 np.array(e.values, dtype=np.float32) for e in res.embeddings
             ]

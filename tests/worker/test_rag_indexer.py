@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import numpy as np
 
@@ -179,7 +179,7 @@ async def test_build_rag_index_with_entities(tmp_path):
     assert "hello" in entities_found or "goodbye" in entities_found
 
 
-async def test_build_rag_index_uses_conservative_embedding_retry(tmp_path):
+async def test_build_rag_index_uses_provider_embedding_retry(tmp_path):
     src = tmp_path / "hello.py"
     src.write_text("def hello():\n    return 'world'\n")
 
@@ -189,20 +189,20 @@ async def test_build_rag_index_uses_conservative_embedding_retry(tmp_path):
         meta_path=tmp_path / "rag.meta.pkl",
     )
     mock_embed = AsyncMock()
+    mock_embed.embed_batch = AsyncMock(
+        side_effect=lambda texts, **kwargs: [
+            np.array([1, 0, 0, 0], dtype=np.float32) for _ in texts
+        ]
+    )
 
-    async def fake_retry(fn, texts, **kwargs):
-        return [np.array([1, 0, 0, 0], dtype=np.float32) for _ in texts]
+    async def on_retry(attempt, max_retries, wait, exc):
+        pass
 
-    with patch(
-        "worker.pipeline.rag_indexer.async_retry", side_effect=fake_retry
-    ) as retry:
-        await build_rag_index([src], tmp_path, store, mock_embed)
+    await build_rag_index([src], tmp_path, store, mock_embed, on_retry=on_retry)
 
-    assert retry.await_count == 1
-    assert retry.await_args.kwargs["max_retries"] == 6
-    assert retry.await_args.kwargs["initial_delay"] == 10.0
-    assert retry.await_args.kwargs["backoff_factor"] == 2.0
-    assert retry.await_args.kwargs["max_delay"] == 120.0
+    mock_embed.embed_batch.assert_awaited_once()
+    assert mock_embed.embed_batch.await_args.kwargs["on_retry"] is on_retry
+    assert "max_retries" not in mock_embed.embed_batch.await_args.kwargs
 
 
 def _make_store_with_docs_and_code(tmp_path):

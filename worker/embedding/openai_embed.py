@@ -8,6 +8,7 @@ from worker.embedding.base import (
     iter_embedding_batches,
     retry_embedding_call,
 )
+from worker.utils.retry import OnRetryCallback
 
 
 class OpenAIEmbedding(EmbeddingProvider):
@@ -27,14 +28,20 @@ class OpenAIEmbedding(EmbeddingProvider):
         return np.array(response.data[0].embedding, dtype=np.float32)
 
     async def embed_batch(
-        self, texts: list[str], is_code: bool = False
+        self,
+        texts: list[str],
+        is_code: bool = False,
+        on_retry: OnRetryCallback | None = None,
     ) -> list[np.ndarray]:
         if not texts:
             return []
         results = []
         for batch in iter_embedding_batches(texts):
             response = await retry_embedding_call(
-                self._client.embeddings.create, input=batch, model=self._model
+                self._client.embeddings.create,
+                input=batch,
+                model=self._model,
+                on_retry=on_retry,
             )
             results.extend(
                 np.array(d.embedding, dtype=np.float32) for d in response.data
