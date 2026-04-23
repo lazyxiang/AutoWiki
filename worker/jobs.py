@@ -697,7 +697,7 @@ async def run_full_index(
         await _update_job(
             db_path,
             job_id,
-            progress=20,
+            progress=10,
             status_description="Analyzing source code structure (AST)...",
         )
 
@@ -717,7 +717,7 @@ async def run_full_index(
         await _update_job(
             db_path,
             job_id,
-            progress=35,
+            progress=18,
             status_description="Building dependency graph...",
         )
 
@@ -732,7 +732,7 @@ async def run_full_index(
         await _update_job(
             db_path,
             job_id,
-            progress=45,
+            progress=25,
             status_description="Indexing code for RAG search (embedding)...",
         )
 
@@ -773,7 +773,7 @@ async def run_full_index(
         await _update_job(
             db_path,
             job_id,
-            progress=55,
+            progress=35,
             status_description="Planning wiki structure...",
         )
 
@@ -848,7 +848,7 @@ async def run_full_index(
         await _update_job(
             db_path,
             job_id,
-            progress=70,
+            progress=50,
             status_description="Generating wiki pages...",
         )
 
@@ -909,7 +909,7 @@ async def run_full_index(
                         wiki_dir / f"{result.slug}.md", result.content
                     )
                     pages_done += 1
-                    progress = 70 + int(27 * pages_done / total) if total > 0 else 97
+                    progress = 50 + int(48 * pages_done / total) if total > 0 else 98
                     await _update_job(
                         db_path,
                         job_id,
@@ -1237,7 +1237,7 @@ async def run_refresh_index(
         await _update_job(
             db_path,
             job_id,
-            progress=20,
+            progress=12,
             status_description="Analyzing updated source code...",
         )
 
@@ -1312,7 +1312,7 @@ async def run_refresh_index(
         await _update_job(
             db_path,
             job_id,
-            progress=30,
+            progress=20,
             status_description="Rebuilding dependency graph...",
         )
 
@@ -1325,7 +1325,7 @@ async def run_refresh_index(
             sum(len(e) for e in dep_graph.edges.values()),
         )
         await _update_job(
-            db_path, job_id, progress=40, status_description="Rebuilding RAG index..."
+            db_path, job_id, progress=30, status_description="Rebuilding RAG index..."
         )
 
         # Stage 4: Rebuild FAISS index
@@ -1357,7 +1357,7 @@ async def run_refresh_index(
         await _update_job(
             db_path,
             job_id,
-            progress=55,
+            progress=40,
             status_description="Re-planning updated wiki pages...",
         )
 
@@ -1405,7 +1405,7 @@ async def run_refresh_index(
         await _update_job(
             db_path,
             job_id,
-            progress=65,
+            progress=50,
             status_description="Generating wiki pages...",
         )
 
@@ -1520,9 +1520,9 @@ async def run_refresh_index(
                     )
                     pages_done += 1
                     progress = (
-                        65 + int(30 * pages_done / total_pages)
+                        50 + int(48 * pages_done / total_pages)
                         if total_pages > 0
-                        else 95
+                        else 98
                     )
                     await _update_job(
                         db_path,

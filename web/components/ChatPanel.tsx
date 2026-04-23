@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
+import { useSearchParams } from "next/navigation";
 import { createChatSession } from "@/lib/api";
 import { useChatStream } from "@/lib/ws";
 import { Send, Loader2, Bot, User } from "lucide-react";
@@ -31,6 +32,8 @@ export default function ChatPanel({ repoId }: { repoId: string }) {
   const [streaming, setStreaming] = useState(false);
   const streamingRef = useRef("");
   const viewportRef = useRef<HTMLDivElement>(null);
+  const searchParams = useSearchParams();
+  const initialQueryHandled = useRef(false);
 
   useEffect(() => {
     createChatSession(repoId).then((d) => setSessionId(d.session_id));
@@ -85,13 +88,26 @@ export default function ChatPanel({ repoId }: { repoId: string }) {
   /**
    * Submits the user's message to the chat stream.
    */
-  const submit = () => {
-    if (!input.trim() || streaming) return;
-    setMessages((prev) => [...prev, { role: "user", content: input }]);
+  const submit = useCallback((query?: string) => {
+    const text = query || input;
+    if (!text.trim() || streaming || !sessionId) return;
+    setMessages((prev) => [...prev, { role: "user", content: text }]);
     setStreaming(true);
-    sendMessage(input);
-    setInput("");
-  };
+    sendMessage(text);
+    if (!query) setInput("");
+  }, [input, streaming, sessionId, sendMessage]);
+
+  // Handle initial query from URL
+  useEffect(() => {
+    if (sessionId && !initialQueryHandled.current) {
+      const q = searchParams.get("q");
+      if (q) {
+        initialQueryHandled.current = true;
+        // Using a tick to avoid cascading render lint error
+        setTimeout(() => submit(q), 0);
+      }
+    }
+  }, [sessionId, searchParams, submit]);
 
   return (
     <div className="flex flex-col h-full bg-white">
@@ -170,7 +186,7 @@ export default function ChatPanel({ repoId }: { repoId: string }) {
           />
           <Button
             size="icon-sm"
-            onClick={submit}
+            onClick={() => submit()}
             disabled={streaming || !sessionId || !input.trim()}
             className={cn(
               "absolute right-1 transition-all",
