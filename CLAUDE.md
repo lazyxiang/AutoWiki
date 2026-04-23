@@ -151,6 +151,7 @@ WS    /ws/repos/{repo_id}/research/{job_id}           # Stream research events
 - **Framework**: pytest with `asyncio_mode = "auto"` (no `@pytest.mark.asyncio` needed)
 - **Coverage target**: ≥80% on `worker/` and `api/` — currently at 80%
 - **Run**: `pytest tests/ --ignore=tests/e2e` AND `npm test --prefix web`
+- **Test Review**: After adding or changing tests, re-read the new assertions and simplify them if they are overfitted to implementation details. Keep only the smallest set of assertions that prove the intended behavior, and remove duplicate helpers or brittle call-shape checks unless they are the behavior under test.
 - **Fixtures**: `mock_llm`, `mock_embedding` in `tests/conftest.py`; fixture repo at `tests/fixtures/simple-repo/`
 
 ## Deployment

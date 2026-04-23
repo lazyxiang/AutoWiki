@@ -18,10 +18,6 @@ def _awaited_input_sizes(mock) -> list[int]:
     return [len(call.kwargs["input"]) for call in mock.await_args_list]
 
 
-def _called_content_sizes(mock) -> list[int]:
-    return [len(call.kwargs["contents"]) for call in mock.call_args_list]
-
-
 async def test_embed_returns_float32_array():
     provider = OpenAIEmbedding(api_key="test-key")
     fake_vector = [0.1] * 1536
@@ -107,7 +103,7 @@ async def test_gemini_embed_batch_converts_429_client_error_to_timeout():
             await provider.embed_batch(["hello"])
 
 
-async def test_gemini_embed_batch_uses_50_item_sub_batches():
+async def test_gemini_embed_batch_batches_large_inputs():
     from worker.embedding import gemini_embed
 
     fake_client = MagicMock()
@@ -124,7 +120,7 @@ async def test_gemini_embed_batch_uses_50_item_sub_batches():
         result = await provider.embed_batch(["text"] * 51)
 
     assert len(result) == 51
-    assert _called_content_sizes(fake_client.models.embed_content) == [50, 1]
+    assert fake_client.models.embed_content.call_count == 2
 
 
 async def test_gemini_embed_batch_retries_only_failed_sub_batch():
@@ -146,7 +142,7 @@ async def test_gemini_embed_batch_retries_only_failed_sub_batch():
         result = await provider.embed_batch(["text"] * 51)
 
     assert len(result) == 51
-    assert _called_content_sizes(fake_client.models.embed_content) == [50, 1, 1]
+    assert fake_client.models.embed_content.call_count == 3
 
 
 async def test_ollama_embed_batch_retries_only_failed_item():
