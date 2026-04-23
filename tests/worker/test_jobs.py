@@ -338,7 +338,7 @@ async def test_always_clears_existing_artifacts(
 
 
 async def test_full_index_first_time_failure_deletes_repository_metadata(tmp_path):
-    """Failed first-time index removes the repo row so no homepage card appears."""
+    """Failed first-time index removes repo/job rows so no dangling metadata remains."""
     from shared.database import dispose_db, get_session
     from shared.models import Job, Repository, WikiPage
 
@@ -390,8 +390,7 @@ async def test_full_index_first_time_failure_deletes_repository_metadata(tmp_pat
     try:
         async with get_session(db_path) as s:
             assert await s.get(Repository, "first-fail") is None
-            job = await s.get(Job, "first-job")
-            assert job.status == "failed"
+            assert await s.get(Job, "first-job") is None
 
             from sqlalchemy import select
 
@@ -399,6 +398,132 @@ async def test_full_index_first_time_failure_deletes_repository_metadata(tmp_pat
                 select(WikiPage).where(WikiPage.repo_id == "first-fail")
             )
             assert result.scalars().all() == []
+    finally:
+        await dispose_db(db_path)
+
+
+async def test_full_index_restore_failure_preserves_original_error(
+    tmp_path, mock_embedding
+):
+    """Restore cleanup failures are logged without replacing the pipeline error."""
+    from shared.database import dispose_db, get_session
+    from shared.models import Job, Repository, WikiPage
+
+    mock_embedding.dimension = 1536
+    db_path = await _setup_db(tmp_path)
+
+    async with get_session(db_path) as s:
+        s.add(
+            Repository(
+                id="restore-mask",
+                owner="testowner",
+                name="simple-repo",
+                platform="github",
+                status="ready",
+                indexed_at=datetime(2026, 1, 2, tzinfo=UTC),
+            )
+        )
+        s.add(
+            Job(
+                id="restore-mask-job",
+                repo_id="restore-mask",
+                type="full_index",
+                status="queued",
+                progress=0,
+            )
+        )
+        s.add(
+            WikiPage(
+                id="restore-mask-page",
+                repo_id="restore-mask",
+                slug="old",
+                title="Old",
+                content="old content",
+                page_order=0,
+            )
+        )
+        await s.commit()
+
+    repo_data = tmp_path / "repos" / "restore-mask"
+    wiki_dir = repo_data / "wiki"
+    wiki_dir.mkdir(parents=True)
+    (wiki_dir / "old.md").write_text("old file")
+
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch(
+                "worker.jobs.clone_or_fetch",
+                new_callable=AsyncMock,
+                return_value=("newsha", "main"),
+            )
+        )
+        _enter_platform_patches(stack)
+        stack.enter_context(
+            patch("worker.jobs.make_embedding_provider", return_value=mock_embedding)
+        )
+        stack.enter_context(
+            patch(
+                "worker.jobs.analyze_all_files",
+                side_effect=RuntimeError("analysis failed"),
+            )
+        )
+        restore = stack.enter_context(
+            patch(
+                "worker.jobs._restore_full_index_state",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("restore failed"),
+            )
+        )
+        discard = stack.enter_context(
+            patch("worker.jobs._discard_full_index_backup", new_callable=AsyncMock)
+        )
+
+        from worker.jobs import run_full_index
+
+        with pytest.raises(RuntimeError, match="analysis failed"):
+            await run_full_index(
+                ctx={},
+                repo_id="restore-mask",
+                job_id="restore-mask-job",
+                owner="testowner",
+                name="simple-repo",
+                clone_root=Path("tests/fixtures/simple-repo"),
+            )
+
+    try:
+        restore.assert_awaited_once()
+        discard.assert_awaited_once()
+        async with get_session(db_path) as s:
+            job = await s.get(Job, "restore-mask-job")
+            assert job.status == "failed"
+            assert job.error == "analysis failed"
+    finally:
+        await dispose_db(db_path)
+
+
+async def test_snapshot_full_index_state_removes_partial_backup_on_failure(tmp_path):
+    """Snapshot setup cleans up copied files when DB snapshot collection fails."""
+    from shared.database import dispose_db
+    from worker.jobs import _snapshot_full_index_state
+
+    db_path = await _setup_db(tmp_path)
+    repo_data = tmp_path / "repos" / "missing-repo"
+    wiki_dir = repo_data / "wiki"
+    wiki_dir.mkdir(parents=True)
+    (wiki_dir / "old.md").write_text("old file")
+
+    with pytest.raises(ValueError, match="Repository not found"):
+        await _snapshot_full_index_state(
+            db_path,
+            "missing-repo",
+            repo_data,
+            "snapshot-job",
+            reuse_index=False,
+            reuse_plan=False,
+        )
+
+    try:
+        assert not (repo_data / ".full-index-backup-snapshot-job").exists()
     finally:
         await dispose_db(db_path)
 

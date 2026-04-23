@@ -193,13 +193,16 @@ async def test_post_repos_custom_gitlab_domain_url(client):
 
 
 async def test_post_repos_rejects_implicit_custom_gitlab_domain_url(client):
-    with patch("api.routers.repos.enqueue_full_index", new_callable=AsyncMock):
+    with patch(
+        "api.routers.repos.enqueue_full_index", new_callable=AsyncMock
+    ) as mock_enqueue:
         resp = await client.post(
             "/api/repos",
             json={"url": "https://gitlab.internal.example.com/group/repo"},
         )
 
     assert resp.status_code == 422
+    mock_enqueue.assert_not_called()
 
 
 async def test_get_repo_includes_platform(client):

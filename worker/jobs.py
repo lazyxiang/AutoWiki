@@ -394,26 +394,37 @@ async def _snapshot_full_index_state(
         return had_wiki_dir, snapshot_faiss, snapshot_plan
 
     loop = asyncio.get_running_loop()
-    had_wiki_dir, snapshot_faiss, snapshot_plan = await loop.run_in_executor(
-        None, _snapshot_files
-    )
-
-    async with get_session(db_path) as s:
-        repo = await s.get(Repository, repo_id)
-        if repo is None:
-            raise ValueError(f"Repository not found for backup: {repo_id}")
-        repo_values = {
-            field: getattr(repo, field) for field in _REPOSITORY_BACKUP_FIELDS
-        }
-        result = await s.execute(
-            sa_select(WikiPage)
-            .where(WikiPage.repo_id == repo_id)
-            .order_by(WikiPage.page_order)
+    try:
+        had_wiki_dir, snapshot_faiss, snapshot_plan = await loop.run_in_executor(
+            None, _snapshot_files
         )
-        wiki_pages = [
-            {field: getattr(page, field) for field in _WIKI_PAGE_BACKUP_FIELDS}
-            for page in result.scalars().all()
-        ]
+
+        async with get_session(db_path) as s:
+            repo = await s.get(Repository, repo_id)
+            if repo is None:
+                raise ValueError(f"Repository not found for backup: {repo_id}")
+            repo_values = {
+                field: getattr(repo, field) for field in _REPOSITORY_BACKUP_FIELDS
+            }
+            result = await s.execute(
+                sa_select(WikiPage)
+                .where(WikiPage.repo_id == repo_id)
+                .order_by(WikiPage.page_order)
+            )
+            wiki_pages = [
+                {field: getattr(page, field) for field in _WIKI_PAGE_BACKUP_FIELDS}
+                for page in result.scalars().all()
+            ]
+    except Exception:
+        try:
+            await loop.run_in_executor(None, _remove_path, backup_dir)
+        except Exception:
+            logger.warning(
+                "Failed to remove partial full-index backup at %s",
+                backup_dir,
+                exc_info=True,
+            )
+        raise
 
     return _FullIndexBackup(
         backup_dir=backup_dir,
@@ -489,6 +500,7 @@ async def _cleanup_first_time_index_failure(
     await asyncio.get_running_loop().run_in_executor(None, _cleanup_files)
     async with get_session(db_path) as s:
         await s.execute(sa_delete(WikiPage).where(WikiPage.repo_id == repo_id))
+        await s.execute(sa_delete(Job).where(Job.repo_id == repo_id))
         await s.execute(sa_delete(Repository).where(Repository.id == repo_id))
         await s.commit()
 
@@ -957,8 +969,22 @@ async def run_full_index(
             status_description=f"Error: {str(e)}",
         )
         if full_index_backup is not None:
-            await _restore_full_index_state(db_path, repo_id, full_index_backup)
-            await _discard_full_index_backup(full_index_backup)
+            try:
+                await _restore_full_index_state(db_path, repo_id, full_index_backup)
+            except Exception:
+                logger.exception(
+                    "Failed to restore prior wiki state for %s/%s after index failure",
+                    owner,
+                    name,
+                )
+            try:
+                await _discard_full_index_backup(full_index_backup)
+            except Exception:
+                logger.exception(
+                    "Failed to discard full-index backup for %s/%s after index failure",
+                    owner,
+                    name,
+                )
         elif previously_indexed:
             await _update_repo(db_path, repo_id, status="ready")
         else:
