@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -14,6 +15,7 @@ from worker.platform.gitee import GiteePlatform
 from worker.platform.github import GitHubPlatform
 from worker.platform.gitlab import GitLabPlatform
 from worker.platform.registry import detect_platform, get_platform_by_name
+from worker.platform.token_store import get_platform_token
 
 
 def test_repo_metadata_fields():
@@ -404,18 +406,22 @@ def test_gitee_clone_url_no_token():
     )
 
 
-def _make_gitee_client(json_data: dict, status_code: int = 200):
-    mock_resp = MagicMock()
-    mock_resp.status_code = status_code
-    if status_code >= 400:
-        mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
-            "error", request=MagicMock(), response=mock_resp
-        )
-    else:
-        mock_resp.raise_for_status = MagicMock()
-    mock_resp.json.return_value = json_data
+def _make_gitee_client(json_data: dict | list[dict], status_code: int = 200):
+    payloads = json_data if isinstance(json_data, list) else [json_data]
+    responses = []
+    for payload in payloads:
+        mock_resp = MagicMock()
+        mock_resp.status_code = status_code
+        if status_code >= 400:
+            mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+                "error", request=MagicMock(), response=mock_resp
+            )
+        else:
+            mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = payload
+        responses.append(mock_resp)
     mock_client = AsyncMock()
-    mock_client.get = AsyncMock(return_value=mock_resp)
+    mock_client.get = AsyncMock(side_effect=responses)
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
     return mock_client
@@ -423,13 +429,15 @@ def _make_gitee_client(json_data: dict, status_code: int = 200):
 
 async def test_gitee_fetch_metadata_public():
     client = _make_gitee_client(
-        {
-            "private": False,
-            "description": "Gitee repo",
-            "stargazers_count": 23,
-            "language": "Go",
-            "default_branch": "master",
-        }
+        [
+            {
+                "private": False,
+                "description": "Gitee repo",
+                "stargazers_count": 23,
+                "default_branch": "master",
+            },
+            {"Go": 1200, "Python": 300},
+        ]
     )
     with patch("worker.platform.gitee.httpx.AsyncClient", return_value=client):
         meta = await _ge.fetch_metadata("owner", "repo", None)
@@ -437,6 +445,26 @@ async def test_gitee_fetch_metadata_public():
     assert meta.description == "Gitee repo"
     assert meta.language == "Go"
     assert meta.stars == 23
+
+
+async def test_gitee_fetch_metadata_uses_authorization_header_for_token():
+    client = _make_gitee_client(
+        [
+            {
+                "private": True,
+                "description": "Gitee repo",
+                "stargazers_count": 23,
+                "default_branch": "master",
+            },
+            {},
+        ]
+    )
+    with patch("worker.platform.gitee.httpx.AsyncClient", return_value=client):
+        await _ge.fetch_metadata("owner", "repo", "secret")
+
+    first_call = client.get.call_args_list[0]
+    assert first_call.kwargs["headers"] == {"Authorization": "token secret"}
+    assert "params" not in first_call.kwargs
 
 
 async def test_gitee_fetch_metadata_private_no_token():
@@ -478,14 +506,14 @@ def test_detect_platform_gitee():
     assert isinstance(detect_platform("https://gitee.com/owner/repo"), GiteePlatform)
 
 
-def test_detect_platform_custom_gitlab_domain():
-    platform = detect_platform("https://gitlab.internal.example.com/group/repo")
-    assert isinstance(platform, GitLabPlatform)
-    assert platform.name == "gitlab:gitlab.internal.example.com"
-    assert platform.parse_url("https://gitlab.internal.example.com/group/repo") == (
-        "group",
-        "repo",
-    )
+def test_detect_platform_requires_forced_scheme_for_custom_gitlab_domain():
+    with pytest.raises(UnsupportedPlatformError):
+        detect_platform("https://gitlab.internal.example.com/group/repo")
+
+
+def test_detect_platform_ignores_incidental_gitlab_substring():
+    with pytest.raises(UnsupportedPlatformError):
+        detect_platform("https://notgitlab.com/group/repo")
 
 
 def test_detect_platform_gitlab_forced_scheme_on_custom_host():
@@ -530,6 +558,33 @@ def test_get_platform_by_name_custom_gitlab():
     platform = get_platform_by_name("gitlab:gitlab.internal.example.com")
     assert isinstance(platform, GitLabPlatform)
     assert platform.name == "gitlab:gitlab.internal.example.com"
+
+
+class _TokenSession:
+    def __init__(self, tokens: dict[str, str]):
+        self.tokens = tokens
+        self.requested_keys: list[str] = []
+
+    async def get(self, _model, key: str):
+        self.requested_keys.append(key)
+        token = self.tokens.get(key)
+        return SimpleNamespace(token=token) if token is not None else None
+
+
+async def test_get_platform_token_uses_exact_custom_gitlab_token():
+    session = _TokenSession(
+        {"gitlab": "generic", "gitlab:code.example.com": "host-scoped"}
+    )
+
+    assert await get_platform_token("gitlab:code.example.com", session) == "host-scoped"
+    assert session.requested_keys == ["gitlab:code.example.com"]
+
+
+async def test_get_platform_token_does_not_fallback_to_generic_gitlab_token():
+    session = _TokenSession({"gitlab": "generic"})
+
+    assert await get_platform_token("gitlab:code.example.com", session) is None
+    assert session.requested_keys == ["gitlab:code.example.com"]
 
 
 def test_get_platform_by_name_unknown():

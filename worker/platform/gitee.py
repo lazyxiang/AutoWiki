@@ -39,14 +39,13 @@ class GiteePlatform(Platform):
     async def fetch_metadata(
         self, owner: str, name: str, token: str | None
     ) -> RepoMetadata:
-        params: dict[str, str] = {}
-        if token:
-            params["access_token"] = token
+        headers = {"Authorization": f"token {token}"} if token else None
         url = f"https://gitee.com/api/v5/repos/{owner}/{name}"
 
         async with httpx.AsyncClient(timeout=10) as client:
             try:
-                resp = await client.get(url, params=params)
+                kwargs = {"headers": headers} if headers else {}
+                resp = await client.get(url, **kwargs)
                 resp.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 code = exc.response.status_code
@@ -66,13 +65,23 @@ class GiteePlatform(Platform):
                     )
                 raise
 
-        data = resp.json()
+            data = resp.json()
+            languages_resp = await client.get(f"{url}/languages", **kwargs)
+            languages_resp.raise_for_status()
+            language = _primary_language(languages_resp.json())
+
         return RepoMetadata(
             owner=owner,
             name=name,
             description=data.get("description") or "",
             stars=data.get("stargazers_count") or 0,
-            language=data.get("language") or "",
+            language=language,
             default_branch=data.get("default_branch") or "master",
             is_private=bool(data.get("private", False)),
         )
+
+
+def _primary_language(languages: object) -> str:
+    if not isinstance(languages, dict) or not languages:
+        return ""
+    return max(languages.items(), key=lambda item: item[1])[0]

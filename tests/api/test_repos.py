@@ -181,7 +181,7 @@ async def test_post_repos_custom_gitlab_domain_url(client):
     with patch("api.routers.repos.enqueue_full_index", new_callable=AsyncMock):
         resp = await client.post(
             "/api/repos",
-            json={"url": "https://gitlab.internal.example.com/group/repo"},
+            json={"url": "gitlab+https://gitlab.internal.example.com/group/repo"},
         )
     assert resp.status_code == 202
     repo_id = resp.json()["repo_id"]
@@ -190,6 +190,16 @@ async def test_post_repos_custom_gitlab_domain_url(client):
         repo = await s.get(Repository, repo_id)
         assert repo is not None
         assert repo.platform == "gitlab:gitlab.internal.example.com"
+
+
+async def test_post_repos_rejects_implicit_custom_gitlab_domain_url(client):
+    with patch("api.routers.repos.enqueue_full_index", new_callable=AsyncMock):
+        resp = await client.post(
+            "/api/repos",
+            json={"url": "https://gitlab.internal.example.com/group/repo"},
+        )
+
+    assert resp.status_code == 422
 
 
 async def test_get_repo_includes_platform(client):

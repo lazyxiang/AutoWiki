@@ -31,8 +31,9 @@ class IndexRequest(BaseModel):
             ``https://gitlab.com/group/repo``,
             ``https://bitbucket.org/owner/repo``,
             ``https://gitee.com/owner/repo`` (with or without ``.git`` suffix).
-            Self-hosted GitLab URLs are also supported when the hostname
-            contains ``gitlab`` (for example ``https://gitlab.company.com/group/repo``).
+            Self-hosted GitLab URLs are supported with the explicit
+            ``gitlab+https://`` scheme prefix (for example
+            ``gitlab+https://gitlab.company.com/group/repo``).
         wiki_language (str): ISO-639-1 language code for the generated wiki
             content.  Defaults to ``"en"`` (English).  Use ``"zh"`` to
             generate the wiki in Chinese (简体中文).
@@ -115,7 +116,8 @@ async def submit_repo(req: IndexRequest):
             status_code=422,
             detail=(
                 "Invalid or unsupported repository URL"
-                " (supported: github.com, gitlab.com + self-hosted gitlab domains,"
+                " (supported: github.com, gitlab.com,"
+                " explicit gitlab+https custom domains,"
                 " bitbucket.org, gitee.com)"
             ),
         )

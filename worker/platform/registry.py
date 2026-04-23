@@ -48,10 +48,6 @@ def detect_platform(url: str) -> Platform:
     if platform is not None:
         return platform
 
-    # Support self-hosted GitLab instances on custom domains.
-    if "gitlab" in host:
-        return GitLabPlatform(host=host)
-
     raise UnsupportedPlatformError(f"Unsupported host: {host!r}")
 
 

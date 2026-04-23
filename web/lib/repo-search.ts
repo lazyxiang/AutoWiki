@@ -1,8 +1,10 @@
 import type { Repository } from "@/lib/api";
 
+/** Token-based matching against repository owner, name, and description fields. */
 export function matchesQuery(query: string, repo: Repository): boolean {
-  if (!query.trim() || isRepositoryUrl(query)) return true;
-  const tokens = query.toLowerCase().split(/\s+/);
+  const trimmed = query.trim();
+  if (!trimmed) return true;
+  const tokens = trimmed.toLowerCase().split(/\s+/);
   const haystack =
     `${repo.owner} ${repo.name} ${repo.description}`.toLowerCase();
   return tokens.every((t) => haystack.includes(t));
@@ -38,7 +40,10 @@ export function filterRepositoriesForQuery(
 export function parseRepoUrl(
   url: string,
 ): { owner: string; name: string } | null {
-  const candidate = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+  const normalized = url.replace(/^gitlab\+(https?:\/\/)/i, "$1");
+  const candidate = /^https?:\/\//i.test(normalized)
+    ? normalized
+    : `https://${normalized}`;
   let parsed: URL;
   try {
     parsed = new URL(candidate);

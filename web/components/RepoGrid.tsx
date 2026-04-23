@@ -13,7 +13,16 @@ interface RepoGridProps {
 
 export function RepoGrid({ repos, query }: RepoGridProps) {
   const filtered = filterRepositoriesForQuery(query, repos);
-  const hasQuery = query.trim().length > 0 && !isRepositoryUrl(query);
+  const trimmedQuery = query.trim();
+  const hasInput = trimmedQuery.length > 0;
+  const isUrlQuery = isRepositoryUrl(trimmedQuery);
+  const hasQuery = hasInput && !isUrlQuery;
+  const emptyMessage =
+    repos.length === 0
+      ? "No repositories indexed yet. Be the first!"
+      : isUrlQuery
+        ? "No indexed repository matches this URL yet."
+        : "No repositories match your search.";
 
   return (
     <section className="max-w-7xl mx-auto px-6 py-16">
@@ -40,11 +49,7 @@ export function RepoGrid({ repos, query }: RepoGridProps) {
         </div>
       ) : (
         <div className="text-center py-12 border rounded-xl bg-slate-50/50">
-          <p className="text-muted-foreground">
-            {hasQuery
-              ? `No repositories match your search.`
-              : "No repositories indexed yet. Be the first!"}
-          </p>
+          <p className="text-muted-foreground">{emptyMessage}</p>
         </div>
       )}
     </section>

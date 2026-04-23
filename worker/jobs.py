@@ -281,9 +281,9 @@ def _copy_file_if_exists(src: Path, dest: Path) -> None:
         shutil.copy2(src, dest)
 
 
-def _restore_file_from_backup(src: Path, dest: Path, should_restore: bool) -> None:
+def _restore_file_from_backup(src: Path, dest: Path) -> None:
     _remove_path(dest)
-    if should_restore and src.exists():
+    if src.exists():
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dest)
 
@@ -388,6 +388,7 @@ async def _restore_full_index_state(
     db_path: str, repo_id: str, backup: _FullIndexBackup
 ) -> None:
     """Restore a previously indexed repo after a failed destructive reindex."""
+    repo_data_dir = backup.backup_dir.parent
 
     def _restore_files() -> None:
         wiki_dir = repo_data_dir / "wiki"
@@ -399,22 +400,18 @@ async def _restore_full_index_state(
             _restore_file_from_backup(
                 backup.backup_dir / "faiss.index",
                 repo_data_dir / "faiss.index",
-                (backup.backup_dir / "faiss.index").exists(),
             )
             _restore_file_from_backup(
                 backup.backup_dir / "faiss.meta.pkl",
                 repo_data_dir / "faiss.meta.pkl",
-                (backup.backup_dir / "faiss.meta.pkl").exists(),
             )
 
         if backup.snapshot_plan:
             _restore_file_from_backup(
                 backup.backup_dir / "ast" / "wiki_plan.json",
                 repo_data_dir / "ast" / "wiki_plan.json",
-                (backup.backup_dir / "ast" / "wiki_plan.json").exists(),
             )
 
-    repo_data_dir = backup.backup_dir.parent
     await asyncio.get_running_loop().run_in_executor(None, _restore_files)
 
     async with get_session(db_path) as s:

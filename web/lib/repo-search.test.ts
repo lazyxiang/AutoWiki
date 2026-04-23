@@ -54,6 +54,14 @@ describe("matchesQuery", () => {
   it("is case-insensitive", () => {
     expect(matchesQuery("PSF", makeRepo("psf", "requests"))).toBe(true);
   });
+  it("does not treat repository URLs as per-repo match-all queries", () => {
+    expect(
+      matchesQuery(
+        "https://github.com/unknown/project",
+        makeRepo("psf", "requests"),
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("parseRepoUrl", () => {
@@ -74,6 +82,9 @@ describe("parseRepoUrl", () => {
   });
   it("parses host URLs without scheme", () => {
     expect(parseRepoUrl("gitlab.com/group/repo")).toEqual({ owner: "group", name: "repo" });
+  });
+  it("parses explicit self-hosted GitLab URLs", () => {
+    expect(parseRepoUrl("gitlab+https://gitlab.example.com/group/repo")).toEqual({ owner: "group", name: "repo" });
   });
   it("returns null for too-short url", () => {
     expect(parseRepoUrl("github.com/owner")).toBeNull();
@@ -99,6 +110,18 @@ describe("sortRepositoriesByIndexedAt", () => {
       recent,
       old,
       missing,
+    ]);
+  });
+
+  it("treats invalid indexed_at values as missing dates", () => {
+    const old = makeRepo("old", "repo", "", "2024-01-01T00:00:00+00:00");
+    const invalid = makeRepo("bad", "repo", "", "not-a-date");
+    const recent = makeRepo("recent", "repo", "", "2024-02-01T00:00:00+00:00");
+
+    expect(sortRepositoriesByIndexedAt([old, invalid, recent])).toEqual([
+      recent,
+      old,
+      invalid,
     ]);
   });
 });
