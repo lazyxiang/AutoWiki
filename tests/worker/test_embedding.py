@@ -39,6 +39,30 @@ async def test_embed_batch_empty_returns_empty():
     assert result == []
 
 
+async def test_gemini_embed_batch_converts_429_client_error_to_timeout():
+    from worker.embedding import gemini_embed
+
+    class FakeClientError(Exception):
+        code = 429
+
+    fake_client = MagicMock()
+    fake_client.models.embed_content.side_effect = FakeClientError("quota")
+
+    with (
+        patch.object(gemini_embed, "_GENAI_AVAILABLE", True),
+        patch.object(
+            gemini_embed,
+            "_genai_errors",
+            MagicMock(ClientError=FakeClientError),
+            create=True,
+        ),
+        patch.object(gemini_embed.genai, "Client", return_value=fake_client),
+    ):
+        provider = gemini_embed.GeminiEmbedding(api_key="test-key")
+        with pytest.raises(TimeoutError):
+            await provider.embed_batch(["hello"])
+
+
 def test_make_embedding_provider_openai():
     from worker.embedding import make_embedding_provider
 
