@@ -136,6 +136,13 @@ async def test_github_fetch_metadata_bad_token():
             await _gh.fetch_metadata("owner", "private-repo", "bad-token")
 
 
+async def test_github_fetch_metadata_404_with_token_is_auth_error():
+    client = _make_github_client({}, status_code=404)
+    with patch("worker.platform.github.httpx.AsyncClient", return_value=client):
+        with pytest.raises(AuthenticationError, match="token has access"):
+            await _gh.fetch_metadata("owner", "private-repo", "bad-token")
+
+
 async def test_github_fetch_metadata_rate_limited_without_token_returns_defaults():
     client = _make_github_client({}, status_code=403)
     with patch("worker.platform.github.httpx.AsyncClient", return_value=client):
@@ -368,6 +375,10 @@ def test_detect_platform_github():
     assert isinstance(detect_platform("https://github.com/owner/repo"), GitHubPlatform)
 
 
+def test_detect_platform_github_without_scheme():
+    assert isinstance(detect_platform("github.com/owner/repo"), GitHubPlatform)
+
+
 def test_detect_platform_gitlab():
     assert isinstance(detect_platform("https://gitlab.com/group/repo"), GitLabPlatform)
 
@@ -381,6 +392,17 @@ def test_detect_platform_bitbucket():
 def test_detect_platform_unsupported():
     with pytest.raises(UnsupportedPlatformError):
         detect_platform("https://codeberg.org/owner/repo")
+
+
+def test_detect_platform_rejects_ssh_url_with_clear_message():
+    with pytest.raises(UnsupportedPlatformError, match="Only http\\(s\\) URLs"):
+        detect_platform("git@github.com:owner/repo.git")
+
+
+def test_detect_platform_accepts_git_prefixed_https_url():
+    assert isinstance(
+        detect_platform("git+https://github.com/owner/repo.git"), GitHubPlatform
+    )
 
 
 def test_get_platform_by_name_github():

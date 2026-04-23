@@ -41,6 +41,8 @@ _DOUBLE_CURLY_RE = re.compile(r"(\b\w+\{\{)([^\"]+)(\}\})")
 _EDGE_LABEL_RE = re.compile(r"(\|)([^\"|][^|]*?)(\|)")
 _MERMAID_FENCE_OPEN_RE = re.compile(r"^```mermaid[ \t]*$")
 _FENCE_CLOSE_RE = re.compile(r"^```[ \t]*$")
+# Assumes emitted Mermaid bodies do not begin lines with Markdown list/table
+# markers; re-check this if adding diagram types such as raw bullet mindmaps.
 _MARKDOWN_BOUNDARY_RE = re.compile(
     r"^(?:\*Source:|_Source:|#{1,6}\s|\|.+\|$|[-*+]\s+|\d+\.\s+)"
 )
@@ -285,6 +287,8 @@ def sanitize_mermaid_blocks(markdown: str) -> str:
     """Find and sanitise all ```mermaid code blocks within Markdown text.
 
     Leaves non-mermaid content untouched.
+    The unclosed-fence recovery uses _MARKDOWN_BOUNDARY_RE and assumes generated
+    Mermaid lines do not start with Markdown list/table markers.
 
     Args:
         markdown: Full Markdown document that may contain mermaid blocks.

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import urlsplit
+
 from worker.platform.base import Platform, UnsupportedPlatformError
 from worker.platform.bitbucket import BitbucketPlatform
 from worker.platform.github import GitHubPlatform
@@ -19,7 +21,17 @@ _BY_NAME: dict[str, Platform] = {
 
 
 def detect_platform(url: str) -> Platform:
-    host = url.replace("https://", "").replace("http://", "").split("/")[0].lower()
+    parsed = urlsplit(url)
+    scheme = parsed.scheme.removeprefix("git+").lower()
+    if parsed.scheme:
+        if scheme not in {"http", "https"}:
+            raise UnsupportedPlatformError(f"Only http(s) URLs are supported: {url!r}")
+        host = parsed.netloc.lower()
+    else:
+        if url.startswith("git@") or ":" in url.split("/", 1)[0]:
+            raise UnsupportedPlatformError(f"Only http(s) URLs are supported: {url!r}")
+        host = url.split("/", 1)[0].lower()
+
     platform = _BY_HOST.get(host)
     if platform is None:
         raise UnsupportedPlatformError(f"Unsupported host: {host!r}")

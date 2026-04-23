@@ -44,10 +44,16 @@ class GitHubPlatform(Platform):
                 resp.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 code = exc.response.status_code
-                if code == 404 and token is None:
-                    raise PrivateRepoError(
-                        f"GitHub repo {owner}/{name} is private. "
-                        "Add a GitHub token in Settings."
+                if code == 404:
+                    if token is None:
+                        raise PrivateRepoError(
+                            f"GitHub repo {owner}/{name} is private or not found. "
+                            "Add a GitHub token in Settings if this is a private repo."
+                        )
+                    raise AuthenticationError(
+                        "GitHub could not access this repository with the stored "
+                        "token. Check that the token has access to the repo in "
+                        "Settings."
                     )
                 if code in (401, 403) and token is not None:
                     raise AuthenticationError(
