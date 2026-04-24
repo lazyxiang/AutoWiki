@@ -164,6 +164,7 @@ function makeReport(overrides: Partial<FastReport> = {}): FastReport {
 
 describe("fast report evidence interactions", () => {
   const scrollIntoView = vi.fn();
+  let originalScrollIntoView: typeof Element.prototype.scrollIntoView;
 
   beforeEach(() => {
     cleanup();
@@ -173,6 +174,7 @@ describe("fast report evidence interactions", () => {
     replaceMock.mockReset();
     connectFastReportStreamMock.mockReset();
     connectFastReportStreamMock.mockImplementation(() => ({ close: vi.fn() }));
+    originalScrollIntoView = Element.prototype.scrollIntoView;
     Object.defineProperty(Element.prototype, "scrollIntoView", {
       configurable: true,
       value: scrollIntoView,
@@ -182,6 +184,10 @@ describe("fast report evidence interactions", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    Object.defineProperty(Element.prototype, "scrollIntoView", {
+      configurable: true,
+      value: originalScrollIntoView,
+    });
   });
 
   it("clicking a citation from an older section re-targets the workspace evidence rail to that section", async () => {

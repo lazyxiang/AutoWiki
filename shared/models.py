@@ -42,7 +42,7 @@ class Repository(Base):
         "WikiPage", back_populates="repository"
     )
     fast_reports: Mapped[list[FastReport]] = relationship(
-        "FastReport", back_populates="repository"
+        "FastReport", back_populates="repository", cascade="all, delete-orphan"
     )
 
 
@@ -135,7 +135,9 @@ class FastReport(Base):
         ),
     )
     id: Mapped[str] = mapped_column(String, primary_key=True)
-    repo_id: Mapped[str] = mapped_column(ForeignKey("repositories.id"), nullable=False)
+    repo_id: Mapped[str] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"), nullable=False
+    )
     commit_sha: Mapped[str] = mapped_column(String, nullable=False)
     status: Mapped[str] = mapped_column(String, nullable=False)
     active_section_id: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -150,6 +152,7 @@ class FastReport(Base):
         "FastReportSection",
         back_populates="report",
         foreign_keys="FastReportSection.report_id",
+        cascade="all, delete-orphan",
     )
     active_section: Mapped[FastReportSection | None] = relationship(
         "FastReportSection",
@@ -167,7 +170,7 @@ class FastReportSection(Base):
     __table_args__ = (UniqueConstraint("report_id", "id"),)
     id: Mapped[str] = mapped_column(String, primary_key=True)
     report_id: Mapped[str] = mapped_column(
-        ForeignKey("fast_reports.id"), nullable=False
+        ForeignKey("fast_reports.id", ondelete="CASCADE"), nullable=False
     )
     query: Mapped[str] = mapped_column(Text, nullable=False)
     title: Mapped[str] = mapped_column(String, nullable=False)

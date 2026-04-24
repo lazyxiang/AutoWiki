@@ -86,7 +86,7 @@ async def test_start_fast_report_returns_ids_and_persists_queued_rows(
             assert report.commit_sha == "deadbeef"
             assert report.status == "queued"
             assert report.active_section_id is None
-            assert report.expires_at > datetime.now() + timedelta(days=6)
+            assert report.expires_at > datetime.now(UTC).replace(tzinfo=None) + timedelta(days=6)
 
             assert section is not None
             assert section.report_id == report.id
@@ -456,7 +456,7 @@ async def test_start_fast_report_appends_section_to_existing_unexpired_report(
             assert report.status == "queued"
             assert report.commit_sha == "old-sha"
             assert report.active_section_id == "sec-old"
-            assert report.expires_at > datetime.now() + timedelta(days=6)
+            assert report.expires_at > datetime.now(UTC).replace(tzinfo=None) + timedelta(days=6)
 
             assert old_section is not None
             assert old_section.status == "done"

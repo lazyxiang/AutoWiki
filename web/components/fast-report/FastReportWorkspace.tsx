@@ -218,11 +218,12 @@ export function FastReportWorkspace({
       return;
     }
 
+    const reportIdToLoad = activeReportId;
     let cancelled = false;
 
     async function loadReport() {
       try {
-        const nextReport = await getFastReport(repoId, activeReportId);
+        const nextReport = await getFastReport(repoId, reportIdToLoad);
         if (cancelled) {
           return;
         }

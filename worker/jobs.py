@@ -379,9 +379,10 @@ async def _build_default_fast_report_retrievers(
     embedding = make_embedding_provider(cfg)
     store = await _load_faiss_for_research(repo_data_dir, embedding)
     wiki_pages = await _load_fast_report_wiki_pages(db_path, repo_id)
-    top_level_entries = sorted(
-        path.name for path in clone_root.iterdir() if path.name != ".git"
-    )[:8]
+    top_level_entries = await loop.run_in_executor(
+        None,
+        lambda: sorted(p.name for p in clone_root.iterdir() if p.name != ".git")[:8],
+    )
 
     async def _repository_structure(
         question: str, intent: FastReportQuestionIntent
@@ -2062,14 +2063,23 @@ async def run_fast_report(
         )
     except Exception as e:
         logger.exception("Fast report job failed: %s", e)
-        await _update_fast_report(db_path, report_id, status="failed")
-        await _update_fast_report_section(db_path, section_id, status="failed")
-        await _update_job(
-            db_path,
-            job_id,
-            status="failed",
-            error=str(e),
-            finished_at=datetime.now(UTC),
-            status_description=f"Error: {e}",
-        )
+        try:
+            await _update_fast_report(db_path, report_id, status="failed")
+        except Exception:
+            logger.exception("Could not mark report failed: %s", report_id)
+        try:
+            await _update_fast_report_section(db_path, section_id, status="failed")
+        except Exception:
+            logger.exception("Could not mark section failed: %s", section_id)
+        try:
+            await _update_job(
+                db_path,
+                job_id,
+                status="failed",
+                error=str(e),
+                finished_at=datetime.now(UTC),
+                status_description=f"Error: {e}",
+            )
+        except Exception:
+            logger.exception("Failed to mark job as failed (job_id=%s)", job_id)
         raise

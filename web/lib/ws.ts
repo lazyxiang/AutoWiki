@@ -127,7 +127,10 @@ export function connectFastReportStream(
       ws.close();
     }
   };
-  ws.onerror = () => handlers.onError("WebSocket error");
+  ws.onerror = () => {
+    handlers.onError("WebSocket error");
+    ws.close();
+  };
   return ws;
 }
 

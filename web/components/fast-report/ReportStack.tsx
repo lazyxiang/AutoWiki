@@ -9,7 +9,7 @@ export function sortSectionsForDisplay<T extends SortableSection>(sections: T[])
     .sort((left, right) => {
       const byCreatedAt =
         new Date(left.created_at).getTime() - new Date(right.created_at).getTime();
-      if (byCreatedAt !== 0) {
+      if (!Number.isNaN(byCreatedAt) && byCreatedAt !== 0) {
         return byCreatedAt;
       }
       return left.id.localeCompare(right.id);

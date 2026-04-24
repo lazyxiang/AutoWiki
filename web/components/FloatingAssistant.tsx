@@ -39,7 +39,10 @@ export function FloatingAssistant({ repoId }: FloatingAssistantProps) {
     const observer = new ResizeObserver(updateHeight);
     observer.observe(node);
 
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      document.documentElement.style.removeProperty("--floating-assistant-height");
+    };
   }, [owner, repo]);
 
   if (!owner || !repo) return null;
