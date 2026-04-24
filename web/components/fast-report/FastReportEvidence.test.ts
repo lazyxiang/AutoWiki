@@ -55,6 +55,7 @@ vi.mock("@/lib/ws", async () => {
 import { EvidenceBlock } from "./EvidenceBlock";
 import { EvidenceRail } from "./EvidenceRail";
 import { FastReportWorkspace } from "./FastReportWorkspace";
+import { ReportSection } from "./ReportSection";
 
 function makeCitation(
   overrides: Partial<FastReportCitation> = {},
@@ -349,6 +350,52 @@ describe("fast report evidence interactions", () => {
     );
     expect(screen.getAllByText("Auth and cache flow")).toHaveLength(1);
     expect(diagram?.getAttribute("data-focused")).toBe("true");
+  });
+
+  it("keeps aria-controls valid for aliased shared-diagram citations", () => {
+    const section = makeSection({
+      evidence_blocks: [makeEvidenceBlock()],
+      related_diagrams: [makeDiagram()],
+    });
+    const diagramOnlyCitationSection = {
+      ...section,
+      citations: [
+        makeCitation(),
+        makeCitation({
+          id: "cite-cache",
+          file_path: "worker/cache.py",
+          start_line: 7,
+          end_line: 14,
+          label: "Cache lookup",
+        }),
+      ],
+      evidence_blocks: [makeEvidenceBlock()],
+    };
+
+    render(
+      React.createElement(
+        React.Fragment,
+        null,
+        React.createElement(ReportSection, { section: diagramOnlyCitationSection }),
+        React.createElement(EvidenceRail, {
+          section: diagramOnlyCitationSection,
+          focusedCitationId: "cite-cache",
+        }),
+      ),
+    );
+
+    const citationButton = screen.getByRole("button", {
+      name: "Jump to evidence for worker/cache.py:7-14",
+    });
+    const controlsId = citationButton.getAttribute("aria-controls");
+
+    expect(controlsId).toBe("evidence-cite-cache");
+    expect(document.getElementById("evidence-cite-cache")).not.toBeNull();
+    expect(
+      document
+        .getElementById("evidence-cite-cache")
+        ?.getAttribute("data-evidence-alias-for"),
+    ).toBe("cite-auth");
   });
 
   it("dedupes diagrams shared by multiple citations while keeping them focus-aware", () => {

@@ -157,6 +157,19 @@ export function EvidenceRail({
                 }}
                 className="scroll-mt-24 space-y-3"
               >
+                {item.targetCitationIds
+                  .filter((citationId) => citationId !== item.citation.id)
+                  .map((citationId) => (
+                    <span
+                      key={citationId}
+                      id={`evidence-${citationId}`}
+                      data-evidence-alias-for={item.citation.id}
+                      className="sr-only"
+                      aria-hidden="true"
+                    >
+                      Evidence alias target for {citationId}
+                    </span>
+                  ))}
                 {item.blocks.map((block, index) => (
                   <EvidenceBlock
                     key={`${item.citation.id}-${block.full_start}-${index}`}
