@@ -7,6 +7,7 @@ variable, and hands control to ARQ's ``run_worker``.
 """
 
 from worker.jobs import (
+    _build_default_fast_report_retrievers,
     run_deep_research,
     run_fast_report,
     run_full_index,
@@ -26,7 +27,7 @@ async def startup(ctx):
         ctx (dict): Mutable ARQ context dictionary shared across all jobs
             running in this worker process.
     """
-    pass  # connection pool setup if needed
+    ctx["fast_report_retriever_factory"] = _build_default_fast_report_retrievers
 
 
 async def shutdown(ctx):

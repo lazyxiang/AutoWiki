@@ -22,6 +22,7 @@ import json
 import logging
 import shutil
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -31,9 +32,21 @@ from sqlalchemy import select as sa_select
 
 from shared.config import get_config
 from shared.database import get_session, init_db
+from shared.fast_report_types import (
+    FastReportCitation,
+    FastReportEvidenceBlock,
+    FastReportWikiLink,
+)
 from shared.models import FastReport, FastReportSection, Job, Repository, WikiPage
 from worker.embedding import make_embedding_provider
-from worker.fast_report import generate_fast_report_section
+from worker.fast_report import (
+    CodeEvidenceLayer,
+    CuratedKnowledgeLayer,
+    FastReportQuestionIntent,
+    RepositoryStructureLayer,
+    SemanticRetrievalLayer,
+    generate_fast_report_section,
+)
 from worker.llm import make_fast_llm_provider, make_llm_provider
 from worker.pipeline.ast_analysis import FileAnalysis, analyze_all_files
 from worker.pipeline.dependency_graph import build_dependency_graph
@@ -263,6 +276,179 @@ def _missing_fast_report_retriever(name: str):
         raise RuntimeError(f"Fast report retriever {name!r} is not configured")
 
     return _raiser
+
+
+FastReportRetrieverFactory = Callable[..., Awaitable[dict[str, Callable]]]
+
+
+def _make_fast_report_query(question: str, intent: FastReportQuestionIntent) -> str:
+    parts = [question]
+    if intent.target:
+        parts.append(intent.target)
+    if intent.question_type:
+        parts.append(intent.question_type.replace("_", " "))
+    return "\n".join(parts)
+
+
+def _make_fast_report_citation(
+    chunk: dict,
+    citation_id: str,
+    kind: str,
+) -> FastReportCitation:
+    file_path = chunk.get("file", "unknown")
+    start_line = int(chunk.get("start_line") or 1)
+    end_line = int(chunk.get("end_line") or start_line)
+    return FastReportCitation(
+        id=citation_id,
+        file_path=file_path,
+        start_line=start_line,
+        end_line=end_line,
+        label=Path(file_path).name,
+        kind=kind,
+        score=chunk.get("score"),
+    )
+
+
+def _make_fast_report_evidence_block(
+    chunk: dict,
+    citation_id: str,
+) -> FastReportEvidenceBlock:
+    start_line = int(chunk.get("start_line") or 1)
+    end_line = int(chunk.get("end_line") or start_line)
+    return FastReportEvidenceBlock(
+        citation_id=citation_id,
+        snippet_start=start_line,
+        snippet_end=end_line,
+        full_start=start_line,
+        full_end=end_line,
+        code=chunk.get("text", ""),
+        symbol_path=chunk.get("symbol_path"),
+    )
+
+
+async def _load_fast_report_wiki_pages(
+    db_path: str, repo_id: str
+) -> list[tuple[str, str, str]]:
+    async with get_session(db_path) as s:
+        result = await s.execute(
+            sa_select(WikiPage)
+            .where(WikiPage.repo_id == repo_id)
+            .order_by(WikiPage.page_order, WikiPage.title)
+        )
+        return [
+            (page.slug, page.title, page.content or "")
+            for page in result.scalars().all()
+        ]
+
+
+async def _build_default_fast_report_retrievers(
+    *,
+    repo_id: str,
+    db_path: str,
+    cfg,
+) -> dict[str, Callable]:
+    repo_data_dir = cfg.data_dir / "repos" / repo_id
+    clone_root = repo_data_dir / "clone"
+    loop = asyncio.get_running_loop()
+    readme = await loop.run_in_executor(None, extract_readme, clone_root)
+    embedding = make_embedding_provider(cfg)
+    store = await _load_faiss_for_research(repo_data_dir, embedding)
+    wiki_pages = await _load_fast_report_wiki_pages(db_path, repo_id)
+    top_level_entries = sorted(
+        path.name for path in clone_root.iterdir() if path.name != ".git"
+    )[:8]
+
+    async def _repository_structure(
+        question: str, intent: FastReportQuestionIntent
+    ) -> RepositoryStructureLayer:
+        signals = [
+            f"Top-level entries: {', '.join(top_level_entries)}"
+            if top_level_entries
+            else "Top-level entries unavailable."
+        ]
+        if readme:
+            signals.append(readme.splitlines()[0][:160])
+            return RepositoryStructureLayer(
+                signals=signals,
+                citations=[
+                    FastReportCitation(
+                        id="struct-1",
+                        file_path="README.md",
+                        start_line=1,
+                        end_line=max(1, min(len(readme.splitlines()), 20)),
+                        label="README",
+                        kind="repository_structure",
+                    )
+                ],
+            )
+        return RepositoryStructureLayer(signals=signals, citations=[])
+
+    async def _code_evidence(
+        question: str, intent: FastReportQuestionIntent
+    ) -> CodeEvidenceLayer:
+        query_vec = await embedding.embed(_make_fast_report_query(question, intent))
+        chunks = store.search(query_vec, k=4)
+        citations = [
+            _make_fast_report_citation(chunk, f"code-{i + 1}", "code_evidence")
+            for i, chunk in enumerate(chunks)
+        ]
+        return CodeEvidenceLayer(
+            snippets=list(chunks),
+            citations=citations,
+            evidence_blocks=[
+                _make_fast_report_evidence_block(chunk, citation.id)
+                for chunk, citation in zip(chunks, citations, strict=False)
+            ],
+        )
+
+    async def _semantic(
+        question: str, intent: FastReportQuestionIntent
+    ) -> SemanticRetrievalLayer:
+        query_vec = await embedding.embed(_make_fast_report_query(question, intent))
+        chunks = store.search(query_vec, k=3, doc_k=0)
+        return SemanticRetrievalLayer(
+            passages=[chunk.get("text", "") for chunk in chunks],
+            citations=[
+                _make_fast_report_citation(
+                    chunk,
+                    f"sem-{i + 1}",
+                    "semantic_retrieval",
+                )
+                for i, chunk in enumerate(chunks)
+            ],
+        )
+
+    async def _curated(
+        question: str, intent: FastReportQuestionIntent
+    ) -> CuratedKnowledgeLayer:
+        lowered = question.lower()
+        ranked_pages = sorted(
+            wiki_pages,
+            key=lambda page: (
+                lowered not in f"{page[1]} {page[2]}".lower(),
+                len(page[2]),
+                page[1],
+            ),
+        )[:3]
+        return CuratedKnowledgeLayer(
+            summaries=[page[2][:200] for page in ranked_pages if page[2]],
+            wiki_pages=[
+                FastReportWikiLink(
+                    slug=slug,
+                    title=title,
+                    reason="Related generated wiki page",
+                )
+                for slug, title, _content in ranked_pages
+            ],
+            diagrams=[],
+        )
+
+    return {
+        "repository_structure_retriever": _repository_structure,
+        "code_evidence_retriever": _code_evidence,
+        "semantic_retriever": _semantic,
+        "curated_knowledge_retriever": _curated,
+    }
 
 
 def _make_faiss_store(repo_data_dir: Path, embedding) -> FAISSStore:
@@ -1783,24 +1969,32 @@ async def run_fast_report(
             repo_name = repo.name if repo is not None else repo_id
 
         llm = make_llm_provider(cfg)
+        retrievers = await ctx.get(
+            "fast_report_retriever_factory",
+            _build_default_fast_report_retrievers,
+        )(
+            repo_id=repo_id,
+            db_path=db_path,
+            cfg=cfg,
+        )
         result = await generate_fast_report_section(
             question=question,
             repo_name=repo_name,
             llm=llm,
-            repository_structure_retriever=ctx.get(
-                "fast_report_repository_structure_retriever",
+            repository_structure_retriever=retrievers.get(
+                "repository_structure_retriever",
                 _missing_fast_report_retriever("fast_report_repository_structure"),
             ),
-            code_evidence_retriever=ctx.get(
-                "fast_report_code_evidence_retriever",
+            code_evidence_retriever=retrievers.get(
+                "code_evidence_retriever",
                 _missing_fast_report_retriever("fast_report_code_evidence"),
             ),
-            semantic_retriever=ctx.get(
-                "fast_report_semantic_retriever",
+            semantic_retriever=retrievers.get(
+                "semantic_retriever",
                 _missing_fast_report_retriever("fast_report_semantic"),
             ),
-            curated_knowledge_retriever=ctx.get(
-                "fast_report_curated_knowledge_retriever",
+            curated_knowledge_retriever=retrievers.get(
+                "curated_knowledge_retriever",
                 _missing_fast_report_retriever("fast_report_curated_knowledge"),
             ),
         )

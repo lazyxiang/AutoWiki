@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from shared.fast_report_types import (
     FastReportCitation,
@@ -340,17 +340,23 @@ async def test_enqueue_fast_report_enqueues_expected_payload():
     )
 
 
-async def test_run_fast_report_persists_completed_section(tmp_path, monkeypatch):
+async def test_worker_startup_registers_fast_report_runtime():
+    from worker.main import startup
+
+    ctx = {}
+
+    await startup(ctx)
+
+    assert callable(ctx["fast_report_retriever_factory"])
+
+
+async def test_run_fast_report_persists_completed_section(
+    tmp_path, monkeypatch, mock_llm, mock_embedding
+):
     from shared.database import dispose_db, get_session, init_db
-    from shared.fast_report_types import (
-        FastReportCitation,
-        FastReportDiagram,
-        FastReportEvidenceBlock,
-        FastReportWikiLink,
-    )
-    from shared.models import FastReport, FastReportSection, Job, Repository
-    from worker.fast_report import FastReportSectionResult
+    from shared.models import FastReport, FastReportSection, Job, Repository, WikiPage
     from worker.jobs import run_fast_report
+    from worker.main import startup
 
     db_path = str(tmp_path / "t.db")
     monkeypatch.setenv("DATABASE_PATH", db_path)
@@ -387,57 +393,88 @@ async def test_run_fast_report_persists_completed_section(tmp_path, monkeypatch)
                 status="queued",
             )
         )
-        await s.commit()
-
-    result = FastReportSectionResult(
-        title="Indexing Flow",
-        summary="The worker job orchestrates indexing.",
-        markdown=(
-            "# Indexing Flow\n\n## Overview\n\n- Starts in worker/jobs.py [code-1]"
-        ),
-        citations=[
-            FastReportCitation(
-                id="code-1",
-                file_path="worker/jobs.py",
-                start_line=1,
-                end_line=20,
-                label="run_fast_report",
-                kind="code_evidence",
-            )
-        ],
-        evidence_blocks=[
-            FastReportEvidenceBlock(
-                citation_id="code-1",
-                snippet_start=1,
-                snippet_end=20,
-                full_start=1,
-                full_end=25,
-                code="async def run_fast_report(...): ...",
-                symbol_path="worker.jobs.run_fast_report",
-            )
-        ],
-        related_wiki_pages=[
-            FastReportWikiLink(
+        s.add(
+            WikiPage(
+                id="wp1",
+                repo_id="r1",
                 slug="overview",
                 title="Overview",
-                reason="Architecture summary",
+                content="Architecture summary for the indexing pipeline.",
+                description="System overview",
+                page_order=0,
             )
-        ],
-        related_diagrams=[
-            FastReportDiagram(
-                id="diagram-1",
-                title="Pipeline Flow",
-                type="flowchart",
-                source="wiki",
-                reason="System diagram",
-            )
-        ],
-    )
+        )
+        await s.commit()
 
-    with patch("worker.jobs.generate_fast_report_section", return_value=result):
+    repo_root = tmp_path / "repos" / "r1" / "clone"
+    repo_root.mkdir(parents=True)
+    (repo_root / "README.md").write_text("# AutoWiki\n\nIndexing overview.")
+
+    async def _structured(*args, **kwargs):
+        prompt = args[0]
+        if "Classify the user's repository question" in prompt:
+            return {
+                "question_type": "execution_flow",
+                "target": "indexing",
+                "answer_shape": "report",
+                "evidence_shape": "entry-points",
+            }
+        return {
+            "title": "Indexing Flow",
+            "summary": "The worker job orchestrates indexing.",
+            "sections": [
+                {
+                    "heading": "Overview",
+                    "claims": [
+                        {
+                            "text": "Indexing starts in worker/jobs.py.",
+                            "citation_ids": ["code-1"],
+                            "supporting_layers": ["code_evidence"],
+                        }
+                    ],
+                }
+            ],
+            "notes": ["Uses the queued fast report background flow."],
+        }
+
+    mock_llm.generate_structured.side_effect = _structured
+
+    fake_store = MagicMock()
+
+    def _search(query_vec, k=5, doc_k=1):
+        if doc_k == 0:
+            return [
+                {
+                    "file": "README.md",
+                    "text": "The README describes the indexing pipeline.",
+                    "start_line": 1,
+                    "end_line": 3,
+                    "score": 0.61,
+                }
+            ]
+        return [
+            {
+                "file": "worker/jobs.py",
+                "text": "async def run_full_index(...): ...",
+                "start_line": 539,
+                "end_line": 566,
+                "score": 0.92,
+            }
+        ]
+
+    fake_store.search.side_effect = _search
+
+    ctx = {}
+    await startup(ctx)
+
+    with (
+        patch("worker.jobs.make_llm_provider", return_value=mock_llm),
+        patch("worker.jobs.make_embedding_provider", return_value=mock_embedding),
+        patch("worker.jobs._load_faiss_for_research", return_value=fake_store),
+    ):
         try:
             await run_fast_report(
-                {},
+                ctx,
                 repo_id="r1",
                 job_id="j1",
                 report_id="fr1",
@@ -470,9 +507,8 @@ async def test_run_fast_report_persists_completed_section(tmp_path, monkeypatch)
                 assert json.loads(section.related_wiki_pages_json)[0]["slug"] == (
                     "overview"
                 )
-                assert json.loads(section.related_diagrams_json)[0]["id"] == (
-                    "diagram-1"
-                )
+                assert "diagram" not in section.related_diagrams_json.lower()
+                assert fake_store.search.call_count >= 2
         finally:
             await dispose_db(db_path)
             reset_config()
