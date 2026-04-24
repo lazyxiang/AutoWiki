@@ -18,14 +18,20 @@ def _awaited_input_sizes(mock) -> list[int]:
     return [len(call.kwargs["input"]) for call in mock.await_args_list]
 
 
+@pytest.fixture(autouse=True)
+def mock_openai_client():
+    with patch("worker.embedding.openai_embed.AsyncOpenAI") as mock:
+        yield mock
+
+
 async def test_embed_returns_float32_array():
     provider = OpenAIEmbedding(api_key="test-key")
     fake_vector = [0.1] * 1536
-    with patch.object(
-        provider._client.embeddings, "create", new_callable=AsyncMock
-    ) as mock:
-        mock.return_value = AsyncMock(data=[AsyncMock(embedding=fake_vector)])
-        result = await provider.embed("hello world")
+    # provider._client is already the mock from our fixture
+    provider._client.embeddings.create = AsyncMock(
+        return_value=AsyncMock(data=[AsyncMock(embedding=fake_vector)])
+    )
+    result = await provider.embed("hello world")
     assert isinstance(result, np.ndarray)
     assert result.dtype == np.float32
     assert result.shape == (1536,)
@@ -33,11 +39,8 @@ async def test_embed_returns_float32_array():
 
 async def test_embed_batch_returns_list():
     provider = OpenAIEmbedding(api_key="test-key")
-    with patch.object(
-        provider._client.embeddings, "create", new_callable=AsyncMock
-    ) as mock:
-        mock.return_value = _openai_response(2)
-        result = await provider.embed_batch(["a", "b"])
+    provider._client.embeddings.create = AsyncMock(return_value=_openai_response(2))
+    result = await provider.embed_batch(["a", "b"])
     assert len(result) == 2
     assert all(isinstance(v, np.ndarray) for v in result)
 
@@ -50,32 +53,30 @@ async def test_embed_batch_empty_returns_empty():
 
 async def test_openai_embed_batch_uses_50_item_sub_batches():
     provider = OpenAIEmbedding(api_key="test-key")
-    with patch.object(
-        provider._client.embeddings, "create", new_callable=AsyncMock
-    ) as mock:
-        mock.side_effect = [_openai_response(50), _openai_response(1)]
+    provider._client.embeddings.create = AsyncMock(
+        side_effect=[_openai_response(50), _openai_response(1)]
+    )
 
-        result = await provider.embed_batch(["text"] * 51)
+    result = await provider.embed_batch(["text"] * 51)
 
     assert len(result) == 51
-    assert _awaited_input_sizes(mock) == [50, 1]
+    assert _awaited_input_sizes(provider._client.embeddings.create) == [50, 1]
 
 
 async def test_openai_embed_batch_retries_only_failed_sub_batch():
     provider = OpenAIEmbedding(api_key="test-key")
-    with patch.object(
-        provider._client.embeddings, "create", new_callable=AsyncMock
-    ) as mock:
-        mock.side_effect = [
+    provider._client.embeddings.create = AsyncMock(
+        side_effect=[
             _openai_response(50),
             TimeoutError("quota"),
             _openai_response(1),
         ]
-        with patch("worker.utils.retry.asyncio.sleep", new_callable=AsyncMock):
-            result = await provider.embed_batch(["text"] * 51)
+    )
+    with patch("worker.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        result = await provider.embed_batch(["text"] * 51)
 
     assert len(result) == 51
-    assert _awaited_input_sizes(mock) == [50, 1, 1]
+    assert _awaited_input_sizes(provider._client.embeddings.create) == [50, 1, 1]
 
 
 async def test_gemini_embed_batch_converts_429_client_error_to_timeout():

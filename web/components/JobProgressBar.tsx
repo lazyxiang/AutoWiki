@@ -3,7 +3,7 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Progress } from "@/components/ui/progress";
 import { useJobProgress } from "@/lib/ws";
-import { repoPath } from "@/lib/utils";
+import { repoPath, cn } from "@/lib/utils";
 import { parseJobProgressDetail } from "@/lib/job-progress";
 
 interface Props {
@@ -47,23 +47,23 @@ export function JobProgressBar({ jobId, repoId, owner, repo }: Props) {
       </div>
       <Progress
         value={progress}
-        className={`h-2 ${retrying ? "opacity-60" : ""}`}
+        className={cn("h-2", retrying ? "opacity-60" : "")}
       />
       <p className="text-xs text-muted-foreground">{progress}%</p>
       {progressDetail?.kind === "page" && (
-        <div className="flex flex-col gap-2">
-          <p className="rounded-md border bg-muted/30 px-3 py-2 text-sm font-medium text-foreground">
+        <div className="flex flex-col gap-2 animate-in fade-in slide-in-from-bottom-2 duration-500">
+          <p className="rounded-md border bg-indigo-50/50 dark:bg-indigo-900/20 border-indigo-100 dark:border-indigo-800 px-3 py-2 text-sm font-medium text-indigo-900 dark:text-indigo-200">
             {progressDetail.title}
           </p>
         </div>
       )}
       {progressDetail?.kind === "batch" && (
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-2 animate-in fade-in slide-in-from-bottom-2 duration-500">
           <ul className="space-y-2">
             {progressDetail.titles.map((title) => (
               <li
                 key={title}
-                className="rounded-md border bg-muted/30 px-3 py-2 text-sm font-medium text-foreground"
+                className="rounded-md border bg-indigo-50/50 dark:bg-indigo-900/20 border-indigo-100 dark:border-indigo-800 px-3 py-2 text-sm font-medium text-indigo-900 dark:text-indigo-200"
               >
                 {title}
               </li>
@@ -77,10 +77,13 @@ export function JobProgressBar({ jobId, repoId, owner, repo }: Props) {
             {progressDetail.pages.map((page) => (
               <li
                 key={page.title}
-                className="rounded-md border bg-muted/30 px-3 py-2"
+                className="rounded-md border bg-indigo-50/50 dark:bg-indigo-900/20 border-indigo-100 dark:border-indigo-800 px-3 py-2 animate-in fade-in slide-in-from-bottom-2 duration-500"
               >
-                <p className="text-sm font-medium text-foreground">{page.title}</p>
-                <p className="text-xs text-muted-foreground">{page.stage}</p>
+                <div className="flex justify-between items-center">
+                  <p className="text-sm font-medium text-indigo-900 dark:text-indigo-200">{page.title}</p>
+                  <span className="flex h-2 w-2 rounded-full bg-indigo-500 dark:bg-indigo-400 animate-pulse" />
+                </div>
+                <p className="text-xs text-indigo-600/70 dark:text-indigo-300/70 mt-0.5 font-medium">{page.stage}</p>
               </li>
             ))}
           </ul>

@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useState, useEffect, useRef } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   startResearch,
   type ResearchFinding,
@@ -23,6 +24,8 @@ export default function ResearchPanel({ repoId }: { repoId: string }) {
     "idle",
   );
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const searchParams = useSearchParams();
+  const initialQueryHandled = useRef(false);
 
   const onPlan = useCallback((p: ResearchPlanStep[]) => setPlan(p), []);
   const onStep = useCallback((f: ResearchFinding) => {
@@ -37,21 +40,35 @@ export default function ResearchPanel({ repoId }: { repoId: string }) {
 
   useResearchStream(repoId, jobId, onPlan, onStep, onReport, onDone, onError);
 
-  const submit = async () => {
-    if (!question.trim()) return;
+  const submit = useCallback(async (query?: string) => {
+    const text = query !== undefined ? query : question;
+    if (!text.trim()) return;
     setPlan([]);
     setFindings([]);
     setReport("");
     setErrorMsg(null);
     setStatus("running");
     try {
-      const { job_id } = await startResearch(repoId, question.trim());
+      const { job_id } = await startResearch(repoId, text.trim());
       setJobId(job_id);
+      if (query === undefined) setQuestion("");
     } catch (e) {
       setErrorMsg(String(e));
       setStatus("error");
     }
-  };
+  }, [question, repoId]);
+
+  // Handle initial query from URL
+  useEffect(() => {
+    if (!initialQueryHandled.current) {
+      const q = searchParams.get("q");
+      if (q) {
+        initialQueryHandled.current = true;
+        // Using a tick to avoid cascading render lint error
+        setTimeout(() => submit(q), 0);
+      }
+    }
+  }, [searchParams, submit]);
 
   return (
     <div className="flex flex-col gap-4 p-4 max-w-3xl mx-auto">
@@ -63,7 +80,7 @@ export default function ResearchPanel({ repoId }: { repoId: string }) {
           disabled={status === "running"}
         />
         <Button
-          onClick={submit}
+          onClick={() => submit()}
           disabled={status === "running" || !question.trim()}
         >
           Research

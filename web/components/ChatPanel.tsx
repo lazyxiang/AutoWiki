@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
+import { useSearchParams } from "next/navigation";
 import { createChatSession } from "@/lib/api";
 import { useChatStream } from "@/lib/ws";
 import { Send, Loader2, Bot, User } from "lucide-react";
@@ -31,6 +32,8 @@ export default function ChatPanel({ repoId }: { repoId: string }) {
   const [streaming, setStreaming] = useState(false);
   const streamingRef = useRef("");
   const viewportRef = useRef<HTMLDivElement>(null);
+  const searchParams = useSearchParams();
+  const initialQueryHandled = useRef(false);
 
   useEffect(() => {
     createChatSession(repoId).then((d) => setSessionId(d.session_id));
@@ -83,15 +86,37 @@ export default function ChatPanel({ repoId }: { repoId: string }) {
   const { sendMessage } = useChatStream(repoId, sessionId, handleChunk, handleDone, handleError);
 
   /**
+   * Submits a message to the chat stream.
+   * Extracted as a stable helper to avoid effect instability.
+   */
+  const submitText = useCallback((text: string) => {
+    if (!text.trim() || !sessionId) return;
+    setMessages((prev) => [...prev, { role: "user", content: text }]);
+    setStreaming(true);
+    sendMessage(text);
+  }, [sessionId, sendMessage]);
+
+  /**
    * Submits the user's message to the chat stream.
    */
-  const submit = () => {
-    if (!input.trim() || streaming) return;
-    setMessages((prev) => [...prev, { role: "user", content: input }]);
-    setStreaming(true);
-    sendMessage(input);
-    setInput("");
-  };
+  const submit = useCallback((query?: string) => {
+    if (streaming) return;
+    const text = query !== undefined ? query : input;
+    submitText(text);
+    if (query === undefined) setInput("");
+  }, [input, streaming, submitText]);
+
+  // Handle initial query from URL (runs once after sessionId is ready)
+  useEffect(() => {
+    if (sessionId && !initialQueryHandled.current) {
+      const q = searchParams.get("q");
+      if (q) {
+        initialQueryHandled.current = true;
+        // Using a tick to avoid cascading render lint error
+        setTimeout(() => submitText(q), 0);
+      }
+    }
+  }, [sessionId, searchParams, submitText]);
 
   return (
     <div className="flex flex-col h-full bg-white">
@@ -170,7 +195,7 @@ export default function ChatPanel({ repoId }: { repoId: string }) {
           />
           <Button
             size="icon-sm"
-            onClick={submit}
+            onClick={() => submit()}
             disabled={streaming || !sessionId || !input.trim()}
             className={cn(
               "absolute right-1 transition-all",

@@ -51,30 +51,6 @@ export function WikiSidebar({ pages, owner, repo, repoId, lastCommit = "", index
         <p className="text-foreground pb-1 text-xs">{indexedLine}</p>
       )}
       <div className="mt-3" />
-      <ul className="space-y-1 mb-4">
-        <li>
-          <Link
-            href={`${basePath}/chat`}
-            className={cn(
-              "block text-sm px-2 py-1.5 rounded-lg hover:bg-slate-200/50 transition-colors",
-              pathname === `${basePath}/chat` && "bg-slate-200/50 font-medium text-primary"
-            )}
-          >
-            Chat
-          </Link>
-        </li>
-        <li>
-          <Link
-            href={`${basePath}/research`}
-            className={cn(
-              "block text-sm px-2 py-1.5 rounded-lg hover:bg-slate-200/50 transition-colors",
-              pathname === `${basePath}/research` && "bg-slate-200/50 font-medium text-primary"
-            )}
-          >
-            Research
-          </Link>
-        </li>
-      </ul>
       <div className="my-4 border-t border-slate-200" />
       <ul className="space-y-1">
         {pages.map(page => (
