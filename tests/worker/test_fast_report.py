@@ -89,6 +89,43 @@ def test_assemble_fast_report_markdown_uses_canonical_heading_order():
     assert "- Diagram: Pipeline Flow (`flowchart`) - Visual call path" in markdown
 
 
+def test_parse_draft_sections_normalizes_heading_variants():
+    from worker.fast_report import _parse_draft_sections
+
+    section_claims = _parse_draft_sections(
+        [
+            {
+                "heading": "Implementation Details",
+                "claims": [
+                    {
+                        "text": "Key details live in worker/jobs.py.",
+                        "citation_ids": ["code-1"],
+                        "supporting_layers": ["code_evidence"],
+                    }
+                ],
+            },
+            {
+                "heading": "Execution Flow",
+                "claims": [
+                    {
+                        "text": "The job clones before later stages run.",
+                        "citation_ids": ["struct-1", "code-1"],
+                        "supporting_layers": [
+                            "repository_structure",
+                            "code_evidence",
+                        ],
+                    }
+                ],
+            },
+        ]
+    )
+
+    assert list(section_claims) == [
+        "Key Implementation Details",
+        "Execution Flow / Steps",
+    ]
+
+
 async def test_generate_fast_report_section_returns_structured_section(mock_llm):
     from worker.fast_report import (
         CodeEvidenceLayer,
@@ -128,7 +165,7 @@ async def test_generate_fast_report_section_returns_structured_section(mock_llm)
                     ],
                 },
                 {
-                    "heading": "Execution Flow / Steps",
+                    "heading": "Execution Flow",
                     "claims": [
                         {
                             "text": (
@@ -204,13 +241,21 @@ async def test_generate_fast_report_section_returns_structured_section(mock_llm)
             passages=["The README describes a six-stage pipeline."],
             citations=[
                 FastReportCitation(
+                    id="code-2",
+                    file_path="worker/ingestion.py",
+                    start_line=10,
+                    end_line=40,
+                    label="clone_or_fetch",
+                    kind="code_evidence",
+                ),
+                FastReportCitation(
                     id="sem-1",
                     file_path="README.md",
                     start_line=1,
                     end_line=20,
                     label="README pipeline summary",
                     kind="semantic_retrieval",
-                )
+                ),
             ],
         )
 
@@ -251,11 +296,9 @@ async def test_generate_fast_report_section_returns_structured_section(mock_llm)
     assert "## Execution Flow / Steps" in result.markdown
     assert "## Further Explore" in result.markdown
     assert "The system uses Celery queues." not in result.markdown
-    assert [citation.id for citation in result.citations] == [
-        "struct-1",
-        "code-1",
-        "sem-1",
-    ]
+    assert [citation.id for citation in result.citations] == ["code-1", "struct-1"]
+    assert "code-2" not in result.markdown
+    assert "sem-1" not in result.markdown
     assert [block.citation_id for block in result.evidence_blocks] == ["code-1"]
     assert [page.slug for page in result.related_wiki_pages] == ["overview"]
     assert [diagram.id for diagram in result.related_diagrams] == ["diagram-1"]

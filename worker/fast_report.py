@@ -36,6 +36,26 @@ CANONICAL_HEADINGS = [
     "Further Explore",
 ]
 SUPPORTED_CLAIM_LAYERS = {"repository_structure", "code_evidence"}
+HEADING_ALIASES = {
+    "overview": "Overview",
+    "core components": "Core Implementation Components",
+    "implementation components": "Core Implementation Components",
+    "core implementation components": "Core Implementation Components",
+    "key implementation details": "Key Implementation Details",
+    "implementation details": "Key Implementation Details",
+    "key details": "Key Implementation Details",
+    "execution flow": "Execution Flow / Steps",
+    "execution flow / steps": "Execution Flow / Steps",
+    "execution steps": "Execution Flow / Steps",
+    "flow": "Execution Flow / Steps",
+    "configuration": "Configuration",
+    "config": "Configuration",
+    "use cases": "Use Cases",
+    "use case": "Use Cases",
+    "notes": "Notes",
+    "further explore": "Further Explore",
+    "further reading": "Further Explore",
+}
 
 
 @dataclass(slots=True)
@@ -299,6 +319,11 @@ def assemble_fast_report_markdown(
     return "\n".join(lines).strip()
 
 
+def _normalize_heading(heading: str) -> str:
+    normalized = " ".join(heading.lower().replace("_", " ").split())
+    return HEADING_ALIASES.get(normalized, heading.strip())
+
+
 def _dedupe_citations(citations: list[FastReportCitation]) -> list[FastReportCitation]:
     seen: set[str] = set()
     result: list[FastReportCitation] = []
@@ -308,6 +333,21 @@ def _dedupe_citations(citations: list[FastReportCitation]) -> list[FastReportCit
         seen.add(citation.id)
         result.append(citation)
     return result
+
+
+def _collect_citation_ids_in_markdown_order(
+    section_claims: dict[str, list[FastReportClaim]],
+) -> list[str]:
+    ordered_ids: list[str] = []
+    seen: set[str] = set()
+    for heading in CANONICAL_HEADINGS:
+        for claim in section_claims.get(heading, []):
+            for citation_id in claim.citation_ids:
+                if citation_id in seen:
+                    continue
+                seen.add(citation_id)
+                ordered_ids.append(citation_id)
+    return ordered_ids
 
 
 def _build_generation_prompt(
@@ -356,7 +396,7 @@ def _parse_draft_sections(
 ) -> dict[str, list[FastReportClaim]]:
     section_claims: dict[str, list[FastReportClaim]] = {}
     for raw_section in raw_sections:
-        heading = raw_section.get("heading", "").strip()
+        heading = _normalize_heading(raw_section.get("heading", ""))
         if not heading:
             continue
         claims = [
@@ -368,7 +408,7 @@ def _parse_draft_sections(
             for claim in raw_section.get("claims", [])
             if claim.get("text")
         ]
-        section_claims[heading] = arbitrate_report_claims(claims)
+        section_claims.setdefault(heading, []).extend(arbitrate_report_claims(claims))
     return section_claims
 
 
@@ -404,11 +444,19 @@ async def generate_fast_report_section(
         related_wiki_pages=layers.curated_knowledge.wiki_pages,
         related_diagrams=layers.curated_knowledge.diagrams,
     )
-    citations = _dedupe_citations(
-        layers.repository_structure.citations
-        + layers.code_evidence.citations
-        + layers.semantic_retrieval.citations
-    )
+    citations_by_id = {
+        citation.id: citation
+        for citation in _dedupe_citations(
+            layers.repository_structure.citations
+            + layers.code_evidence.citations
+            + layers.semantic_retrieval.citations
+        )
+    }
+    citations = [
+        citations_by_id[citation_id]
+        for citation_id in _collect_citation_ids_in_markdown_order(section_claims)
+        if citation_id in citations_by_id
+    ]
     return FastReportSectionResult(
         title=raw.get("title", "Fast Report"),
         summary=raw.get("summary", ""),
