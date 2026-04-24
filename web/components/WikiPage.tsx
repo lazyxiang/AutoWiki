@@ -14,7 +14,7 @@ import DOMPurify from "dompurify";
 /**
  * Renders a Mermaid diagram using the mermaid.js library with light theme and interactivity.
  */
-function MermaidBlock({ children }: { children: string }) {
+export function MermaidBlock({ children }: { children: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const outerRef = useRef<HTMLDivElement>(null);

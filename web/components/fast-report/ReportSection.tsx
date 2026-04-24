@@ -1,8 +1,13 @@
+import type { Components } from "react-markdown";
 import type { FastReportSection as FastReportSectionData } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
+
+import { MermaidBlock } from "@/components/WikiPage";
+
+import { CitationLink } from "./CitationLink";
 
 const STATUS_LABELS: Record<string, string> = {
   pending: "Generating",
@@ -11,6 +16,34 @@ const STATUS_LABELS: Record<string, string> = {
   done: "Ready",
   error: "Issue",
 };
+
+const CITATION_GROUP_RE = /\[([A-Za-z0-9_-]+(?:,\s*[A-Za-z0-9_-]+)*)\]/g;
+
+export function injectCitationLinks(markdown: string, citationIds: Set<string>) {
+  let inFence = false;
+
+  return markdown
+    .split("\n")
+    .map((line) => {
+      if (line.trimStart().startsWith("```")) {
+        inFence = !inFence;
+        return line;
+      }
+
+      if (inFence) {
+        return line;
+      }
+
+      return line.replace(CITATION_GROUP_RE, (match, content: string) => {
+        const ids = content.split(",").map((id) => id.trim());
+        if (!ids.every((id) => citationIds.has(id))) {
+          return match;
+        }
+        return ids.map((id) => `[${id}](#evidence-${id})`).join(" ");
+      });
+    })
+    .join("\n");
+}
 
 export function ReportSection({
   section,
@@ -21,6 +54,70 @@ export function ReportSection({
 }) {
   const hasBody = section.markdown.trim().length > 0;
   const label = STATUS_LABELS[section.status] ?? section.status;
+  const citationIds = new Set(section.citations.map((citation) => citation.id));
+  const markdown = injectCitationLinks(section.markdown, citationIds);
+  const citationIndex = new Map(
+    section.citations.map((citation, index) => [citation.id, index]),
+  );
+  const citationById = new Map(
+    section.citations.map((citation) => [citation.id, citation]),
+  );
+  const components: Components = {
+    a({ href, children }) {
+      if (href?.startsWith("#evidence-")) {
+        const citationId = href.replace("#evidence-", "");
+        const citation = citationById.get(citationId);
+        const index = citationIndex.get(citationId);
+
+        if (!citation || index === undefined) {
+          return <>{children}</>;
+        }
+
+        return (
+          <CitationLink
+            citation={citation}
+            index={index}
+            sectionId={section.id}
+          />
+        );
+      }
+
+      return (
+        <a
+          href={href}
+          className="text-slate-700 underline decoration-slate-300 underline-offset-4 transition-colors hover:text-slate-950 hover:decoration-slate-500"
+        >
+          {children}
+        </a>
+      );
+    },
+    code({ className, children, ...props }) {
+      const match = /language-(\w+)/.exec(className || "");
+      const language = match?.[1];
+      const text = String(children).replace(/\n$/, "");
+
+      if (language === "mermaid") {
+        return <MermaidBlock>{text}</MermaidBlock>;
+      }
+
+      if (!className) {
+        return (
+          <code
+            className="rounded bg-slate-100 px-1.5 py-0.5 text-sm text-slate-900"
+            {...props}
+          >
+            {children}
+          </code>
+        );
+      }
+
+      return (
+        <code className={className} {...props}>
+          {children}
+        </code>
+      );
+    },
+  };
 
   return (
     <article
@@ -49,8 +146,9 @@ export function ReportSection({
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             rehypePlugins={[rehypeHighlight]}
+            components={components}
           >
-            {section.markdown}
+            {markdown}
           </ReactMarkdown>
         </div>
       ) : (

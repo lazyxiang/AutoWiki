@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { FileSearch, Sparkles } from "lucide-react";
 
 import {
   getFastReport,
@@ -14,6 +13,7 @@ import { repoPath } from "@/lib/utils";
 import { useFastReportStream, type FastReportCompleteEvent } from "@/lib/ws";
 
 import { ReportStack } from "./ReportStack";
+import { EvidenceRail } from "./EvidenceRail";
 
 export const FLOATING_ASSISTANT_HEIGHT_VAR = "--floating-assistant-height";
 type WorkspaceStreamState = "idle" | "running" | "ready" | "error";
@@ -367,42 +367,7 @@ export function FastReportWorkspace({
           className="min-h-0 border-t border-slate-200 pt-6 lg:border-l lg:border-t-0 lg:pl-8 lg:pt-0"
           style={{ paddingBottom: bottomPadding }}
         >
-          <div className="sticky top-6 space-y-6">
-            <div className="space-y-3">
-              <div className="flex items-center gap-2 text-[0.72rem] font-semibold uppercase tracking-[0.24em] text-slate-500">
-                <FileSearch className="h-4 w-4" />
-                Evidence rail
-              </div>
-              <p className="text-sm leading-6 text-slate-600">
-                The citation rail lands in the next task. This shell keeps the
-                desktop workspace shape and reserves the column without wiring
-                citation interactions yet.
-              </p>
-            </div>
-
-            <div className="rounded-[1.75rem] bg-slate-100/80 p-5">
-              <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
-                <Sparkles className="h-4 w-4 text-slate-500" />
-                Active section
-              </div>
-              <div className="mt-3 text-sm leading-6 text-slate-600">
-                {view.activeSection ? (
-                  <>
-                    <p className="font-medium text-slate-900">{view.activeSection.title}</p>
-                    <p className="mt-2">
-                      {view.activeSection.summary ??
-                        "Supporting code evidence will appear here once the rail is implemented."}
-                    </p>
-                  </>
-                ) : (
-                  <p>
-                    Ask a question from the floating assistant to populate the
-                    report stack and related evidence context.
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
+          <EvidenceRail section={view.activeSection} />
         </aside>
       </div>
     </div>
