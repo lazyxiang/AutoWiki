@@ -2,7 +2,17 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    and_,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -118,13 +128,17 @@ class ResearchReport(Base):
 
 class FastReport(Base):
     __tablename__ = "fast_reports"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["id", "active_section_id"],
+            ["fast_report_sections.report_id", "fast_report_sections.id"],
+        ),
+    )
     id: Mapped[str] = mapped_column(String, primary_key=True)
     repo_id: Mapped[str] = mapped_column(ForeignKey("repositories.id"), nullable=False)
     commit_sha: Mapped[str] = mapped_column(String, nullable=False)
     status: Mapped[str] = mapped_column(String, nullable=False)
-    active_section_id: Mapped[str | None] = mapped_column(
-        ForeignKey("fast_report_sections.id"), nullable=True
-    )
+    active_section_id: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(UTC)
     )
@@ -139,6 +153,10 @@ class FastReport(Base):
     )
     active_section: Mapped[FastReportSection | None] = relationship(
         "FastReportSection",
+        primaryjoin=lambda: and_(
+            FastReport.id == FastReportSection.report_id,
+            FastReport.active_section_id == FastReportSection.id,
+        ),
         foreign_keys=[active_section_id],
         post_update=True,
     )
@@ -146,6 +164,7 @@ class FastReport(Base):
 
 class FastReportSection(Base):
     __tablename__ = "fast_report_sections"
+    __table_args__ = (UniqueConstraint("report_id", "id"),)
     id: Mapped[str] = mapped_column(String, primary_key=True)
     report_id: Mapped[str] = mapped_column(
         ForeignKey("fast_reports.id"), nullable=False
