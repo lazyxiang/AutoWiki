@@ -1,6 +1,8 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import type { FastReportSection } from "./api";
+
 const WS_URL = process.env.NEXT_PUBLIC_API_URL?.replace("http", "ws") ?? "ws://localhost:3001";
 
 export function useJobProgress(jobId: string | null) {
@@ -127,4 +129,78 @@ export function useResearchStream(
       ws.close();
     };
   }, [repoId, jobId, onPlan, onStep, onReport, onDone, onError]);
+}
+
+export interface FastReportCompleteEvent {
+  report_id: string;
+  active_section_id: string | null;
+  status: string;
+}
+
+export function connectFastReportStream(
+  repoId: string,
+  reportId: string,
+  handlers: {
+    onSectionComplete: (section: FastReportSection) => void;
+    onReportComplete: (event: FastReportCompleteEvent) => void;
+    onError: (msg: string) => void;
+  },
+): WebSocket {
+  const ws = new WebSocket(`${WS_URL}/ws/repos/${repoId}/fast-reports/${reportId}`);
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data) as {
+      type: string;
+      section?: FastReportSection;
+      report_id?: string;
+      active_section_id?: string | null;
+      status?: string;
+      content?: string;
+    };
+    if (msg.type === "section_complete" && msg.section) {
+      handlers.onSectionComplete(msg.section);
+    } else if (msg.type === "report_complete") {
+      handlers.onReportComplete({
+        report_id: msg.report_id ?? reportId,
+        active_section_id: msg.active_section_id ?? null,
+        status: msg.status ?? "done",
+      });
+      ws.close();
+    } else if (msg.type === "error") {
+      handlers.onError(msg.content ?? "Unknown error");
+      ws.close();
+    }
+  };
+  ws.onerror = () => handlers.onError("WebSocket error");
+  return ws;
+}
+
+export function useFastReportStream(
+  repoId: string,
+  reportId: string | null,
+  onSectionComplete: (section: FastReportSection) => void,
+  onReportComplete: (event: FastReportCompleteEvent) => void,
+  onError: (msg: string) => void,
+) {
+  const wsRef = useRef<WebSocket | null>(null);
+
+  useEffect(() => {
+    if (!reportId) return;
+    const ws = connectFastReportStream(repoId, reportId, {
+      onSectionComplete,
+      onReportComplete,
+      onError,
+    });
+    wsRef.current = ws;
+    return () => {
+      ws.close();
+      wsRef.current = null;
+    };
+  }, [repoId, reportId, onSectionComplete, onReportComplete, onError]);
+
+  return {
+    close: () => {
+      wsRef.current?.close();
+      wsRef.current = null;
+    },
+  };
 }

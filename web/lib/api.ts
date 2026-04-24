@@ -248,6 +248,73 @@ export interface ResearchPlanStep {
   rationale: string;
 }
 
+export interface FastReportCitation {
+  id: string;
+  file_path: string;
+  start_line: number;
+  end_line: number;
+  label: string;
+  kind: string;
+  reason?: string;
+  score?: number | null;
+}
+
+export interface FastReportEvidenceBlock {
+  citation_id: string;
+  snippet_start: number;
+  snippet_end: number;
+  full_start: number;
+  full_end: number;
+  default_context: number;
+  expanded_context: number;
+  is_collapsed: boolean;
+  code: string;
+  symbol_path?: string | null;
+}
+
+export interface FastReportWikiLink {
+  slug: string;
+  title: string;
+  reason?: string;
+}
+
+export interface FastReportDiagram {
+  id: string;
+  title: string;
+  type: string;
+  source: string;
+  caption?: string;
+  reason?: string;
+  citations: string[];
+  placement: string;
+}
+
+export interface FastReportSection {
+  id: string;
+  report_id: string;
+  query: string;
+  title: string;
+  summary: string | null;
+  markdown: string;
+  citations: FastReportCitation[];
+  evidence_blocks: FastReportEvidenceBlock[];
+  related_wiki_pages: FastReportWikiLink[];
+  related_diagrams: FastReportDiagram[];
+  created_at: string;
+  status: string;
+}
+
+export interface FastReport {
+  id: string;
+  repo_id: string;
+  commit_sha: string;
+  status: string;
+  active_section_id: string | null;
+  created_at: string;
+  expires_at: string;
+  sections: FastReportSection[];
+}
+
 /**
  * Fetches a completed (or in-progress) Deep Research report.
  */
@@ -263,6 +330,33 @@ export async function getResearchReport(
   error: string | null;
 }> {
   const res = await fetch(`${API_URL}/api/repos/${repoId}/research/${jobId}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function startFastReport(
+  repoId: string,
+  question: string,
+): Promise<{
+  job_id: string;
+  report_id: string;
+  section_id: string;
+  status: string;
+}> {
+  const res = await fetch(`${API_URL}/api/repos/${repoId}/fast-reports`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getFastReport(
+  repoId: string,
+  reportId: string,
+): Promise<FastReport> {
+  const res = await fetch(`${API_URL}/api/repos/${repoId}/fast-reports/${reportId}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
