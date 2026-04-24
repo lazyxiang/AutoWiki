@@ -14,6 +14,10 @@ import { useFastReportStream, type FastReportCompleteEvent } from "@/lib/ws";
 
 import { ReportStack } from "./ReportStack";
 import { EvidenceRail } from "./EvidenceRail";
+import {
+  FAST_REPORT_CITATION_FOCUS_EVENT,
+  type FastReportCitationFocusDetail,
+} from "./CitationLink";
 
 export const FLOATING_ASSISTANT_HEIGHT_VAR = "--floating-assistant-height";
 type WorkspaceStreamState = "idle" | "running" | "ready" | "error";
@@ -198,6 +202,8 @@ export function FastReportWorkspace({
   const searchParams = useSearchParams();
   const [createdReportId, setCreatedReportId] = useState<string | null>(null);
   const [state, setState] = useState<FastReportWorkspaceState>(createWorkspaceState);
+  const [evidenceSectionId, setEvidenceSectionId] = useState<string | null>(null);
+  const [focusedCitationId, setFocusedCitationId] = useState<string | null>(null);
   const requestedInitialReport = useRef(false);
   const activeReportId = reportId ?? createdReportId;
 
@@ -310,6 +316,40 @@ export function FastReportWorkspace({
 
   const bottomPadding = useMemo(() => getWorkspaceBottomPadding(), []);
   const view = getWorkspaceViewModel(state, activeReportId);
+  const railSection =
+    state.report?.sections.find((section) => section.id === evidenceSectionId) ??
+    view.activeSection;
+  const railFocusedCitationId =
+    railSection?.citations.some((citation) => citation.id === focusedCitationId)
+      ? focusedCitationId
+      : null;
+
+  useEffect(() => {
+    function handleFocus(event: Event) {
+      const { detail } = event as CustomEvent<FastReportCitationFocusDetail>;
+      const matchingSection = state.report?.sections.find(
+        (section) => section.id === detail.sectionId,
+      );
+
+      if (!matchingSection) {
+        return;
+      }
+
+      setEvidenceSectionId(matchingSection.id);
+      setFocusedCitationId(detail.citationId);
+    }
+
+    window.addEventListener(
+      FAST_REPORT_CITATION_FOCUS_EVENT,
+      handleFocus as EventListener,
+    );
+    return () => {
+      window.removeEventListener(
+        FAST_REPORT_CITATION_FOCUS_EVENT,
+        handleFocus as EventListener,
+      );
+    };
+  }, [state.report?.sections]);
 
   return (
     <div className="mx-auto flex w-full max-w-[1500px] flex-1 flex-col px-4 pb-8 pt-6 sm:px-6 lg:px-10">
@@ -367,7 +407,10 @@ export function FastReportWorkspace({
           className="min-h-0 border-t border-slate-200 pt-6 lg:border-l lg:border-t-0 lg:pl-8 lg:pt-0"
           style={{ paddingBottom: bottomPadding }}
         >
-          <EvidenceRail section={view.activeSection} />
+          <EvidenceRail
+            section={railSection}
+            focusedCitationId={railFocusedCitationId}
+          />
         </aside>
       </div>
     </div>

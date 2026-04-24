@@ -35,6 +35,8 @@ export function DiagramPanel({
         return (
           <section
             key={diagram.id}
+            data-diagram-id={diagram.id}
+            data-focused={isFocused ? "true" : "false"}
             className={cn(
               "rounded-[1.4rem] border bg-white p-4 shadow-sm transition-colors",
               isFocused ? "border-slate-900 bg-slate-50" : "border-slate-200",

@@ -1,14 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { FileSearch } from "lucide-react";
 
 import type { FastReportSection } from "@/lib/api";
-
-import {
-  FAST_REPORT_CITATION_FOCUS_EVENT,
-  type FastReportCitationFocusDetail,
-} from "./CitationLink";
 import { DiagramPanel } from "./DiagramPanel";
 import { EvidenceBlock } from "./EvidenceBlock";
 
@@ -25,13 +20,22 @@ export function buildEvidenceRailItems(
     return [];
   }
 
+  const renderedDiagramIds = new Set<string>();
+
   return section.citations.flatMap((citation) => {
     const blocks = section.evidence_blocks.filter(
       (block) => block.citation_id === citation.id,
     );
-    const diagrams = section.related_diagrams.filter((diagram) =>
-      diagram.citations.includes(citation.id),
-    );
+    const diagrams = section.related_diagrams.filter((diagram) => {
+      if (!diagram.citations.includes(citation.id)) {
+        return false;
+      }
+      if (renderedDiagramIds.has(diagram.id)) {
+        return false;
+      }
+      renderedDiagramIds.add(diagram.id);
+      return true;
+    });
 
     if (blocks.length === 0 && diagrams.length === 0) {
       return [];
@@ -43,38 +47,18 @@ export function buildEvidenceRailItems(
 
 export function EvidenceRail({
   section,
+  focusedCitationId = null,
 }: {
   section: FastReportSection | null;
+  focusedCitationId?: string | null;
 }) {
   const items = useMemo(() => buildEvidenceRailItems(section), [section]);
-  const [focusedCitationId, setFocusedCitationId] = useState<string | null>(null);
   const itemRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const activeFocusedCitationId = items.some(
     (item) => item.citation.id === focusedCitationId,
   )
     ? focusedCitationId
     : null;
-
-  useEffect(() => {
-    function handleFocus(event: Event) {
-      const { detail } = event as CustomEvent<FastReportCitationFocusDetail>;
-      if (!section || detail.sectionId !== section.id) {
-        return;
-      }
-      setFocusedCitationId(detail.citationId);
-    }
-
-    window.addEventListener(
-      FAST_REPORT_CITATION_FOCUS_EVENT,
-      handleFocus as EventListener,
-    );
-    return () => {
-      window.removeEventListener(
-        FAST_REPORT_CITATION_FOCUS_EVENT,
-        handleFocus as EventListener,
-      );
-    };
-  }, [section]);
 
   useEffect(() => {
     if (!activeFocusedCitationId) {
@@ -103,7 +87,10 @@ export function EvidenceRail({
   }
 
   return (
-    <div className="sticky top-6 space-y-6">
+    <div
+      className="sticky top-6 space-y-6"
+      data-evidence-rail-section-id={section.id}
+    >
       <div className="space-y-3">
         <div className="flex items-center gap-2 text-[0.72rem] font-semibold uppercase tracking-[0.24em] text-slate-500">
           <FileSearch className="h-4 w-4" />

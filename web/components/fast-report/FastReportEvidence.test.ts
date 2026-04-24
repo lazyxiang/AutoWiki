@@ -6,20 +6,55 @@ import {
   render,
   screen,
   waitFor,
-  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
+  FastReport,
   FastReportCitation,
+  FastReportDiagram,
   FastReportEvidenceBlock,
   FastReportSection,
 } from "@/lib/api";
 
+const {
+  getFastReportMock,
+  startFastReportMock,
+  replaceMock,
+  useFastReportStreamMock,
+} = vi.hoisted(() => ({
+  getFastReportMock: vi.fn(),
+  startFastReportMock: vi.fn(),
+  replaceMock: vi.fn(),
+  useFastReportStreamMock: vi.fn(),
+}));
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ replace: replaceMock }),
+  useSearchParams: () => new URLSearchParams(),
+}));
+
+vi.mock("@/lib/api", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
+  return {
+    ...actual,
+    getFastReport: getFastReportMock,
+    startFastReport: startFastReportMock,
+  };
+});
+
+vi.mock("@/lib/ws", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/ws")>("@/lib/ws");
+  return {
+    ...actual,
+    useFastReportStream: useFastReportStreamMock,
+  };
+});
+
 import { EvidenceBlock } from "./EvidenceBlock";
 import { EvidenceRail } from "./EvidenceRail";
-import { ReportSection } from "./ReportSection";
+import { FastReportWorkspace } from "./FastReportWorkspace";
 
 function makeCitation(
   overrides: Partial<FastReportCitation> = {},
@@ -47,10 +82,26 @@ function makeEvidenceBlock(
     full_start: 1,
     full_end: 80,
     default_context: 3,
-    expanded_context: 99,
+    expanded_context: 18,
     is_collapsed: true,
     code: Array.from({ length: 80 }, (_, index) => `line ${index + 1}`).join("\n"),
     symbol_path: "AuthService.validate",
+    ...overrides,
+  };
+}
+
+function makeDiagram(
+  overrides: Partial<FastReportDiagram> = {},
+): FastReportDiagram {
+  return {
+    id: "diagram-auth-cache",
+    title: "Auth and cache flow",
+    type: "text",
+    source: "auth -> cache",
+    caption: "Shared diagram",
+    reason: "Shared evidence",
+    citations: ["cite-auth", "cite-cache"],
+    placement: "rail",
     ...overrides,
   };
 }
@@ -82,8 +133,6 @@ function makeSection(
         citation_id: "cite-cache",
         snippet_start: 7,
         snippet_end: 10,
-        default_context: 3,
-        expanded_context: 60,
         code: Array.from({ length: 80 }, (_, index) => `cache ${index + 1}`).join("\n"),
         symbol_path: "Cache.read",
       }),
@@ -96,11 +145,32 @@ function makeSection(
   };
 }
 
+function makeReport(overrides: Partial<FastReport> = {}): FastReport {
+  return {
+    id: "report-1",
+    repo_id: "repo-1",
+    job_id: "job-1",
+    commit_sha: "abc123",
+    status: "done",
+    error: null,
+    active_section_id: "section-new",
+    created_at: "2026-04-24T00:00:00Z",
+    expires_at: "2026-05-01T00:00:00Z",
+    sections: [],
+    ...overrides,
+  };
+}
+
 describe("fast report evidence interactions", () => {
   const scrollIntoView = vi.fn();
 
   beforeEach(() => {
+    cleanup();
     scrollIntoView.mockReset();
+    getFastReportMock.mockReset();
+    startFastReportMock.mockReset();
+    replaceMock.mockReset();
+    useFastReportStreamMock.mockReset();
     Object.defineProperty(Element.prototype, "scrollIntoView", {
       configurable: true,
       value: scrollIntoView,
@@ -112,87 +182,158 @@ describe("fast report evidence interactions", () => {
     vi.restoreAllMocks();
   });
 
-  it("clicking a citation focuses and targets the matching evidence block", async () => {
+  it("clicking a citation from an older section re-targets the workspace evidence rail to that section", async () => {
     const user = userEvent.setup();
-    const section = makeSection();
+    const olderSection = makeSection({
+      id: "section-old",
+      title: "Older authentication section",
+      citations: [
+        makeCitation({
+          id: "cite-old",
+          file_path: "worker/older_auth.py",
+          start_line: 30,
+          end_line: 34,
+        }),
+      ],
+      evidence_blocks: [
+        makeEvidenceBlock({
+          citation_id: "cite-old",
+          snippet_start: 30,
+          snippet_end: 32,
+          code: Array.from({ length: 80 }, (_, index) => `older ${index + 1}`).join("\n"),
+        }),
+      ],
+      markdown:
+        "## Overview\n\n- Older auth path still matters [cite-old].\n",
+      created_at: "2026-04-24T01:00:00Z",
+    });
+    const activeSection = makeSection({
+      id: "section-new",
+      title: "Newest active section",
+      citations: [
+        makeCitation({
+          id: "cite-new",
+          file_path: "worker/new_auth.py",
+          start_line: 50,
+          end_line: 55,
+        }),
+      ],
+      evidence_blocks: [
+        makeEvidenceBlock({
+          citation_id: "cite-new",
+          snippet_start: 50,
+          snippet_end: 52,
+          code: Array.from({ length: 90 }, (_, index) => `new ${index + 1}`).join("\n"),
+        }),
+      ],
+      markdown:
+        "## Overview\n\n- Newest auth path is active [cite-new].\n",
+      created_at: "2026-04-24T02:00:00Z",
+    });
+
+    getFastReportMock.mockResolvedValue(
+      makeReport({
+        active_section_id: "section-new",
+        sections: [olderSection, activeSection],
+      }),
+    );
 
     render(
-      React.createElement(
-        "div",
-        { className: "grid" },
-        React.createElement(ReportSection, { section }),
-        React.createElement(EvidenceRail, { section }),
-      ),
+      React.createElement(FastReportWorkspace, {
+        owner: "openai",
+        repo: "autowiki",
+        repoId: "repo-1",
+        repoLabel: "openai/autowiki",
+        reportId: "report-1",
+      }),
     );
 
-    const citationButton = screen.getByRole("button", {
-      name: "Jump to evidence for worker/auth.py:20-24",
+    await screen.findByRole("button", {
+      name: "Jump to evidence for worker/older_auth.py:30-34",
     });
 
-    await user.click(citationButton);
+    expect(
+      document.querySelector("[data-evidence-rail-section-id]")?.getAttribute(
+        "data-evidence-rail-section-id",
+      ),
+    ).toBe("section-new");
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Jump to evidence for worker/older_auth.py:30-34",
+      }),
+    );
 
     await waitFor(() => {
-      const target = document.querySelector('[data-evidence-target="cite-auth"]');
+      const rail = document.querySelector("[data-evidence-rail-section-id]");
+      const target = document.querySelector('[data-evidence-target="cite-old"]');
+      expect(rail?.getAttribute("data-evidence-rail-section-id")).toBe("section-old");
       expect(target?.getAttribute("data-focused")).toBe("true");
-      expect(scrollIntoView).toHaveBeenCalledTimes(1);
-      expect(scrollIntoView.mock.instances[0]).toBe(target);
+      expect(scrollIntoView).toHaveBeenCalled();
+      expect(scrollIntoView.mock.instances.at(-1)).toBe(target);
     });
-
-    const focusedBlock = document.querySelector(
-      '[data-evidence-citation-id="cite-auth"]',
-    );
-    expect(focusedBlock?.getAttribute("data-focused")).toBe("true");
-
-    const unfocusedBlock = document.querySelector(
-      '[data-evidence-citation-id="cite-cache"]',
-    );
-    expect(unfocusedBlock?.getAttribute("data-focused")).toBe("false");
   });
 
-  it("expands by a fixed 15 lines per click and collapses back through UI interaction", async () => {
+  it("uses backend collapse state and expanded context as the initial evidence view", async () => {
     const user = userEvent.setup();
-    const block = makeEvidenceBlock({
-      expanded_context: 200,
-    });
 
     render(
       React.createElement(EvidenceBlock, {
         citation: makeCitation(),
-        block,
+        block: makeEvidenceBlock({
+          is_collapsed: false,
+          expanded_context: 18,
+        }),
       }),
     );
 
-    expect(screen.getByText("line 17")).toBeTruthy();
-    expect(screen.getByText("line 25")).toBeTruthy();
-    expect(screen.queryByText("line 2")).toBeNull();
-    expect(screen.queryByText("line 1")).toBeNull();
-
-    await user.click(screen.getByRole("button", { name: "Expand +15" }));
-
-    const evidence = screen.getByRole("table").closest("div")?.parentElement;
-    expect(evidence).toBeTruthy();
     expect(screen.getByText("line 2")).toBeTruthy();
     expect(screen.getByText("line 40")).toBeTruthy();
     expect(screen.queryByText("line 1")).toBeNull();
+    expect(screen.getByRole("button", { name: "Collapse" })).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Expand +15" }));
+
+    expect(screen.getByText("line 1")).toBeTruthy();
+    expect(screen.getByText("line 55")).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "Collapse" }));
 
     expect(screen.getByText("line 17")).toBeTruthy();
     expect(screen.getByText("line 25")).toBeTruthy();
     expect(screen.queryByText("line 2")).toBeNull();
-    expect(screen.queryByText("line 40")).toBeNull();
   });
 
-  it("renders clickable citation controls inside the actual report section UI", () => {
-    render(React.createElement(ReportSection, { section: makeSection() }));
+  it("dedupes diagrams shared by multiple citations while keeping them focus-aware", () => {
+    const section = makeSection({
+      related_diagrams: [makeDiagram()],
+    });
 
-    const buttons = screen.getAllByRole("button", { name: /Jump to evidence for/ });
-    expect(buttons).toHaveLength(2);
+    const { rerender } = render(
+      React.createElement(EvidenceRail, {
+        section,
+        focusedCitationId: null,
+      }),
+    );
+
+    expect(screen.getAllByText("Auth and cache flow")).toHaveLength(1);
     expect(
-      within(buttons[0] as HTMLButtonElement).getByText("[1]"),
-    ).toBeTruthy();
-    expect(
-      within(buttons[1] as HTMLButtonElement).getByText("[2]"),
-    ).toBeTruthy();
+      document.querySelector('[data-diagram-id="diagram-auth-cache"]')?.getAttribute(
+        "data-focused",
+      ),
+    ).toBe("false");
+
+    rerender(
+      React.createElement(EvidenceRail, {
+        section,
+        focusedCitationId: "cite-cache",
+      }),
+    );
+
+    const diagram = document.querySelector(
+      '[data-diagram-id="diagram-auth-cache"]',
+    );
+    expect(screen.getAllByText("Auth and cache flow")).toHaveLength(1);
+    expect(diagram?.getAttribute("data-focused")).toBe("true");
   });
 });

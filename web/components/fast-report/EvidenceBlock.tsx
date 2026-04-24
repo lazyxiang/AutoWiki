@@ -12,13 +12,18 @@ export type VisibleEvidenceLine = {
 
 export const EVIDENCE_EXPANSION_STEP = 15;
 
+export function getInitialEvidenceContext(block: FastReportEvidenceBlock) {
+  if (block.is_collapsed) {
+    return block.default_context;
+  }
+
+  return Math.max(block.default_context, block.expanded_context);
+}
+
 export function getVisibleEvidenceRange(
   block: FastReportEvidenceBlock,
-  expansionCount: number,
+  context: number,
 ) {
-  const context =
-    block.default_context + expansionCount * EVIDENCE_EXPANSION_STEP;
-
   return {
     start: Math.max(block.full_start, block.snippet_start - context),
     end: Math.min(block.full_end, block.snippet_end + context),
@@ -27,9 +32,9 @@ export function getVisibleEvidenceRange(
 
 export function getVisibleEvidenceLines(
   block: FastReportEvidenceBlock,
-  expansionCount: number,
+  context: number,
 ): VisibleEvidenceLine[] {
-  const { start, end } = getVisibleEvidenceRange(block, expansionCount);
+  const { start, end } = getVisibleEvidenceRange(block, context);
   const lines = block.code.split("\n");
 
   const visible: VisibleEvidenceLine[] = [];
@@ -57,15 +62,16 @@ export function EvidenceBlock({
   block: FastReportEvidenceBlock;
   isFocused?: boolean;
 }) {
-  const [expansionCount, setExpansionCount] = useState(0);
+  const [context, setContext] = useState(() => getInitialEvidenceContext(block));
   const visibleLines = useMemo(
-    () => getVisibleEvidenceLines(block, expansionCount),
-    [block, expansionCount],
+    () => getVisibleEvidenceLines(block, context),
+    [block, context],
   );
   const visibleRange = useMemo(
-    () => getVisibleEvidenceRange(block, expansionCount),
-    [block, expansionCount],
+    () => getVisibleEvidenceRange(block, context),
+    [block, context],
   );
+  const isCollapsed = context <= block.default_context;
   const canExpand =
     visibleRange.start > block.full_start || visibleRange.end < block.full_end;
 
@@ -94,16 +100,16 @@ export function EvidenceBlock({
             <button
               type="button"
               className="rounded-full border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 transition-colors hover:border-slate-400 hover:bg-slate-100"
-              onClick={() => setExpansionCount((count) => count + 1)}
+              onClick={() => setContext((current) => current + EVIDENCE_EXPANSION_STEP)}
             >
               Expand +{EVIDENCE_EXPANSION_STEP}
             </button>
           ) : null}
-          {expansionCount > 0 ? (
+          {!isCollapsed ? (
             <button
               type="button"
               className="rounded-full border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 transition-colors hover:border-slate-400 hover:bg-slate-100"
-              onClick={() => setExpansionCount(0)}
+              onClick={() => setContext(block.default_context)}
             >
               Collapse
             </button>
