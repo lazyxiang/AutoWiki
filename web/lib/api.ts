@@ -307,8 +307,10 @@ export interface FastReportSection {
 export interface FastReport {
   id: string;
   repo_id: string;
+  job_id: string | null;
   commit_sha: string;
   status: string;
+  error: string | null;
   active_section_id: string | null;
   created_at: string;
   expires_at: string;

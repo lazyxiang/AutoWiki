@@ -25,6 +25,13 @@ class StartFastReportRequest(BaseModel):
     question: str
 
 
+async def _get_fast_report_job(session, repo_id: str, report_id: str) -> Job | None:
+    job = await session.get(Job, report_id)
+    if job is None or job.repo_id != repo_id or job.type != "fast_report":
+        return None
+    return job
+
+
 def _section_payload(section: FastReportSection) -> dict:
     return {
         "id": section.id,
@@ -60,7 +67,7 @@ async def start_fast_report(repo_id: str, req: StartFastReportRequest) -> dict:
             )
 
         job_id = str(uuid.uuid4())
-        report_id = str(uuid.uuid4())
+        report_id = job_id
         section_id = str(uuid.uuid4())
         s.add(
             Job(
@@ -139,6 +146,7 @@ async def get_fast_report(repo_id: str, report_id: str) -> dict:
         report = await s.get(FastReport, report_id)
         if report is None or report.repo_id != repo_id:
             raise HTTPException(status_code=404, detail="Report not found")
+        job = await _get_fast_report_job(s, repo_id, report_id)
 
         result = await s.execute(
             select(FastReportSection)
@@ -150,8 +158,10 @@ async def get_fast_report(repo_id: str, report_id: str) -> dict:
         return {
             "id": report.id,
             "repo_id": report.repo_id,
+            "job_id": job.id if job is not None else None,
             "commit_sha": report.commit_sha,
             "status": report.status,
+            "error": job.error if job is not None else None,
             "active_section_id": report.active_section_id,
             "created_at": report.created_at.isoformat(),
             "expires_at": report.expires_at.isoformat(),
@@ -186,6 +196,7 @@ async def ws_fast_report(websocket: WebSocket, repo_id: str, report_id: str):
                         {"type": "error", "content": "Report vanished"}
                     )
                     break
+                job = await _get_fast_report_job(s, repo_id, report_id)
 
                 result = await s.execute(
                     select(FastReportSection)
@@ -206,7 +217,14 @@ async def ws_fast_report(websocket: WebSocket, repo_id: str, report_id: str):
 
             if report.status == "failed":
                 await websocket.send_json(
-                    {"type": "error", "content": "Fast report failed"}
+                    {
+                        "type": "error",
+                        "content": (
+                            job.error
+                            if job is not None and job.error
+                            else "Fast report failed"
+                        ),
+                    }
                 )
                 break
 
@@ -215,6 +233,7 @@ async def ws_fast_report(websocket: WebSocket, repo_id: str, report_id: str):
                     {
                         "type": "report_complete",
                         "report_id": report.id,
+                        "job_id": job.id if job is not None else None,
                         "active_section_id": report.active_section_id,
                         "status": report.status,
                     }

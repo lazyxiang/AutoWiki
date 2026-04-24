@@ -107,10 +107,10 @@ async def test_start_fast_report_returns_ids_and_persists_queued_rows(
 
 
 async def test_get_fast_report_returns_persisted_report_payload(fast_report_env):
-    """GET returns the report metadata and parsed section payloads."""
+    """GET returns report metadata, job linkage, and parsed section payloads."""
     from api.main import app
     from shared.database import dispose_db, get_session, init_db
-    from shared.models import FastReport, FastReportSection, Repository
+    from shared.models import FastReport, FastReportSection, Job, Repository
 
     db_path = fast_report_env
     await init_db(db_path)
@@ -118,6 +118,7 @@ async def test_get_fast_report_returns_persisted_report_payload(fast_report_env)
     try:
         async with get_session(db_path) as s:
             s.add(Repository(id="r1", owner="o", name="n", status="ready"))
+            s.add(Job(id="fr1", repo_id="r1", type="fast_report", status="done"))
             report = FastReport(
                 id="fr1",
                 repo_id="r1",
@@ -203,8 +204,10 @@ async def test_get_fast_report_returns_persisted_report_payload(fast_report_env)
         body = response.json()
         assert body["id"] == "fr1"
         assert body["repo_id"] == "r1"
+        assert body["job_id"] == "fr1"
         assert body["commit_sha"] == "deadbeef"
         assert body["status"] == "done"
+        assert body["error"] is None
         assert body["active_section_id"] == "sec1"
         assert body["sections"][0]["id"] == "sec1"
         assert body["sections"][0]["query"] == "How does indexing work?"
@@ -216,18 +219,79 @@ async def test_get_fast_report_returns_persisted_report_payload(fast_report_env)
         await dispose_db(db_path)
 
 
+async def test_get_fast_report_returns_persisted_failure_detail(fast_report_env):
+    """GET surfaces the persisted job failure reason for failed reports."""
+    from api.main import app
+    from shared.database import dispose_db, get_session, init_db
+    from shared.models import FastReport, FastReportSection, Job, Repository
+
+    db_path = fast_report_env
+    await init_db(db_path)
+
+    try:
+        async with get_session(db_path) as s:
+            s.add(Repository(id="r1", owner="o", name="n", status="ready"))
+            s.add(
+                Job(
+                    id="fr-failed",
+                    repo_id="r1",
+                    type="fast_report",
+                    status="failed",
+                    error="Embedding index missing for repo snapshot",
+                )
+            )
+            report = FastReport(
+                id="fr-failed",
+                repo_id="r1",
+                commit_sha="deadbeef",
+                status="failed",
+                expires_at=datetime.now(UTC) + timedelta(days=7),
+            )
+            s.add(report)
+            s.add(
+                FastReportSection(
+                    id="sec-failed",
+                    report_id="fr-failed",
+                    query="Why did generation fail?",
+                    title="Pending",
+                    summary=None,
+                    markdown="",
+                    citations_json="[]",
+                    evidence_blocks_json="[]",
+                    related_wiki_pages_json="[]",
+                    related_diagrams_json="[]",
+                    status="failed",
+                )
+            )
+            await s.commit()
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get("/api/repos/r1/fast-reports/fr-failed")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["job_id"] == "fr-failed"
+        assert body["status"] == "failed"
+        assert body["error"] == "Embedding index missing for repo snapshot"
+    finally:
+        await dispose_db(db_path)
+
+
 async def test_ws_fast_report_streams_section_and_report_completion(fast_report_env):
     """Completed reports stream section_complete followed by report_complete."""
     from starlette.testclient import TestClient
 
     from api.main import app
     from shared.database import get_session, init_db
-    from shared.models import FastReport, FastReportSection, Repository
+    from shared.models import FastReport, FastReportSection, Job, Repository
 
     db_path = fast_report_env
     await init_db(db_path)
     async with get_session(db_path) as s:
         s.add(Repository(id="r1", owner="o", name="n", status="ready"))
+        s.add(Job(id="fr1", repo_id="r1", type="fast_report", status="done"))
         report = FastReport(
             id="fr1",
             repo_id="r1",
@@ -265,8 +329,66 @@ async def test_ws_fast_report_streams_section_and_report_completion(fast_report_
     assert report_msg == {
         "type": "report_complete",
         "report_id": "fr1",
+        "job_id": "fr1",
         "active_section_id": "sec1",
         "status": "done",
+    }
+
+
+async def test_ws_fast_report_emits_persisted_failure_detail(fast_report_env):
+    """Failed reports emit the persisted job error instead of a generic message."""
+    from starlette.testclient import TestClient
+
+    from api.main import app
+    from shared.database import get_session, init_db
+    from shared.models import FastReport, FastReportSection, Job, Repository
+
+    db_path = fast_report_env
+    await init_db(db_path)
+    async with get_session(db_path) as s:
+        s.add(Repository(id="r1", owner="o", name="n", status="ready"))
+        s.add(
+            Job(
+                id="fr-failed",
+                repo_id="r1",
+                type="fast_report",
+                status="failed",
+                error="Fast report retriever factory was not configured",
+            )
+        )
+        s.add(
+            FastReport(
+                id="fr-failed",
+                repo_id="r1",
+                commit_sha="deadbeef",
+                status="failed",
+                expires_at=datetime.now(UTC) + timedelta(days=7),
+            )
+        )
+        s.add(
+            FastReportSection(
+                id="sec-failed",
+                report_id="fr-failed",
+                query="Why did it fail?",
+                title="Pending",
+                summary=None,
+                markdown="",
+                citations_json="[]",
+                evidence_blocks_json="[]",
+                related_wiki_pages_json="[]",
+                related_diagrams_json="[]",
+                status="failed",
+            )
+        )
+        await s.commit()
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/repos/r1/fast-reports/fr-failed") as ws:
+            msg = ws.receive_json()
+
+    assert msg == {
+        "type": "error",
+        "content": "Fast report retriever factory was not configured",
     }
 
 

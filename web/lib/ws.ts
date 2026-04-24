@@ -133,6 +133,7 @@ export function useResearchStream(
 
 export interface FastReportCompleteEvent {
   report_id: string;
+  job_id: string | null;
   active_section_id: string | null;
   status: string;
 }
@@ -152,6 +153,7 @@ export function connectFastReportStream(
       type: string;
       section?: FastReportSection;
       report_id?: string;
+      job_id?: string | null;
       active_section_id?: string | null;
       status?: string;
       content?: string;
@@ -161,6 +163,7 @@ export function connectFastReportStream(
     } else if (msg.type === "report_complete") {
       handlers.onReportComplete({
         report_id: msg.report_id ?? reportId,
+        job_id: msg.job_id ?? null,
         active_section_id: msg.active_section_id ?? null,
         status: msg.status ?? "done",
       });
