@@ -170,3 +170,22 @@ async def enqueue_deep_research(
         question=question,
     )
     return job_id
+
+
+async def enqueue_fast_report(
+    repo_id: str,
+    job_id: str,
+    report_id: str,
+    section_id: str,
+    question: str,
+) -> str:
+    """Enqueue a fast report background job."""
+    await _enqueue(
+        "run_fast_report",
+        repo_id=repo_id,
+        job_id=job_id,
+        report_id=report_id,
+        section_id=section_id,
+        question=question,
+    )
+    return job_id

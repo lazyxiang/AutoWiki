@@ -31,8 +31,9 @@ from sqlalchemy import select as sa_select
 
 from shared.config import get_config
 from shared.database import get_session, init_db
-from shared.models import Job, Repository, WikiPage
+from shared.models import FastReport, FastReportSection, Job, Repository, WikiPage
 from worker.embedding import make_embedding_provider
+from worker.fast_report import generate_fast_report_section
 from worker.llm import make_fast_llm_provider, make_llm_provider
 from worker.pipeline.ast_analysis import FileAnalysis, analyze_all_files
 from worker.pipeline.dependency_graph import build_dependency_graph
@@ -235,6 +236,33 @@ def asdict_s(obj) -> dict:
     from dataclasses import asdict as _asdict
 
     return _asdict(obj)
+
+
+async def _update_fast_report(db_path: str, report_id: str, **kwargs) -> None:
+    async with get_session(db_path) as s:
+        report = await s.get(FastReport, report_id)
+        if report is None:
+            raise RuntimeError(f"FastReport {report_id!r} not found")
+        for k, v in kwargs.items():
+            setattr(report, k, v)
+        await s.commit()
+
+
+async def _update_fast_report_section(db_path: str, section_id: str, **kwargs) -> None:
+    async with get_session(db_path) as s:
+        section = await s.get(FastReportSection, section_id)
+        if section is None:
+            raise RuntimeError(f"FastReportSection {section_id!r} not found")
+        for k, v in kwargs.items():
+            setattr(section, k, v)
+        await s.commit()
+
+
+def _missing_fast_report_retriever(name: str):
+    async def _raiser(*args, **kwargs):
+        raise RuntimeError(f"Fast report retriever {name!r} is not configured")
+
+    return _raiser
 
 
 def _make_faiss_store(repo_data_dir: Path, embedding) -> FAISSStore:
@@ -1719,6 +1747,106 @@ async def run_deep_research(
             status="failed",
             error=str(e),
             finished_at=now,
+            status_description=f"Error: {e}",
+        )
+        raise
+
+
+async def run_fast_report(
+    ctx: dict,
+    repo_id: str,
+    job_id: str,
+    report_id: str,
+    section_id: str,
+    question: str,
+) -> None:
+    """ARQ job: generate and persist one fast report section."""
+    import json as _json
+
+    cfg = get_config()
+    db_path = str(cfg.database_path)
+    await init_db(db_path)
+
+    try:
+        await _update_job(
+            db_path,
+            job_id,
+            status="running",
+            progress=10,
+            status_description="Generating fast report...",
+        )
+        await _update_fast_report(db_path, report_id, status="running")
+        await _update_fast_report_section(db_path, section_id, status="running")
+
+        async with get_session(db_path) as s:
+            repo = await s.get(Repository, repo_id)
+            repo_name = repo.name if repo is not None else repo_id
+
+        llm = make_llm_provider(cfg)
+        result = await generate_fast_report_section(
+            question=question,
+            repo_name=repo_name,
+            llm=llm,
+            repository_structure_retriever=ctx.get(
+                "fast_report_repository_structure_retriever",
+                _missing_fast_report_retriever("fast_report_repository_structure"),
+            ),
+            code_evidence_retriever=ctx.get(
+                "fast_report_code_evidence_retriever",
+                _missing_fast_report_retriever("fast_report_code_evidence"),
+            ),
+            semantic_retriever=ctx.get(
+                "fast_report_semantic_retriever",
+                _missing_fast_report_retriever("fast_report_semantic"),
+            ),
+            curated_knowledge_retriever=ctx.get(
+                "fast_report_curated_knowledge_retriever",
+                _missing_fast_report_retriever("fast_report_curated_knowledge"),
+            ),
+        )
+
+        await _update_fast_report_section(
+            db_path,
+            section_id,
+            title=result.title,
+            summary=result.summary,
+            markdown=result.markdown,
+            citations_json=_json.dumps([asdict_s(item) for item in result.citations]),
+            evidence_blocks_json=_json.dumps(
+                [asdict_s(item) for item in result.evidence_blocks]
+            ),
+            related_wiki_pages_json=_json.dumps(
+                [asdict_s(item) for item in result.related_wiki_pages]
+            ),
+            related_diagrams_json=_json.dumps(
+                [asdict_s(item) for item in result.related_diagrams]
+            ),
+            status="done",
+        )
+        await _update_fast_report(
+            db_path,
+            report_id,
+            status="done",
+            active_section_id=section_id,
+        )
+        await _update_job(
+            db_path,
+            job_id,
+            status="done",
+            progress=100,
+            finished_at=datetime.now(UTC),
+            status_description="Fast report complete",
+        )
+    except Exception as e:
+        logger.exception("Fast report job failed: %s", e)
+        await _update_fast_report(db_path, report_id, status="failed")
+        await _update_fast_report_section(db_path, section_id, status="failed")
+        await _update_job(
+            db_path,
+            job_id,
+            status="failed",
+            error=str(e),
+            finished_at=datetime.now(UTC),
             status_description=f"Error: {e}",
         )
         raise

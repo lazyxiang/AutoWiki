@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
+
 from shared.fast_report_types import (
     FastReportCitation,
     FastReportDiagram,
@@ -311,3 +315,164 @@ async def test_generate_fast_report_section_returns_structured_section(mock_llm)
     assert [block.citation_id for block in result.evidence_blocks] == ["code-1"]
     assert [page.slug for page in result.related_wiki_pages] == ["overview"]
     assert [diagram.id for diagram in result.related_diagrams] == ["diagram-1"]
+
+
+async def test_enqueue_fast_report_enqueues_expected_payload():
+    from api.queue import enqueue_fast_report
+
+    with patch("api.queue._enqueue") as enqueue_mock:
+        job_id = await enqueue_fast_report(
+            repo_id="repo-1",
+            job_id="job-1",
+            report_id="report-1",
+            section_id="section-1",
+            question="How does indexing work?",
+        )
+
+    assert job_id == "job-1"
+    enqueue_mock.assert_awaited_once_with(
+        "run_fast_report",
+        repo_id="repo-1",
+        job_id="job-1",
+        report_id="report-1",
+        section_id="section-1",
+        question="How does indexing work?",
+    )
+
+
+async def test_run_fast_report_persists_completed_section(tmp_path, monkeypatch):
+    from shared.database import dispose_db, get_session, init_db
+    from shared.fast_report_types import (
+        FastReportCitation,
+        FastReportDiagram,
+        FastReportEvidenceBlock,
+        FastReportWikiLink,
+    )
+    from shared.models import FastReport, FastReportSection, Job, Repository
+    from worker.fast_report import FastReportSectionResult
+    from worker.jobs import run_fast_report
+
+    db_path = str(tmp_path / "t.db")
+    monkeypatch.setenv("DATABASE_PATH", db_path)
+    monkeypatch.setenv("AUTOWIKI_DATA_DIR", str(tmp_path))
+    from shared.config import reset_config
+
+    reset_config()
+    await init_db(db_path)
+    expires_at = datetime.now(UTC) + timedelta(days=7)
+    async with get_session(db_path) as s:
+        s.add(Repository(id="r1", owner="o", name="n", status="ready"))
+        s.add(Job(id="j1", repo_id="r1", type="fast_report", status="queued"))
+        s.add(
+            FastReport(
+                id="fr1",
+                repo_id="r1",
+                commit_sha="deadbeef",
+                status="queued",
+                expires_at=expires_at,
+            )
+        )
+        s.add(
+            FastReportSection(
+                id="sec1",
+                report_id="fr1",
+                query="How does indexing work?",
+                title="Pending",
+                summary=None,
+                markdown="",
+                citations_json="[]",
+                evidence_blocks_json="[]",
+                related_wiki_pages_json="[]",
+                related_diagrams_json="[]",
+                status="queued",
+            )
+        )
+        await s.commit()
+
+    result = FastReportSectionResult(
+        title="Indexing Flow",
+        summary="The worker job orchestrates indexing.",
+        markdown=(
+            "# Indexing Flow\n\n## Overview\n\n- Starts in worker/jobs.py [code-1]"
+        ),
+        citations=[
+            FastReportCitation(
+                id="code-1",
+                file_path="worker/jobs.py",
+                start_line=1,
+                end_line=20,
+                label="run_fast_report",
+                kind="code_evidence",
+            )
+        ],
+        evidence_blocks=[
+            FastReportEvidenceBlock(
+                citation_id="code-1",
+                snippet_start=1,
+                snippet_end=20,
+                full_start=1,
+                full_end=25,
+                code="async def run_fast_report(...): ...",
+                symbol_path="worker.jobs.run_fast_report",
+            )
+        ],
+        related_wiki_pages=[
+            FastReportWikiLink(
+                slug="overview",
+                title="Overview",
+                reason="Architecture summary",
+            )
+        ],
+        related_diagrams=[
+            FastReportDiagram(
+                id="diagram-1",
+                title="Pipeline Flow",
+                type="flowchart",
+                source="wiki",
+                reason="System diagram",
+            )
+        ],
+    )
+
+    with patch("worker.jobs.generate_fast_report_section", return_value=result):
+        try:
+            await run_fast_report(
+                {},
+                repo_id="r1",
+                job_id="j1",
+                report_id="fr1",
+                section_id="sec1",
+                question="How does indexing work?",
+            )
+
+            async with get_session(db_path) as s:
+                job = await s.get(Job, "j1")
+                report = await s.get(FastReport, "fr1")
+                section = await s.get(FastReportSection, "sec1")
+
+                assert job is not None
+                assert job.status == "done"
+                assert job.progress == 100
+                assert report is not None
+                assert report.status == "done"
+                assert report.active_section_id == "sec1"
+                assert section is not None
+                assert section.status == "done"
+                assert section.title == "Indexing Flow"
+                assert section.summary == "The worker job orchestrates indexing."
+                assert section.markdown.startswith("# Indexing Flow")
+                citations = json.loads(section.citations_json)
+                assert citations[0]["id"] == "code-1"
+                assert citations[0]["file_path"] == "worker/jobs.py"
+                assert json.loads(section.evidence_blocks_json)[0]["citation_id"] == (
+                    "code-1"
+                )
+                assert json.loads(section.related_wiki_pages_json)[0]["slug"] == (
+                    "overview"
+                )
+                assert json.loads(section.related_diagrams_json)[0]["id"] == (
+                    "diagram-1"
+                )
+        finally:
+            await dispose_db(db_path)
+            reset_config()
