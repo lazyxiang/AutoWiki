@@ -12,7 +12,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routers import chat as chat_router
 from api.routers import fast_report as fast_report_router
 from api.routers import jobs as jobs_router
 from api.routers import repos
@@ -67,7 +66,6 @@ app.add_middleware(
 app.include_router(repos.router)
 app.include_router(jobs_router.router)
 app.include_router(wiki_router.router)
-app.include_router(chat_router.router)
 app.include_router(fast_report_router.router)
 app.include_router(research_router.router)
 app.include_router(settings_router.router)

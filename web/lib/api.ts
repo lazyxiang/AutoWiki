@@ -1,7 +1,7 @@
 /**
  * API client for interacting with the AutoWiki backend.
  * Provides functions for submitting repositories, fetching wiki pages,
- * managing chat sessions, and retrieving repository lists.
+ * and retrieving repository lists.
  */
 
 // INTERNAL_API_URL is used for server-side SSR calls (Docker: http://api:3001)
@@ -133,33 +133,6 @@ export async function getWikiPage(repoId: string, slug: string) {
     throw new ApiError(await res.text(), res.status);
   }
   return res.json() as Promise<{ slug: string; title: string; content: string }>;
-}
-
-/**
- * Creates a new chat session for a repository.
- * 
- * @param repoId - The repository ID.
- * @returns The session ID.
- */
-export async function createChatSession(repoId: string): Promise<{ session_id: string }> {
-  const res = await fetch(`${API_URL}/api/repos/${repoId}/chat`, { method: "POST" });
-  if (!res.ok) throw new Error(`Failed to create chat session: ${res.status}`);
-  return res.json();
-}
-
-/**
- * Retrieves the message history for a chat session.
- * 
- * @param repoId - The repository ID.
- * @param sessionId - The chat session ID.
- * @returns A list of messages with roles and content.
- */
-export async function getChatHistory(repoId: string, sessionId: string): Promise<{
-  messages: Array<{ role: string; content: string }>;
-}> {
-  const res = await fetch(`${API_URL}/api/repos/${repoId}/chat/${sessionId}`);
-  if (!res.ok) throw new Error(`Failed to get chat history: ${res.status}`);
-  return res.json();
 }
 
 /**
