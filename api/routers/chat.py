@@ -244,4 +244,7 @@ async def ws_chat(websocket: WebSocket, repo_id: str, session_id: str):
         except Exception:
             pass  # Socket may already be closed
     finally:
-        await websocket.close()
+        try:
+            await websocket.close()
+        except Exception:
+            pass
