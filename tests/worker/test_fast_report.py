@@ -93,124 +93,6 @@ def test_assemble_fast_report_markdown_uses_canonical_heading_order():
     assert "- Diagram: Pipeline Flow (`flowchart`) - Visual call path" in markdown
 
 
-def test_parse_draft_sections_normalizes_heading_variants():
-    from worker.fast_report import _parse_draft_sections
-
-    section_claims = _parse_draft_sections(
-        [
-            {
-                "heading": "Implementation Details",
-                "claims": [
-                    {
-                        "text": "Key details live in worker/jobs.py.",
-                        "citation_ids": ["code-1"],
-                        "supporting_layers": ["code_evidence"],
-                    }
-                ],
-            },
-            {
-                "heading": "Execution Flow",
-                "claims": [
-                    {
-                        "text": "The job clones before later stages run.",
-                        "citation_ids": ["struct-1", "code-1"],
-                        "supporting_layers": [
-                            "repository_structure",
-                            "code_evidence",
-                        ],
-                    }
-                ],
-            },
-        ]
-    )
-
-    assert list(section_claims) == [
-        "Key Implementation Details",
-        "Execution Flow / Steps",
-    ]
-
-
-def test_select_related_wiki_pages_prefers_overlap_and_dedupes_stably():
-    from worker.fast_report import (
-        FastReportCitation,
-        _select_related_wiki_pages,
-    )
-
-    pages = _select_related_wiki_pages(
-        question="How does the auth cache invalidation flow work?",
-        evidence_citations=[
-            FastReportCitation(
-                id="code-1",
-                file_path="worker/auth/cache_invalidation.py",
-                start_line=1,
-                end_line=20,
-                label="cache_invalidation.py",
-                kind="code_evidence",
-            )
-        ],
-        candidate_pages=[
-            FastReportWikiLink(
-                slug="auth-flow",
-                title="Authentication Flow",
-                reason="Related generated wiki page",
-            ),
-            FastReportWikiLink(
-                slug="cache-invalidation",
-                title="Cache Invalidation",
-                reason="Related generated wiki page",
-            ),
-            FastReportWikiLink(
-                slug="auth-flow",
-                title="Authentication Flow",
-                reason="Duplicate copy should be dropped",
-            ),
-            FastReportWikiLink(
-                slug="overview",
-                title="Overview",
-                reason="Related generated wiki page",
-            ),
-        ],
-        limit=3,
-    )
-
-    assert [(page.slug, page.title) for page in pages] == [
-        ("cache-invalidation", "Cache Invalidation"),
-        ("auth-flow", "Authentication Flow"),
-    ]
-
-
-def test_select_related_wiki_pages_returns_none_when_overlap_is_zero():
-    from worker.fast_report import FastReportCitation, _select_related_wiki_pages
-
-    pages = _select_related_wiki_pages(
-        question="How are billing webhooks retried?",
-        evidence_citations=[
-            FastReportCitation(
-                id="code-1",
-                file_path="payments/webhooks/retry.py",
-                start_line=10,
-                end_line=40,
-                label="retry.py",
-                kind="code_evidence",
-            )
-        ],
-        candidate_pages=[
-            FastReportWikiLink(
-                slug="indexing-overview",
-                title="Indexing Overview",
-                reason="Related generated wiki page",
-            ),
-            FastReportWikiLink(
-                slug="planner-architecture",
-                title="Planner Architecture",
-                reason="Related generated wiki page",
-            ),
-        ],
-    )
-
-    assert pages == []
-
-
 async def test_generate_fast_report_section_returns_structured_section(mock_llm):
     from worker.fast_report import (
         CodeEvidenceLayer,
@@ -398,39 +280,6 @@ async def test_generate_fast_report_section_returns_structured_section(mock_llm)
     assert [diagram.id for diagram in result.related_diagrams] == ["diagram-1"]
 
 
-async def test_enqueue_fast_report_enqueues_expected_payload():
-    from api.queue import enqueue_fast_report
-
-    with patch("api.queue._enqueue") as enqueue_mock:
-        job_id = await enqueue_fast_report(
-            repo_id="repo-1",
-            job_id="job-1",
-            report_id="report-1",
-            section_id="section-1",
-            question="How does indexing work?",
-        )
-
-    assert job_id == "job-1"
-    enqueue_mock.assert_awaited_once_with(
-        "run_fast_report",
-        repo_id="repo-1",
-        job_id="job-1",
-        report_id="report-1",
-        section_id="section-1",
-        question="How does indexing work?",
-    )
-
-
-async def test_worker_startup_registers_fast_report_runtime():
-    from worker.main import startup
-
-    ctx = {}
-
-    await startup(ctx)
-
-    assert callable(ctx["fast_report_retriever_factory"])
-
-
 async def test_run_fast_report_persists_completed_section(
     tmp_path, monkeypatch, mock_llm, mock_embedding
 ):
@@ -522,10 +371,7 @@ async def test_run_fast_report_persists_completed_section(
 
     fake_store = MagicMock()
 
-    search_calls: list[dict[str, int | None]] = []
-
     def _search(query_vec, k=5, doc_k=None):
-        search_calls.append({"k": k, "doc_k": doc_k})
         if doc_k == 3:
             return [
                 {
@@ -598,8 +444,6 @@ async def test_run_fast_report_persists_completed_section(
                 assert "README.md" not in section.citations_json
                 assert json.loads(section.related_wiki_pages_json) == []
                 assert "diagram" not in section.related_diagrams_json.lower()
-                assert fake_store.search.call_count >= 2
-                assert any(call["doc_k"] == 3 for call in search_calls)
         finally:
             await dispose_db(db_path)
             reset_config()

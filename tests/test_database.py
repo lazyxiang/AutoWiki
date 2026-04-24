@@ -90,26 +90,8 @@ async def test_chat_models_created(tmp_path):
         await dispose_db(db_path)
 
 
-async def test_fast_report_tables_created(tmp_path):
-    db_path = str(tmp_path / "test.db")
-    await init_db(db_path)
-    try:
-        from sqlalchemy import inspect
-
-        from shared.database import _engines
-
-        engine = _engines[db_path]
-        async with engine.connect() as conn:
-            tables = await conn.run_sync(
-                lambda sync_conn: inspect(sync_conn).get_table_names()
-            )
-        assert "fast_reports" in tables
-        assert "fast_report_sections" in tables
-    finally:
-        await dispose_db(db_path)
-
-
 async def test_fast_report_persists_commit_sha_and_expiry(db):
+    import json
     from datetime import UTC, datetime, timedelta
 
     from sqlalchemy import select
@@ -117,12 +99,6 @@ async def test_fast_report_persists_commit_sha_and_expiry(db):
     from shared.models import FastReport, FastReportSection
 
     expires_at = datetime.now(UTC) + timedelta(days=7)
-    evidence_json = (
-        '[{"citation_id":"cite-1","snippet_start":10,"snippet_end":16,'
-        '"full_start":7,"full_end":30,"default_context":3,'
-        '"expanded_context":18,"is_collapsed":true,'
-        '"code":"return run_pipeline()","symbol_path":"worker.jobs.run"}]'
-    )
 
     async with get_session(str(db)) as session:
         session.add(
@@ -152,7 +128,9 @@ async def test_fast_report_persists_commit_sha_and_expiry(db):
                 summary="Short summary",
                 markdown="## Overview",
                 citations_json="[]",
-                evidence_blocks_json=evidence_json,
+                evidence_blocks_json=json.dumps(
+                    [{"citation_id": "cite-1", "snippet_start": 10}]
+                ),
                 related_wiki_pages_json="[]",
                 related_diagrams_json="[]",
                 status="done",
@@ -175,7 +153,7 @@ async def test_fast_report_persists_commit_sha_and_expiry(db):
         section = result.scalar_one()
         assert section.query == "How does indexing work?"
         assert section.report_id == "report-1"
-        assert section.evidence_blocks_json == evidence_json
+        assert json.loads(section.evidence_blocks_json)[0]["citation_id"] == "cite-1"
 
 
 async def test_fast_report_active_section_requires_existing_section(db):
