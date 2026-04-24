@@ -16,9 +16,30 @@ import { useFastReportStream, type FastReportCompleteEvent } from "@/lib/ws";
 import { ReportStack } from "./ReportStack";
 
 export const FLOATING_ASSISTANT_HEIGHT_VAR = "--floating-assistant-height";
+type WorkspaceStreamState = "idle" | "running" | "ready" | "error";
+
+export type FastReportWorkspaceState = {
+  report: FastReport | null;
+  error: string | null;
+  streamState: WorkspaceStreamState;
+  isStarting: boolean;
+  bufferedSections: FastReportSection[];
+  bufferedCompletion: FastReportCompleteEvent | null;
+};
 
 export function getWorkspaceBottomPadding() {
   return `calc(var(${FLOATING_ASSISTANT_HEIGHT_VAR}, 7rem) + 2rem)`;
+}
+
+export function createWorkspaceState(): FastReportWorkspaceState {
+  return {
+    report: null,
+    error: null,
+    streamState: "idle",
+    isStarting: false,
+    bufferedSections: [],
+    bufferedCompletion: null,
+  };
 }
 
 function mergeSection(section: FastReportSection, existing: FastReportSection[]) {
@@ -27,18 +48,116 @@ function mergeSection(section: FastReportSection, existing: FastReportSection[])
   return next;
 }
 
-function updateReportFromEvent(
-  report: FastReport | null,
+function getStreamStateForReport(report: Pick<FastReport, "status" | "error">) {
+  if (report.status === "done") {
+    return "ready" as const;
+  }
+
+  if (report.status === "failed") {
+    return "error" as const;
+  }
+
+  return "running" as const;
+}
+
+export function applySectionEvent(
+  state: FastReportWorkspaceState,
   section: FastReportSection,
-) {
-  if (!report) {
-    return null;
+): FastReportWorkspaceState {
+  if (!state.report) {
+    return {
+      ...state,
+      streamState: "running",
+      bufferedSections: mergeSection(section, state.bufferedSections),
+    };
   }
 
   return {
-    ...report,
-    active_section_id: section.id,
-    sections: mergeSection(section, report.sections),
+    ...state,
+    report: {
+      ...state.report,
+      active_section_id: section.id,
+      sections: mergeSection(section, state.report.sections),
+    },
+    streamState: "running",
+  };
+}
+
+export function applyReportCompleteEvent(
+  state: FastReportWorkspaceState,
+  event: FastReportCompleteEvent,
+): FastReportWorkspaceState {
+  if (!state.report) {
+    return {
+      ...state,
+      streamState: event.status === "failed" ? "error" : "ready",
+      bufferedCompletion: event,
+    };
+  }
+
+  return {
+    ...state,
+    report: {
+      ...state.report,
+      id: event.report_id,
+      job_id: event.job_id,
+      status: event.status,
+      active_section_id: event.active_section_id,
+    },
+    streamState: event.status === "failed" ? "error" : "ready",
+  };
+}
+
+export function applyLoadedReport(
+  state: FastReportWorkspaceState,
+  report: FastReport,
+): FastReportWorkspaceState {
+  const mergedSections = state.bufferedSections.reduce(
+    (sections, section) => mergeSection(section, sections),
+    report.sections,
+  );
+  const completedReport = state.bufferedCompletion
+    ? {
+        ...report,
+        id: state.bufferedCompletion.report_id,
+        job_id: state.bufferedCompletion.job_id,
+        status: state.bufferedCompletion.status,
+        active_section_id: state.bufferedCompletion.active_section_id,
+      }
+    : report;
+
+  return {
+    ...state,
+    report: {
+      ...completedReport,
+      sections: mergedSections,
+    },
+    error: completedReport.status === "failed" ? completedReport.error : null,
+    streamState: getStreamStateForReport(completedReport),
+    isStarting: false,
+    bufferedSections: [],
+    bufferedCompletion: null,
+  };
+}
+
+export function getWorkspaceViewModel(
+  state: FastReportWorkspaceState,
+  activeReportId: string | null,
+) {
+  const activeSectionId =
+    state.report?.active_section_id ?? state.report?.sections.at(-1)?.id ?? null;
+
+  return {
+    activeSectionId,
+    activeSection:
+      state.report?.sections.find((section) => section.id === activeSectionId) ??
+      null,
+    error: state.report?.status === "failed" ? state.report.error : state.error,
+    isLoading: Boolean(activeReportId && !state.report && !state.error),
+    isRunning:
+      state.isStarting ||
+      state.streamState === "running" ||
+      state.report?.status === "queued",
   };
 }
 
@@ -59,11 +178,8 @@ export function FastReportWorkspace({
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [report, setReport] = useState<FastReport | null>(null);
   const [createdReportId, setCreatedReportId] = useState<string | null>(null);
-  const [streamState, setStreamState] = useState<"idle" | "running" | "ready" | "error">("idle");
-  const [isStarting, setIsStarting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [state, setState] = useState<FastReportWorkspaceState>(createWorkspaceState);
   const requestedInitialReport = useRef(false);
   const activeReportId = reportId ?? createdReportId;
 
@@ -80,18 +196,20 @@ export function FastReportWorkspace({
         if (cancelled) {
           return;
         }
-        setReport(nextReport);
-        setError(null);
-        setStreamState(nextReport.status === "complete" ? "ready" : "running");
+        setState((current) => applyLoadedReport(current, nextReport));
       } catch (err) {
         if (cancelled) {
           return;
         }
-        setError(err instanceof Error ? err.message : String(err));
-        setStreamState("error");
+        setState((current) => ({
+          ...current,
+          error: err instanceof Error ? err.message : String(err),
+          streamState: "error",
+          isStarting: false,
+        }));
       } finally {
         if (!cancelled) {
-          setIsStarting(false);
+          setState((current) => ({ ...current, isStarting: false }));
         }
       }
     }
@@ -110,9 +228,12 @@ export function FastReportWorkspace({
         return;
       }
 
-      setIsStarting(true);
-      setStreamState("running");
-      setError(null);
+      setState((current) => ({
+        ...current,
+        isStarting: true,
+        streamState: "running",
+        error: null,
+      }));
 
       try {
         const next = await startFastReport(repoId, trimmed);
@@ -121,9 +242,12 @@ export function FastReportWorkspace({
           `${repoPath(owner, repo, repoId)}/fast/${encodeURIComponent(next.report_id)}`,
         );
       } catch (err) {
-        setIsStarting(false);
-        setError(err instanceof Error ? err.message : String(err));
-        setStreamState("error");
+        setState((current) => ({
+          ...current,
+          isStarting: false,
+          error: err instanceof Error ? err.message : String(err),
+          streamState: "error",
+        }));
       }
     },
     [owner, repo, repoId, router],
@@ -144,30 +268,22 @@ export function FastReportWorkspace({
   }, [activeReportId, beginReport, searchParams]);
 
   const handleSectionComplete = useCallback((section: FastReportSection) => {
-    setReport((current) => updateReportFromEvent(current, section));
-    setStreamState("running");
+    setState((current) => applySectionEvent(current, section));
   }, []);
 
   const handleReportComplete = useCallback(
     (event: FastReportCompleteEvent) => {
-      setReport((current) =>
-        current
-          ? {
-              ...current,
-              id: event.report_id,
-              status: "complete",
-              active_section_id: current.active_section_id,
-            }
-          : current,
-      );
-      setStreamState("ready");
+      setState((current) => applyReportCompleteEvent(current, event));
     },
     [],
   );
 
   const handleStreamError = useCallback((message: string) => {
-    setError(message);
-    setStreamState("error");
+    setState((current) => ({
+      ...current,
+      error: message,
+      streamState: "error",
+    }));
   }, []);
 
   useFastReportStream(
@@ -178,12 +294,8 @@ export function FastReportWorkspace({
     handleStreamError,
   );
 
-  const activeSectionId = report?.active_section_id ?? report?.sections.at(-1)?.id ?? null;
-  const activeSection = report?.sections.find((section) => section.id === activeSectionId) ?? null;
   const bottomPadding = useMemo(() => getWorkspaceBottomPadding(), []);
-  const isLoading = Boolean(activeReportId && !report && !error);
-  const isRunning =
-    isStarting || streamState === "running" || report?.status === "running";
+  const view = getWorkspaceViewModel(state, activeReportId);
 
   return (
     <div className="mx-auto flex w-full max-w-[1500px] flex-1 flex-col px-4 pb-8 pt-6 sm:px-6 lg:px-10">
@@ -191,7 +303,7 @@ export function FastReportWorkspace({
         <div className="flex flex-wrap items-center gap-3 text-[0.72rem] font-semibold uppercase tracking-[0.26em] text-slate-500">
           <span>Fast report</span>
           {compatibilityMode ? <span>Compatibility route</span> : null}
-          {report?.status ? <span>Status: {report.status}</span> : null}
+          {state.report?.status ? <span>Status: {state.report.status}</span> : null}
         </div>
         <div className="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
           <div>
@@ -214,9 +326,9 @@ export function FastReportWorkspace({
         </div>
       </div>
 
-      {error ? (
+      {view.error ? (
         <div className="mb-6 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-700">
-          {error}
+          {view.error}
         </div>
       ) : null}
 
@@ -226,11 +338,11 @@ export function FastReportWorkspace({
           style={{ paddingBottom: bottomPadding }}
         >
           <ReportStack
-            sections={report?.sections ?? []}
-            activeSectionId={activeSectionId}
-            isRunning={isRunning}
+            sections={state.report?.sections ?? []}
+            activeSectionId={view.activeSectionId}
+            isRunning={view.isRunning}
           />
-          {isLoading ? (
+          {view.isLoading ? (
             <div className="mt-6 max-w-3xl text-sm leading-6 text-slate-500">
               Loading report workspace...
             </div>
@@ -260,11 +372,11 @@ export function FastReportWorkspace({
                 Active section
               </div>
               <div className="mt-3 text-sm leading-6 text-slate-600">
-                {activeSection ? (
+                {view.activeSection ? (
                   <>
-                    <p className="font-medium text-slate-900">{activeSection.title}</p>
+                    <p className="font-medium text-slate-900">{view.activeSection.title}</p>
                     <p className="mt-2">
-                      {activeSection.summary ??
+                      {view.activeSection.summary ??
                         "Supporting code evidence will appear here once the rail is implemented."}
                     </p>
                   </>
