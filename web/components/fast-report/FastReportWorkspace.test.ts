@@ -8,6 +8,7 @@ import {
   applyLoadedReport,
   applyReportCompleteEvent,
   applySectionEvent,
+  applyStreamError,
   createWorkspaceState,
   getWorkspaceBottomPadding,
   getWorkspaceViewModel,
@@ -140,6 +141,26 @@ describe("FastReportWorkspace", () => {
       isRunning: false,
       activeSectionId: "section-early",
     });
+  });
+
+  it("stops reporting running when a stream error lands after a queued snapshot", () => {
+    const errored = applyStreamError(
+      applyLoadedReport(
+        createWorkspaceState(),
+        makeReport({
+          status: "queued",
+        }),
+      ),
+      "WebSocket error",
+    );
+
+    expect(getWorkspaceViewModel(errored, "report-1")).toMatchObject({
+      error: "WebSocket error",
+      isLoading: false,
+      isRunning: false,
+    });
+    expect(errored.report?.status).toBe("queued");
+    expect(errored.streamState).toBe("error");
   });
 });
 

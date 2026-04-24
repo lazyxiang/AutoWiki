@@ -140,12 +140,29 @@ export function applyLoadedReport(
   };
 }
 
+export function applyStreamError(
+  state: FastReportWorkspaceState,
+  message: string,
+): FastReportWorkspaceState {
+  return {
+    ...state,
+    error: message,
+    streamState: "error",
+    isStarting: false,
+  };
+}
+
 export function getWorkspaceViewModel(
   state: FastReportWorkspaceState,
   activeReportId: string | null,
 ) {
   const activeSectionId =
     state.report?.active_section_id ?? state.report?.sections.at(-1)?.id ?? null;
+
+  const hasTerminalError =
+    state.streamState === "error" ||
+    state.report?.status === "failed" ||
+    Boolean(state.report?.status !== "failed" && state.error);
 
   return {
     activeSectionId,
@@ -154,10 +171,11 @@ export function getWorkspaceViewModel(
       null,
     error: state.report?.status === "failed" ? state.report.error : state.error,
     isLoading: Boolean(activeReportId && !state.report && !state.error),
-    isRunning:
-      state.isStarting ||
-      state.streamState === "running" ||
-      state.report?.status === "queued",
+    isRunning: hasTerminalError
+      ? false
+      : state.isStarting ||
+          state.streamState === "running" ||
+          state.report?.status === "queued",
   };
 }
 
@@ -279,11 +297,7 @@ export function FastReportWorkspace({
   );
 
   const handleStreamError = useCallback((message: string) => {
-    setState((current) => ({
-      ...current,
-      error: message,
-      streamState: "error",
-    }));
+    setState((current) => applyStreamError(current, message));
   }, []);
 
   useFastReportStream(
