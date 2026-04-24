@@ -31,6 +31,9 @@ class Repository(Base):
     pages: Mapped[list[WikiPage]] = relationship(
         "WikiPage", back_populates="repository"
     )
+    fast_reports: Mapped[list[FastReport]] = relationship(
+        "FastReport", back_populates="repository"
+    )
 
 
 class Job(Base):
@@ -111,6 +114,49 @@ class ResearchReport(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     repository: Mapped[Repository] = relationship("Repository")
     job: Mapped[Job] = relationship("Job")
+
+
+class FastReport(Base):
+    __tablename__ = "fast_reports"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    repo_id: Mapped[str] = mapped_column(ForeignKey("repositories.id"), nullable=False)
+    commit_sha: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    active_section_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(UTC)
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    repository: Mapped[Repository] = relationship(
+        "Repository", back_populates="fast_reports"
+    )
+    sections: Mapped[list[FastReportSection]] = relationship(
+        "FastReportSection", back_populates="report"
+    )
+
+
+class FastReportSection(Base):
+    __tablename__ = "fast_report_sections"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    report_id: Mapped[str] = mapped_column(
+        ForeignKey("fast_reports.id"), nullable=False
+    )
+    query: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(String, nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    markdown: Mapped[str] = mapped_column(Text, nullable=False)
+    citations_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    related_wiki_pages_json: Mapped[str] = mapped_column(
+        Text, nullable=False, default="[]"
+    )
+    related_diagrams_json: Mapped[str] = mapped_column(
+        Text, nullable=False, default="[]"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(UTC)
+    )
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    report: Mapped[FastReport] = relationship("FastReport", back_populates="sections")
 
 
 class PlatformToken(Base):

@@ -90,6 +90,83 @@ async def test_chat_models_created(tmp_path):
         await dispose_db(db_path)
 
 
+async def test_fast_report_tables_created(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    await init_db(db_path)
+    try:
+        from sqlalchemy import inspect
+
+        from shared.database import _engines
+
+        engine = _engines[db_path]
+        async with engine.connect() as conn:
+            tables = await conn.run_sync(
+                lambda sync_conn: inspect(sync_conn).get_table_names()
+            )
+        assert "fast_reports" in tables
+        assert "fast_report_sections" in tables
+    finally:
+        await dispose_db(db_path)
+
+
+async def test_fast_report_persists_commit_sha_and_expiry(db):
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import select
+
+    from shared.models import FastReport, FastReportSection
+
+    expires_at = datetime.now(UTC) + timedelta(days=7)
+
+    async with get_session(str(db)) as session:
+        session.add(
+            Repository(
+                id="repo-fast",
+                owner="owner",
+                name="repo",
+                platform="github",
+                status="ready",
+            )
+        )
+        session.add(
+            FastReport(
+                id="report-1",
+                repo_id="repo-fast",
+                commit_sha="deadbeef",
+                expires_at=expires_at,
+                status="done",
+                active_section_id="section-1",
+            )
+        )
+        session.add(
+            FastReportSection(
+                id="section-1",
+                report_id="report-1",
+                query="How does indexing work?",
+                title="Indexing Flow",
+                summary="Short summary",
+                markdown="## Overview",
+                citations_json="[]",
+                related_wiki_pages_json="[]",
+                related_diagrams_json="[]",
+                status="done",
+            )
+        )
+        await session.commit()
+
+    async with get_session(str(db)) as session:
+        report = await session.get(FastReport, "report-1")
+        assert report is not None
+        assert report.commit_sha == "deadbeef"
+        assert report.expires_at == expires_at.replace(tzinfo=None)
+        result = await session.execute(
+            select(FastReportSection).where(FastReportSection.report_id == "report-1")
+        )
+        section = result.scalar_one()
+        assert section.query == "How does indexing work?"
+        assert section.report_id == "report-1"
+
+
 async def test_platform_token_crud(tmp_path):
     from datetime import UTC, datetime
 
