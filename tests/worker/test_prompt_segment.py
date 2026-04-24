@@ -1,3 +1,5 @@
+import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
 from worker.llm.prompt_segment import PromptSegment, normalize_prompt, segments_to_text
 
 
@@ -57,6 +59,16 @@ async def test_logging_provider_forwards_segment_list():
     assert result == "response"
 
 
+@pytest.fixture(autouse=True)
+def mock_clients():
+    from unittest.mock import patch
+    with (
+        patch("worker.llm.openai_provider.AsyncOpenAI"),
+        patch("worker.llm.anthropic_provider.anthropic.AsyncAnthropic"),
+    ):
+        yield
+
+
 async def test_anthropic_provider_builds_cache_control_blocks(monkeypatch):
     from unittest.mock import MagicMock
 
@@ -71,7 +83,7 @@ async def test_anthropic_provider_builds_cache_control_blocks(monkeypatch):
         resp.content = [MagicMock(text="response")]
         return resp
 
-    monkeypatch.setattr(provider._client.messages, "create", mock_create)
+    provider._client.messages.create = AsyncMock(side_effect=mock_create)
     segments = [
         PromptSegment(text="cached context", cacheable=True),
         PromptSegment(text="variable tail"),
@@ -100,7 +112,7 @@ async def test_anthropic_provider_plain_string_unchanged(monkeypatch):
         resp.content = [MagicMock(text="response")]
         return resp
 
-    monkeypatch.setattr(provider._client.messages, "create", mock_create)
+    provider._client.messages.create = AsyncMock(side_effect=mock_create)
     await provider.generate("plain prompt", system="sys")
     messages = captured_kwargs["messages"]
     assert messages == [{"role": "user", "content": "plain prompt"}]
@@ -120,7 +132,7 @@ async def test_anthropic_provider_system_segments(monkeypatch):
         resp.content = [MagicMock(text="response")]
         return resp
 
-    monkeypatch.setattr(provider._client.messages, "create", mock_create)
+    provider._client.messages.create = AsyncMock(side_effect=mock_create)
     system_segments = [
         PromptSegment(text="You are a writer.", cacheable=True),
         PromptSegment(text="Today's task:"),
@@ -197,7 +209,7 @@ async def test_openai_provider_concatenates_segments(monkeypatch):
         resp.choices = [MagicMock(message=MagicMock(content="ok"))]
         return resp
 
-    monkeypatch.setattr(provider._client.chat.completions, "create", mock_create)
+    provider._client.chat.completions.create = AsyncMock(side_effect=mock_create)
 
     segments = [
         PromptSegment(text="cached part", cacheable=True),

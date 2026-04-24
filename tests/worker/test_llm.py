@@ -11,13 +11,21 @@ def test_provider_is_abstract():
         LLMProvider()
 
 
+@pytest.fixture(autouse=True)
+def mock_clients():
+    with (
+        patch("worker.llm.openai_provider.AsyncOpenAI"),
+        patch("worker.llm.anthropic_provider.anthropic.AsyncAnthropic"),
+    ):
+        yield
+
+
 async def test_anthropic_generate_calls_api():
     provider = AnthropicProvider(api_key="test-key", model="claude-sonnet-4-6")
-    with patch.object(
-        provider._client.messages, "create", new_callable=AsyncMock
-    ) as mock_create:
-        mock_create.return_value = AsyncMock(content=[AsyncMock(text="Hello")])
-        result = await provider.generate("Say hello")
+    provider._client.messages.create = AsyncMock(
+        return_value=AsyncMock(content=[AsyncMock(text="Hello")])
+    )
+    result = await provider.generate("Say hello")
     assert result == "Hello"
 
 
@@ -27,36 +35,33 @@ async def test_anthropic_generate_structured_returns_dict():
         '{"pages": [{"title": "Overview", "purpose": "Overview of project.",'
         ' "files": ["main.py"]}]}'
     )
-    with patch.object(
-        provider._client.messages, "create", new_callable=AsyncMock
-    ) as mock_create:
-        mock_create.return_value = AsyncMock(content=[AsyncMock(text=raw)])
-        result = await provider.generate_structured(
-            "Make a plan", schema={"type": "object"}
-        )
+    provider._client.messages.create = AsyncMock(
+        return_value=AsyncMock(content=[AsyncMock(text=raw)])
+    )
+    result = await provider.generate_structured(
+        "Make a plan", schema={"type": "object"}
+    )
     assert result["pages"][0]["title"] == "Overview"
 
 
 async def test_anthropic_generate_with_system():
     provider = AnthropicProvider(api_key="test-key", model="claude-sonnet-4-6")
-    with patch.object(
-        provider._client.messages, "create", new_callable=AsyncMock
-    ) as mock_create:
-        mock_create.return_value = AsyncMock(content=[AsyncMock(text="result")])
-        result = await provider.generate("prompt", system="You are helpful")
+    provider._client.messages.create = AsyncMock(
+        return_value=AsyncMock(content=[AsyncMock(text="result")])
+    )
+    result = await provider.generate("prompt", system="You are helpful")
     assert result == "result"
-    call_kwargs = mock_create.call_args[1]
+    call_kwargs = provider._client.messages.create.call_args[1]
     assert call_kwargs["system"] == "You are helpful"
 
 
 async def test_anthropic_generate_structured_strips_json_fence():
     provider = AnthropicProvider(api_key="test-key", model="claude-sonnet-4-6")
     raw_with_fence = '```json\n{"key": "value"}\n```'
-    with patch.object(
-        provider._client.messages, "create", new_callable=AsyncMock
-    ) as mock_create:
-        mock_create.return_value = AsyncMock(content=[AsyncMock(text=raw_with_fence)])
-        result = await provider.generate_structured("prompt", schema={})
+    provider._client.messages.create = AsyncMock(
+        return_value=AsyncMock(content=[AsyncMock(text=raw_with_fence)])
+    )
+    result = await provider.generate_structured("prompt", schema={})
     assert result == {"key": "value"}
 
 
@@ -92,11 +97,8 @@ async def test_openai_provider_generate():
     provider = OpenAIProvider(api_key="test-key")
     mock_response = MagicMock()
     mock_response.choices = [MagicMock(message=MagicMock(content="OpenAI response"))]
-    with patch.object(
-        provider._client.chat.completions, "create", new_callable=AsyncMock
-    ) as mock_create:
-        mock_create.return_value = mock_response
-        result = await provider.generate("prompt")
+    provider._client.chat.completions.create = AsyncMock(return_value=mock_response)
+    result = await provider.generate("prompt")
     assert result == "OpenAI response"
 
 
