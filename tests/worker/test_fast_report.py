@@ -132,22 +132,22 @@ def test_parse_draft_sections_normalizes_heading_variants():
 
 def test_select_related_wiki_pages_prefers_overlap_and_dedupes_stably():
     from worker.fast_report import (
-        FastReportClaim,
+        FastReportCitation,
         _select_related_wiki_pages,
     )
 
     pages = _select_related_wiki_pages(
         question="How does the auth cache invalidation flow work?",
-        report_title="Auth cache flow",
-        section_claims={
-            "Overview": [
-                FastReportClaim(
-                    text="Auth requests consult the cache layer before invalidation.",
-                    citation_ids=["code-1"],
-                    supporting_layers=["code_evidence"],
-                )
-            ]
-        },
+        evidence_citations=[
+            FastReportCitation(
+                id="code-1",
+                file_path="worker/auth/cache_invalidation.py",
+                start_line=1,
+                end_line=20,
+                label="cache_invalidation.py",
+                kind="code_evidence",
+            )
+        ],
         candidate_pages=[
             FastReportWikiLink(
                 slug="auth-flow",
@@ -176,8 +176,39 @@ def test_select_related_wiki_pages_prefers_overlap_and_dedupes_stably():
     assert [(page.slug, page.title) for page in pages] == [
         ("cache-invalidation", "Cache Invalidation"),
         ("auth-flow", "Authentication Flow"),
-        ("overview", "Overview"),
     ]
+
+
+def test_select_related_wiki_pages_returns_none_when_overlap_is_zero():
+    from worker.fast_report import FastReportCitation, _select_related_wiki_pages
+
+    pages = _select_related_wiki_pages(
+        question="How are billing webhooks retried?",
+        evidence_citations=[
+            FastReportCitation(
+                id="code-1",
+                file_path="payments/webhooks/retry.py",
+                start_line=10,
+                end_line=40,
+                label="retry.py",
+                kind="code_evidence",
+            )
+        ],
+        candidate_pages=[
+            FastReportWikiLink(
+                slug="indexing-overview",
+                title="Indexing Overview",
+                reason="Related generated wiki page",
+            ),
+            FastReportWikiLink(
+                slug="planner-architecture",
+                title="Planner Architecture",
+                reason="Related generated wiki page",
+            ),
+        ],
+    )
+
+    assert pages == []
 
 
 async def test_generate_fast_report_section_returns_structured_section(mock_llm):
@@ -363,7 +394,7 @@ async def test_generate_fast_report_section_returns_structured_section(mock_llm)
     assert "code-2" not in result.markdown
     assert "sem-1" not in result.markdown
     assert [block.citation_id for block in result.evidence_blocks] == ["code-1"]
-    assert [page.slug for page in result.related_wiki_pages] == ["overview"]
+    assert result.related_wiki_pages == []
     assert [diagram.id for diagram in result.related_diagrams] == ["diagram-1"]
 
 
@@ -565,9 +596,7 @@ async def test_run_fast_report_persists_completed_section(
                     "code-1"
                 )
                 assert "README.md" not in section.citations_json
-                assert json.loads(section.related_wiki_pages_json)[0]["slug"] == (
-                    "overview"
-                )
+                assert json.loads(section.related_wiki_pages_json) == []
                 assert "diagram" not in section.related_diagrams_json.lower()
                 assert fake_store.search.call_count >= 2
                 assert any(call["doc_k"] == 3 for call in search_calls)

@@ -279,6 +279,91 @@ async def test_get_fast_report_returns_persisted_failure_detail(fast_report_env)
         await dispose_db(db_path)
 
 
+async def test_get_fast_report_unexpired_reload_returns_persisted_data_without_enqueue(
+    fast_report_env, monkeypatch
+):
+    """Reloading an unexpired report serves DB state only and never re-enqueues work."""
+    from api.main import app
+    from shared.database import dispose_db, get_session, init_db
+    from shared.models import FastReport, FastReportSection, Job, Repository
+
+    db_path = fast_report_env
+    await init_db(db_path)
+    enqueue_calls: list[dict] = []
+
+    async def _fake_enqueue(*args, **kwargs):
+        enqueue_calls.append(kwargs)
+
+    monkeypatch.setattr("api.routers.fast_report._enqueue_fast_report", _fake_enqueue)
+
+    try:
+        async with get_session(db_path) as s:
+            s.add(Repository(id="r1", owner="o", name="n", status="ready"))
+            s.add(Job(id="fr1", repo_id="r1", type="fast_report", status="done"))
+            report = FastReport(
+                id="fr1",
+                repo_id="r1",
+                commit_sha="persisted-sha",
+                status="done",
+                expires_at=datetime.now(UTC) + timedelta(days=2),
+            )
+            s.add(report)
+            s.add(
+                FastReportSection(
+                    id="sec1",
+                    report_id="fr1",
+                    query="Persisted question",
+                    title="Persisted answer",
+                    summary="Persisted summary",
+                    markdown="# Persisted answer",
+                    citations_json="[]",
+                    evidence_blocks_json="[]",
+                    related_wiki_pages_json=json.dumps(
+                        [{"slug": "overview", "title": "Overview"}]
+                    ),
+                    related_diagrams_json="[]",
+                    status="done",
+                )
+            )
+            await s.flush()
+            report.active_section_id = "sec1"
+            await s.commit()
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get("/api/repos/r1/fast-reports/fr1")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["id"] == "fr1"
+        assert body["repo_id"] == "r1"
+        assert body["job_id"] == "fr1"
+        assert body["commit_sha"] == "persisted-sha"
+        assert body["status"] == "done"
+        assert body["error"] is None
+        assert body["active_section_id"] == "sec1"
+        assert body["sections"] == [
+            {
+                "id": "sec1",
+                "report_id": "fr1",
+                "query": "Persisted question",
+                "title": "Persisted answer",
+                "summary": "Persisted summary",
+                "markdown": "# Persisted answer",
+                "citations": [],
+                "evidence_blocks": [],
+                "related_wiki_pages": [{"slug": "overview", "title": "Overview"}],
+                "related_diagrams": [],
+                "created_at": body["sections"][0]["created_at"],
+                "status": "done",
+            }
+        ]
+        assert enqueue_calls == []
+    finally:
+        await dispose_db(db_path)
+
+
 async def test_start_fast_report_appends_section_to_existing_unexpired_report(
     fast_report_env, monkeypatch
 ):

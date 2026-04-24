@@ -371,11 +371,15 @@ def _tokenize_for_wiki_rank(text: str) -> set[str]:
     }
 
 
+def _citation_tokens(citation: FastReportCitation) -> set[str]:
+    path = citation.file_path.replace("/", " ").replace("_", " ").replace("-", " ")
+    return _tokenize_for_wiki_rank(path) | _tokenize_for_wiki_rank(citation.label)
+
+
 def _select_related_wiki_pages(
     *,
     question: str,
-    report_title: str,
-    section_claims: dict[str, list[FastReportClaim]],
+    evidence_citations: list[FastReportCitation],
     candidate_pages: list[FastReportWikiLink],
     limit: int = 3,
 ) -> list[FastReportWikiLink]:
@@ -391,28 +395,37 @@ def _select_related_wiki_pages(
     if not deduped_pages:
         return []
 
-    context_tokens = _tokenize_for_wiki_rank(question)
-    context_tokens |= _tokenize_for_wiki_rank(report_title)
-    for claims in section_claims.values():
-        for claim in claims:
-            context_tokens |= _tokenize_for_wiki_rank(claim.text)
+    question_tokens = _tokenize_for_wiki_rank(question)
+    evidence_tokens: set[str] = set()
+    for citation in evidence_citations:
+        evidence_tokens |= _citation_tokens(citation)
 
-    def _rank(page: FastReportWikiLink) -> tuple[int, int, int, str, str]:
+    ranked_pages: list[tuple[tuple[int, int, int, str, str], FastReportWikiLink]] = []
+    for page in deduped_pages:
         title_tokens = _tokenize_for_wiki_rank(page.title)
         slug_tokens = _tokenize_for_wiki_rank(page.slug.replace("-", " "))
-        reason_tokens = _tokenize_for_wiki_rank(page.reason or "")
-        title_overlap = len(context_tokens & title_tokens)
-        slug_overlap = len(context_tokens & slug_tokens)
-        reason_overlap = len(context_tokens & reason_tokens)
-        return (
-            -(title_overlap + slug_overlap + reason_overlap),
-            -title_overlap,
-            -slug_overlap,
-            page.title.lower(),
-            page.slug,
+        page_tokens = title_tokens | slug_tokens
+        evidence_overlap = len(evidence_tokens & page_tokens)
+        question_overlap = len(question_tokens & page_tokens)
+        total_overlap = evidence_overlap + question_overlap
+        if total_overlap == 0:
+            continue
+        ranked_pages.append(
+            (
+                (
+                    -evidence_overlap,
+                    -question_overlap,
+                    -total_overlap,
+                    page.title.lower(),
+                    page.slug,
+                ),
+                page,
+            )
         )
 
-    return sorted(deduped_pages, key=_rank)[:limit]
+    return [page for _rank, page in sorted(ranked_pages, key=lambda item: item[0])][
+        :limit
+    ]
 
 
 def _build_generation_prompt(
@@ -501,10 +514,12 @@ async def generate_fast_report_section(
     raw = await llm.generate_structured(prompt, _SECTION_SCHEMA)
     section_claims = _parse_draft_sections(raw.get("sections", []))
     notes = list(raw.get("notes", []))
+    evidence_citations = _dedupe_citations(
+        layers.repository_structure.citations + layers.code_evidence.citations
+    )
     related_wiki_pages = _select_related_wiki_pages(
         question=question,
-        report_title=raw.get("title", "Fast Report"),
-        section_claims=section_claims,
+        evidence_citations=evidence_citations,
         candidate_pages=list(layers.curated_knowledge.wiki_pages),
     )
     markdown = assemble_fast_report_markdown(

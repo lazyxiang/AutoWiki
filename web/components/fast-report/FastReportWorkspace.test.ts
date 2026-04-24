@@ -1,10 +1,48 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+
+import React from "react";
+import { render, screen, waitFor } from "@testing-library/react";
+import { describe, expect, it, beforeEach, vi } from "vitest";
 
 import type { FastReport, FastReportSection } from "@/lib/api";
 import type { FastReportCompleteEvent } from "@/lib/ws";
 
+const {
+  getFastReportMock,
+  replaceMock,
+  connectFastReportStreamMock,
+  searchParamsState,
+} = vi.hoisted(() => ({
+  getFastReportMock: vi.fn(),
+  replaceMock: vi.fn(),
+  connectFastReportStreamMock: vi.fn(),
+  searchParamsState: { value: new URLSearchParams() },
+}));
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ replace: replaceMock }),
+  useSearchParams: () => searchParamsState.value,
+}));
+
+vi.mock("@/lib/api", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
+  return {
+    ...actual,
+    getFastReport: getFastReportMock,
+  };
+});
+
+vi.mock("@/lib/ws", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/ws")>("@/lib/ws");
+  return {
+    ...actual,
+    connectFastReportStream: connectFastReportStreamMock,
+  };
+});
+
 import {
   FLOATING_ASSISTANT_HEIGHT_VAR,
+  FastReportWorkspace,
   applyLoadedReport,
   applyReportCompleteEvent,
   applySectionEvent,
@@ -64,6 +102,15 @@ function makeCompleteEvent(
 }
 
 describe("FastReportWorkspace", () => {
+  beforeEach(() => {
+    getFastReportMock.mockReset();
+    replaceMock.mockReset();
+    connectFastReportStreamMock.mockReset();
+    vi.unstubAllGlobals();
+    searchParamsState.value = new URLSearchParams();
+    connectFastReportStreamMock.mockImplementation(() => ({ close: vi.fn() }));
+  });
+
   it("reserves bottom space from the floating assistant height variable", () => {
     expect(FLOATING_ASSISTANT_HEIGHT_VAR).toBe("--floating-assistant-height");
     expect(getWorkspaceBottomPadding()).toBe(
@@ -193,6 +240,113 @@ describe("FastReportWorkspace", () => {
     });
     expect(errored.report?.status).toBe("queued");
     expect(errored.streamState).toBe("error");
+  });
+
+  it("hydrates an existing report, appends a follow-up into the same report, and streams the new section", async () => {
+    const persistedSection = makeSection({
+      id: "section-1",
+      title: "Persisted section",
+      markdown: "Persisted body",
+      query: "Original question",
+    });
+    const appendedSection = makeSection({
+      id: "section-2",
+      title: "Follow-up section",
+      markdown: "Follow-up body",
+      query: "Follow-up question",
+      created_at: "2026-04-24T02:00:00Z",
+    });
+    let sectionHandler: ((section: FastReportSection) => void) | null = null;
+    let completeHandler: ((event: FastReportCompleteEvent) => void) | null = null;
+
+    searchParamsState.value = new URLSearchParams("q=Follow-up question");
+    getFastReportMock.mockResolvedValue(
+      makeReport({
+        id: "report-1",
+        status: "done",
+        active_section_id: "section-1",
+        sections: [persistedSection],
+      }),
+    );
+    connectFastReportStreamMock.mockImplementation(
+      (
+        _repoId: string,
+        _reportId: string,
+        handlers: {
+          onSectionComplete: (section: FastReportSection) => void;
+          onReportComplete: (event: FastReportCompleteEvent) => void;
+          onError: (msg: string) => void;
+        },
+      ) => {
+        sectionHandler = handlers.onSectionComplete;
+        completeHandler = handlers.onReportComplete;
+        return { close: vi.fn() };
+      },
+    );
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        report_id: "report-1",
+        job_id: "report-1",
+        section_id: "section-2",
+        status: "queued",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      React.createElement(FastReportWorkspace, {
+        owner: "openai",
+        repo: "autowiki",
+        repoId: "repo-1",
+        repoLabel: "openai/autowiki",
+        reportId: "report-1",
+      }),
+    );
+
+    await screen.findByRole("heading", { name: "Persisted section" });
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://localhost:3001/api/repos/repo-1/fast-reports",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            question: "Follow-up question",
+            report_id: "report-1",
+          }),
+        },
+      );
+    });
+
+    expect(replaceMock).toHaveBeenCalledWith("/repo-1/autowiki/fast/report-1");
+    expect(connectFastReportStreamMock).toHaveBeenCalledWith(
+      "repo-1",
+      "report-1",
+      expect.objectContaining({
+        onSectionComplete: expect.any(Function),
+        onReportComplete: expect.any(Function),
+        onError: expect.any(Function),
+      }),
+    );
+
+    sectionHandler?.(appendedSection);
+    completeHandler?.(
+      makeCompleteEvent({
+        report_id: "report-1",
+        active_section_id: "section-2",
+      }),
+    );
+
+    await screen.findByRole("heading", { name: "Follow-up section" });
+    expect(
+      screen.getByRole("heading", { name: "Persisted section" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("heading", { name: "Follow-up section" }),
+    ).toBeTruthy();
   });
 });
 
