@@ -1,4 +1,5 @@
 x-common-env: &common-env
+  - TZ=${TZ:-UTC}
   - REDIS_URL=redis://redis:6379
   - DATABASE_PATH=/data/autowiki.db
   - AUTOWIKI_DATA_DIR=/data
@@ -50,6 +51,7 @@ services:
     ports:
       - "127.0.0.1:3000:3000"
     environment:
+      - TZ=${TZ:-UTC}
       # Browser-side (baked into client bundle at build time)
       - NEXT_PUBLIC_API_URL=http://localhost:3001
       # Server-side SSR calls within Docker network
