@@ -441,8 +441,11 @@ async def test_run_fast_report_persists_completed_section(
 
     fake_store = MagicMock()
 
-    def _search(query_vec, k=5, doc_k=1):
-        if doc_k == 0:
+    search_calls: list[dict[str, int | None]] = []
+
+    def _search(query_vec, k=5, doc_k=None):
+        search_calls.append({"k": k, "doc_k": doc_k})
+        if doc_k == 3:
             return [
                 {
                     "file": "README.md",
@@ -454,12 +457,19 @@ async def test_run_fast_report_persists_completed_section(
             ]
         return [
             {
+                "file": "README.md",
+                "text": "AutoWiki generates repository documentation.",
+                "start_line": 1,
+                "end_line": 2,
+                "score": 0.95,
+            },
+            {
                 "file": "worker/jobs.py",
                 "text": "async def run_full_index(...): ...",
                 "start_line": 539,
                 "end_line": 566,
                 "score": 0.92,
-            }
+            },
         ]
 
     fake_store.search.side_effect = _search
@@ -504,11 +514,13 @@ async def test_run_fast_report_persists_completed_section(
                 assert json.loads(section.evidence_blocks_json)[0]["citation_id"] == (
                     "code-1"
                 )
+                assert "README.md" not in section.citations_json
                 assert json.loads(section.related_wiki_pages_json)[0]["slug"] == (
                     "overview"
                 )
                 assert "diagram" not in section.related_diagrams_json.lower()
                 assert fake_store.search.call_count >= 2
+                assert any(call["doc_k"] == 3 for call in search_calls)
         finally:
             await dispose_db(db_path)
             reset_config()

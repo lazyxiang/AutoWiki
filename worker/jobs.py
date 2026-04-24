@@ -279,6 +279,31 @@ def _missing_fast_report_retriever(name: str):
 
 
 FastReportRetrieverFactory = Callable[..., Awaitable[dict[str, Callable]]]
+_SOURCE_LIKE_EXTENSIONS = frozenset(
+    {
+        ".py",
+        ".js",
+        ".jsx",
+        ".ts",
+        ".tsx",
+        ".java",
+        ".go",
+        ".rs",
+        ".c",
+        ".cc",
+        ".cpp",
+        ".cxx",
+        ".h",
+        ".hh",
+        ".hpp",
+        ".hxx",
+        ".cs",
+    }
+)
+
+
+def _is_source_like_chunk(chunk: dict) -> bool:
+    return Path(chunk.get("file", "")).suffix.lower() in _SOURCE_LIKE_EXTENSIONS
 
 
 def _make_fast_report_query(question: str, intent: FastReportQuestionIntent) -> str:
@@ -387,7 +412,11 @@ async def _build_default_fast_report_retrievers(
         question: str, intent: FastReportQuestionIntent
     ) -> CodeEvidenceLayer:
         query_vec = await embedding.embed(_make_fast_report_query(question, intent))
-        chunks = store.search(query_vec, k=4)
+        chunks = [
+            chunk
+            for chunk in store.search(query_vec, k=6, doc_k=0)
+            if _is_source_like_chunk(chunk)
+        ][:4]
         citations = [
             _make_fast_report_citation(chunk, f"code-{i + 1}", "code_evidence")
             for i, chunk in enumerate(chunks)
@@ -405,7 +434,7 @@ async def _build_default_fast_report_retrievers(
         question: str, intent: FastReportQuestionIntent
     ) -> SemanticRetrievalLayer:
         query_vec = await embedding.embed(_make_fast_report_query(question, intent))
-        chunks = store.search(query_vec, k=3, doc_k=0)
+        chunks = store.search(query_vec, k=3, doc_k=3)
         return SemanticRetrievalLayer(
             passages=[chunk.get("text", "") for chunk in chunks],
             citations=[
