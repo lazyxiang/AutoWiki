@@ -350,6 +350,20 @@ def _collect_citation_ids_in_markdown_order(
     return ordered_ids
 
 
+def _filter_evidence_blocks(
+    evidence_blocks: list[FastReportEvidenceBlock],
+    citation_ids: list[str],
+) -> list[FastReportEvidenceBlock]:
+    blocks_by_citation: dict[str, list[FastReportEvidenceBlock]] = {}
+    for block in evidence_blocks:
+        blocks_by_citation.setdefault(block.citation_id, []).append(block)
+
+    filtered: list[FastReportEvidenceBlock] = []
+    for citation_id in citation_ids:
+        filtered.extend(blocks_by_citation.get(citation_id, []))
+    return filtered
+
+
 def _build_generation_prompt(
     question: str,
     repo_name: str,
@@ -457,12 +471,16 @@ async def generate_fast_report_section(
         for citation_id in _collect_citation_ids_in_markdown_order(section_claims)
         if citation_id in citations_by_id
     ]
+    evidence_blocks = _filter_evidence_blocks(
+        layers.code_evidence.evidence_blocks,
+        [citation.id for citation in citations],
+    )
     return FastReportSectionResult(
         title=raw.get("title", "Fast Report"),
         summary=raw.get("summary", ""),
         markdown=markdown,
         citations=citations,
-        evidence_blocks=list(layers.code_evidence.evidence_blocks),
+        evidence_blocks=evidence_blocks,
         related_wiki_pages=list(layers.curated_knowledge.wiki_pages),
         related_diagrams=list(layers.curated_knowledge.diagrams),
     )

@@ -232,7 +232,16 @@ async def test_generate_fast_report_section_returns_structured_section(mock_llm)
                     full_end=584,
                     code="async def run_full_index(...): ...",
                     symbol_path="worker.jobs.run_full_index",
-                )
+                ),
+                FastReportEvidenceBlock(
+                    citation_id="code-2",
+                    snippet_start=10,
+                    snippet_end=40,
+                    full_start=1,
+                    full_end=60,
+                    code="def clone_or_fetch(...): ...",
+                    symbol_path="worker.ingestion.clone_or_fetch",
+                ),
             ],
         )
 
