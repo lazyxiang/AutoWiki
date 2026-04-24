@@ -122,7 +122,9 @@ class FastReport(Base):
     repo_id: Mapped[str] = mapped_column(ForeignKey("repositories.id"), nullable=False)
     commit_sha: Mapped[str] = mapped_column(String, nullable=False)
     status: Mapped[str] = mapped_column(String, nullable=False)
-    active_section_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    active_section_id: Mapped[str | None] = mapped_column(
+        ForeignKey("fast_report_sections.id"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(UTC)
     )
@@ -131,7 +133,14 @@ class FastReport(Base):
         "Repository", back_populates="fast_reports"
     )
     sections: Mapped[list[FastReportSection]] = relationship(
-        "FastReportSection", back_populates="report"
+        "FastReportSection",
+        back_populates="report",
+        foreign_keys="FastReportSection.report_id",
+    )
+    active_section: Mapped[FastReportSection | None] = relationship(
+        "FastReportSection",
+        foreign_keys=[active_section_id],
+        post_update=True,
     )
 
 
@@ -146,6 +155,9 @@ class FastReportSection(Base):
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     markdown: Mapped[str] = mapped_column(Text, nullable=False)
     citations_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    evidence_blocks_json: Mapped[str] = mapped_column(
+        Text, nullable=False, default="[]"
+    )
     related_wiki_pages_json: Mapped[str] = mapped_column(
         Text, nullable=False, default="[]"
     )
@@ -156,7 +168,11 @@ class FastReportSection(Base):
         DateTime, default=lambda: datetime.now(UTC)
     )
     status: Mapped[str] = mapped_column(String, nullable=False)
-    report: Mapped[FastReport] = relationship("FastReport", back_populates="sections")
+    report: Mapped[FastReport] = relationship(
+        "FastReport",
+        back_populates="sections",
+        foreign_keys=[report_id],
+    )
 
 
 class PlatformToken(Base):

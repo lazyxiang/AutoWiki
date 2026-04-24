@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import (
     AsyncConnection,
     async_sessionmaker,
@@ -35,6 +35,11 @@ async def init_db(database_path: str) -> None:
             path.parent.chmod(0o700)
     url = f"sqlite+aiosqlite:///{database_path}"
     engine = create_async_engine(url, echo=False)
+    event.listen(
+        engine.sync_engine,
+        "connect",
+        lambda dbapi_conn, _: dbapi_conn.execute("PRAGMA foreign_keys=ON"),
+    )
     _engines[database_path] = engine
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

@@ -117,6 +117,12 @@ async def test_fast_report_persists_commit_sha_and_expiry(db):
     from shared.models import FastReport, FastReportSection
 
     expires_at = datetime.now(UTC) + timedelta(days=7)
+    evidence_json = (
+        '[{"citation_id":"cite-1","snippet_start":10,"snippet_end":16,'
+        '"full_start":7,"full_end":30,"default_context":3,'
+        '"expanded_context":18,"is_collapsed":true,'
+        '"code":"return run_pipeline()","symbol_path":"worker.jobs.run"}]'
+    )
 
     async with get_session(str(db)) as session:
         session.add(
@@ -135,7 +141,6 @@ async def test_fast_report_persists_commit_sha_and_expiry(db):
                 commit_sha="deadbeef",
                 expires_at=expires_at,
                 status="done",
-                active_section_id="section-1",
             )
         )
         session.add(
@@ -147,11 +152,15 @@ async def test_fast_report_persists_commit_sha_and_expiry(db):
                 summary="Short summary",
                 markdown="## Overview",
                 citations_json="[]",
+                evidence_blocks_json=evidence_json,
                 related_wiki_pages_json="[]",
                 related_diagrams_json="[]",
                 status="done",
             )
         )
+        await session.flush()
+        report = await session.get(FastReport, "report-1")
+        report.active_section_id = "section-1"
         await session.commit()
 
     async with get_session(str(db)) as session:
@@ -159,12 +168,47 @@ async def test_fast_report_persists_commit_sha_and_expiry(db):
         assert report is not None
         assert report.commit_sha == "deadbeef"
         assert report.expires_at == expires_at.replace(tzinfo=None)
+        assert report.active_section_id == "section-1"
         result = await session.execute(
             select(FastReportSection).where(FastReportSection.report_id == "report-1")
         )
         section = result.scalar_one()
         assert section.query == "How does indexing work?"
         assert section.report_id == "report-1"
+        assert section.evidence_blocks_json == evidence_json
+
+
+async def test_fast_report_active_section_requires_existing_section(db):
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy.exc import IntegrityError
+
+    from shared.models import FastReport
+
+    expires_at = datetime.now(UTC) + timedelta(days=7)
+
+    async with get_session(str(db)) as session:
+        session.add(
+            Repository(
+                id="repo-fast-fk",
+                owner="owner",
+                name="repo",
+                platform="github",
+                status="ready",
+            )
+        )
+        session.add(
+            FastReport(
+                id="report-fk",
+                repo_id="repo-fast-fk",
+                commit_sha="cafebabe",
+                expires_at=expires_at,
+                status="done",
+                active_section_id="missing-section",
+            )
+        )
+        with pytest.raises(IntegrityError):
+            await session.commit()
 
 
 async def test_platform_token_crud(tmp_path):
