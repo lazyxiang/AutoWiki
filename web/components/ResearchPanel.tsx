@@ -41,7 +41,7 @@ export default function ResearchPanel({ repoId }: { repoId: string }) {
   useResearchStream(repoId, jobId, onPlan, onStep, onReport, onDone, onError);
 
   const submit = useCallback(async (query?: string) => {
-    const text = query || question;
+    const text = query !== undefined ? query : question;
     if (!text.trim()) return;
     setPlan([]);
     setFindings([]);
@@ -51,7 +51,7 @@ export default function ResearchPanel({ repoId }: { repoId: string }) {
     try {
       const { job_id } = await startResearch(repoId, text.trim());
       setJobId(job_id);
-      if (!query) setQuestion("");
+      if (query === undefined) setQuestion("");
     } catch (e) {
       setErrorMsg(String(e));
       setStatus("error");
@@ -65,10 +65,7 @@ export default function ResearchPanel({ repoId }: { repoId: string }) {
       if (q) {
         initialQueryHandled.current = true;
         // Using a tick to avoid cascading render lint error
-        setTimeout(() => {
-          setQuestion(q);
-          submit(q);
-        }, 0);
+        setTimeout(() => submit(q), 0);
       }
     }
   }, [searchParams, submit]);

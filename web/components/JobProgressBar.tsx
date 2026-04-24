@@ -52,7 +52,7 @@ export function JobProgressBar({ jobId, repoId, owner, repo }: Props) {
       <p className="text-xs text-muted-foreground">{progress}%</p>
       {progressDetail?.kind === "page" && (
         <div className="flex flex-col gap-2 animate-in fade-in slide-in-from-bottom-2 duration-500">
-          <p className="rounded-md border bg-indigo-50/50 border-indigo-100 px-3 py-2 text-sm font-medium text-indigo-900">
+          <p className="rounded-md border bg-indigo-50/50 dark:bg-indigo-900/20 border-indigo-100 dark:border-indigo-800 px-3 py-2 text-sm font-medium text-indigo-900 dark:text-indigo-200">
             {progressDetail.title}
           </p>
         </div>
@@ -63,7 +63,7 @@ export function JobProgressBar({ jobId, repoId, owner, repo }: Props) {
             {progressDetail.titles.map((title) => (
               <li
                 key={title}
-                className="rounded-md border bg-indigo-50/50 border-indigo-100 px-3 py-2 text-sm font-medium text-indigo-900"
+                className="rounded-md border bg-indigo-50/50 dark:bg-indigo-900/20 border-indigo-100 dark:border-indigo-800 px-3 py-2 text-sm font-medium text-indigo-900 dark:text-indigo-200"
               >
                 {title}
               </li>
@@ -77,13 +77,13 @@ export function JobProgressBar({ jobId, repoId, owner, repo }: Props) {
             {progressDetail.pages.map((page) => (
               <li
                 key={page.title}
-                className="rounded-md border bg-indigo-50/50 border-indigo-100 px-3 py-2 animate-in fade-in slide-in-from-bottom-2 duration-500"
+                className="rounded-md border bg-indigo-50/50 dark:bg-indigo-900/20 border-indigo-100 dark:border-indigo-800 px-3 py-2 animate-in fade-in slide-in-from-bottom-2 duration-500"
               >
                 <div className="flex justify-between items-center">
-                  <p className="text-sm font-medium text-indigo-900">{page.title}</p>
-                  <span className="flex h-2 w-2 rounded-full bg-indigo-500 animate-pulse" />
+                  <p className="text-sm font-medium text-indigo-900 dark:text-indigo-200">{page.title}</p>
+                  <span className="flex h-2 w-2 rounded-full bg-indigo-500 dark:bg-indigo-400 animate-pulse" />
                 </div>
-                <p className="text-xs text-indigo-600/70 mt-0.5 font-medium">{page.stage}</p>
+                <p className="text-xs text-indigo-600/70 dark:text-indigo-300/70 mt-0.5 font-medium">{page.stage}</p>
               </li>
             ))}
           </ul>

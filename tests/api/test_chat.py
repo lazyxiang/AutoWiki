@@ -57,16 +57,19 @@ def test_create_chat_session_missing_repo(client):
     assert resp.status_code == 404
 
 
-def test_ws_chat_disconnect_safe(client):
+def test_ws_chat_disconnect_safe(client, mock_llm, mock_embedding):
     """Verify that ws_chat doesn't raise RuntimeError on client disconnect."""
     from unittest.mock import MagicMock
+
+    async def _fake_stream(*_args, **_kwargs):
+        yield "chunk"
 
     # We need to mock the dependencies used in ws_chat
     with (
         patch("api.routers.chat.FAISSStore") as mock_store_cls,
-        patch("api.routers.chat.make_embedding_provider"),
-        patch("api.routers.chat.make_llm_provider"),
-        patch("api.routers.chat.generate_chat_response"),
+        patch("api.routers.chat.make_llm_provider", return_value=mock_llm),
+        patch("api.routers.chat.make_embedding_provider", return_value=mock_embedding),
+        patch("api.routers.chat.generate_chat_response", side_effect=_fake_stream),
     ):
         mock_store = MagicMock()
         mock_store_cls.return_value = mock_store
@@ -77,6 +80,11 @@ def test_ws_chat_disconnect_safe(client):
 
         with client.websocket_connect(f"/ws/repos/r1/chat/{session_id}") as ws:
             ws.send_json({"content": "hello"})
+            # Drain the response so the server loops back to receive_json
+            while True:
+                msg = ws.receive_json()
+                if msg["type"] == "done":
+                    break
             # Closing the client-side triggers WebSocketDisconnect on the server.
             # The fix ensures the server's finally block doesn't crash.
             ws.close()

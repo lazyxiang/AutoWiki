@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import ResearchPanel from "@/components/ResearchPanel";
 import { resolveRouteRepo } from "@/lib/repo-route.server";
 
@@ -16,7 +17,9 @@ export default async function ResearchPage({
       >
         Deep Research — {repoMeta?.owner ?? owner}/{repoMeta?.name ?? repo}
       </h1>
-      <ResearchPanel repoId={repoId} />
+      <Suspense fallback={<div className="flex items-center justify-center py-20 text-muted-foreground">Loading research...</div>}>
+        <ResearchPanel repoId={repoId} />
+      </Suspense>
     </div>
   );
 }

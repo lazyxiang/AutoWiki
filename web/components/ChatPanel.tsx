@@ -86,28 +86,37 @@ export default function ChatPanel({ repoId }: { repoId: string }) {
   const { sendMessage } = useChatStream(repoId, sessionId, handleChunk, handleDone, handleError);
 
   /**
-   * Submits the user's message to the chat stream.
+   * Submits a message to the chat stream.
+   * Extracted as a stable helper to avoid effect instability.
    */
-  const submit = useCallback((query?: string) => {
-    const text = query || input;
-    if (!text.trim() || streaming || !sessionId) return;
+  const submitText = useCallback((text: string) => {
+    if (!text.trim() || !sessionId) return;
     setMessages((prev) => [...prev, { role: "user", content: text }]);
     setStreaming(true);
     sendMessage(text);
-    if (!query) setInput("");
-  }, [input, streaming, sessionId, sendMessage]);
+  }, [sessionId, sendMessage]);
 
-  // Handle initial query from URL
+  /**
+   * Submits the user's message to the chat stream.
+   */
+  const submit = useCallback((query?: string) => {
+    if (streaming) return;
+    const text = query !== undefined ? query : input;
+    submitText(text);
+    if (query === undefined) setInput("");
+  }, [input, streaming, submitText]);
+
+  // Handle initial query from URL (runs once after sessionId is ready)
   useEffect(() => {
     if (sessionId && !initialQueryHandled.current) {
       const q = searchParams.get("q");
       if (q) {
         initialQueryHandled.current = true;
         // Using a tick to avoid cascading render lint error
-        setTimeout(() => submit(q), 0);
+        setTimeout(() => submitText(q), 0);
       }
     }
-  }, [sessionId, searchParams, submit]);
+  }, [sessionId, searchParams, submitText]);
 
   return (
     <div className="flex flex-col h-full bg-white">

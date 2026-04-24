@@ -246,5 +246,9 @@ async def ws_chat(websocket: WebSocket, repo_id: str, session_id: str):
     finally:
         try:
             await websocket.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(
+                "websocket.close() raised during teardown for session %s: %s",
+                session_id,
+                e,
+            )
