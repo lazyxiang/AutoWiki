@@ -132,6 +132,31 @@ async def test_investigate_step_returns_finding_with_sources(mock_llm, mock_embe
     assert "end_line" in finding.sources[0]
 
 
+def test_format_retrieved_chunks_for_prompt_formats_context():
+    from worker.deep_research import format_retrieved_chunks_for_prompt
+
+    context = format_retrieved_chunks_for_prompt(
+        [
+            {
+                "file": "worker/jobs.py",
+                "text": "async def run_full_index(...): ...",
+                "start_line": 539,
+                "end_line": 566,
+            },
+            {
+                "file": "README.md",
+                "text": "AutoWiki generates repository wiki pages.",
+                "start_line": 1,
+                "end_line": 8,
+            },
+        ]
+    )
+
+    assert "File: worker/jobs.py (lines 539-566)" in context
+    assert "async def run_full_index(...): ..." in context
+    assert "File: README.md (lines 1-8)" in context
+
+
 async def test_synthesize_report_joins_findings(mock_llm):
     """Synthesizer builds a single Markdown report from plan + findings."""
     from worker.deep_research import (

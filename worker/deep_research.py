@@ -112,6 +112,18 @@ _INVESTIGATOR_SYSTEM = (
 )
 
 
+def format_retrieved_chunks_for_prompt(chunks: list[dict[str, Any]]) -> str:
+    """Format retrieved chunks into a prompt-friendly source context block."""
+    if not chunks:
+        return "No source code context available."
+    return "\n\n---\n\n".join(
+        f"File: {chunk.get('file', 'unknown')} "
+        f"(lines {chunk.get('start_line', '?')}-{chunk.get('end_line', '?')})\n"
+        f"{chunk.get('text', '')}"
+        for chunk in chunks
+    )
+
+
 async def investigate_step(
     step: ResearchStep,
     step_index: int,
@@ -123,12 +135,7 @@ async def investigate_step(
     """Run RAG retrieval + LLM answer for a single investigation step."""
     query_vec = await embedding.embed(step.query)
     chunks = store.search(query_vec, k=top_k)
-
-    context = "\n\n---\n\n".join(
-        f"File: {c.get('file', 'unknown')} (lines {c.get('start_line', '?')}+)\n"
-        f"{c.get('text', '')}"
-        for c in chunks
-    )
+    context = format_retrieved_chunks_for_prompt(chunks)
 
     prompt = (
         f"Investigation step: {step.query}\n"
