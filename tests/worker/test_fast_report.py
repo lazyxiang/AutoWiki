@@ -130,6 +130,56 @@ def test_parse_draft_sections_normalizes_heading_variants():
     ]
 
 
+def test_select_related_wiki_pages_prefers_overlap_and_dedupes_stably():
+    from worker.fast_report import (
+        FastReportClaim,
+        _select_related_wiki_pages,
+    )
+
+    pages = _select_related_wiki_pages(
+        question="How does the auth cache invalidation flow work?",
+        report_title="Auth cache flow",
+        section_claims={
+            "Overview": [
+                FastReportClaim(
+                    text="Auth requests consult the cache layer before invalidation.",
+                    citation_ids=["code-1"],
+                    supporting_layers=["code_evidence"],
+                )
+            ]
+        },
+        candidate_pages=[
+            FastReportWikiLink(
+                slug="auth-flow",
+                title="Authentication Flow",
+                reason="Related generated wiki page",
+            ),
+            FastReportWikiLink(
+                slug="cache-invalidation",
+                title="Cache Invalidation",
+                reason="Related generated wiki page",
+            ),
+            FastReportWikiLink(
+                slug="auth-flow",
+                title="Authentication Flow",
+                reason="Duplicate copy should be dropped",
+            ),
+            FastReportWikiLink(
+                slug="overview",
+                title="Overview",
+                reason="Related generated wiki page",
+            ),
+        ],
+        limit=3,
+    )
+
+    assert [(page.slug, page.title) for page in pages] == [
+        ("cache-invalidation", "Cache Invalidation"),
+        ("auth-flow", "Authentication Flow"),
+        ("overview", "Overview"),
+    ]
+
+
 async def test_generate_fast_report_section_returns_structured_section(mock_llm):
     from worker.fast_report import (
         CodeEvidenceLayer,

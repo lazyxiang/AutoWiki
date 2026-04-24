@@ -23,6 +23,7 @@ router = APIRouter()
 
 class StartFastReportRequest(BaseModel):
     question: str
+    report_id: str | None = None
 
 
 async def _get_fast_report_job(session, repo_id: str, report_id: str) -> Job | None:
@@ -49,6 +50,13 @@ def _section_payload(section: FastReportSection) -> dict:
     }
 
 
+def _is_expired(report: FastReport) -> bool:
+    expires_at = report.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    return expires_at <= datetime.now(UTC)
+
+
 @router.post("/api/repos/{repo_id}/fast-reports", status_code=202)
 async def start_fast_report(repo_id: str, req: StartFastReportRequest) -> dict:
     if not req.question.strip():
@@ -56,6 +64,7 @@ async def start_fast_report(repo_id: str, req: StartFastReportRequest) -> dict:
 
     cfg = get_config()
     db_path = str(cfg.database_path)
+    report_id = req.report_id
 
     async with get_session(db_path) as s:
         repo = await s.get(Repository, repo_id)
@@ -66,28 +75,47 @@ async def start_fast_report(repo_id: str, req: StartFastReportRequest) -> dict:
                 status_code=409, detail="Repository is not ready for fast reports"
             )
 
-        job_id = str(uuid.uuid4())
-        report_id = job_id
         section_id = str(uuid.uuid4())
-        s.add(
-            Job(
-                id=job_id,
-                repo_id=repo_id,
-                type="fast_report",
-                status="queued",
-                progress=0,
-                created_at=datetime.now(UTC),
+        if report_id:
+            job_id = report_id
+            report = await s.get(FastReport, report_id)
+            if report is None or report.repo_id != repo_id:
+                raise HTTPException(status_code=404, detail="Report not found")
+            if _is_expired(report):
+                raise HTTPException(status_code=410, detail="Report expired")
+            job = await s.get(Job, job_id)
+            if job is None or job.repo_id != repo_id or job.type != "fast_report":
+                raise HTTPException(status_code=404, detail="Report job not found")
+
+            job.status = "queued"
+            job.progress = 0
+            job.error = None
+            job.status_description = None
+            job.finished_at = None
+            report.status = "queued"
+            report.expires_at = datetime.now(UTC) + timedelta(days=7)
+        else:
+            job_id = str(uuid.uuid4())
+            report_id = job_id
+            s.add(
+                Job(
+                    id=job_id,
+                    repo_id=repo_id,
+                    type="fast_report",
+                    status="queued",
+                    progress=0,
+                    created_at=datetime.now(UTC),
+                )
             )
-        )
-        s.add(
-            FastReport(
-                id=report_id,
-                repo_id=repo_id,
-                commit_sha=repo.last_commit or "",
-                status="queued",
-                expires_at=datetime.now(UTC) + timedelta(days=7),
+            s.add(
+                FastReport(
+                    id=report_id,
+                    repo_id=repo_id,
+                    commit_sha=repo.last_commit or "",
+                    status="queued",
+                    expires_at=datetime.now(UTC) + timedelta(days=7),
+                )
             )
-        )
         s.add(
             FastReportSection(
                 id=section_id,
@@ -146,6 +174,8 @@ async def get_fast_report(repo_id: str, report_id: str) -> dict:
         report = await s.get(FastReport, report_id)
         if report is None or report.repo_id != repo_id:
             raise HTTPException(status_code=404, detail="Report not found")
+        if _is_expired(report):
+            raise HTTPException(status_code=410, detail="Report expired")
         job = await _get_fast_report_job(s, repo_id, report_id)
 
         result = await s.execute(
@@ -181,6 +211,9 @@ async def ws_fast_report(websocket: WebSocket, repo_id: str, report_id: str):
         report = await s.get(FastReport, report_id)
         if report is None or report.repo_id != repo_id:
             await websocket.close(code=4004)
+            return
+        if _is_expired(report):
+            await websocket.close(code=4008)
             return
 
     await websocket.accept()

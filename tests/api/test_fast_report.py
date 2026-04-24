@@ -279,6 +279,194 @@ async def test_get_fast_report_returns_persisted_failure_detail(fast_report_env)
         await dispose_db(db_path)
 
 
+async def test_start_fast_report_appends_section_to_existing_unexpired_report(
+    fast_report_env, monkeypatch
+):
+    """POST with report_id reuses the report/job rows and appends a queued section."""
+    from api.main import app
+    from shared.database import dispose_db, get_session, init_db
+    from shared.models import FastReport, FastReportSection, Job, Repository
+
+    db_path = fast_report_env
+    await init_db(db_path)
+    calls: list[dict] = []
+
+    async def _fake_enqueue(*args, **kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setattr("api.routers.fast_report._enqueue_fast_report", _fake_enqueue)
+
+    try:
+        async with get_session(db_path) as s:
+            s.add(
+                Repository(
+                    id="r1",
+                    owner="o",
+                    name="n",
+                    status="ready",
+                    last_commit="new-sha",
+                )
+            )
+            s.add(Job(id="fr1", repo_id="r1", type="fast_report", status="done"))
+            s.add(
+                FastReport(
+                    id="fr1",
+                    repo_id="r1",
+                    commit_sha="old-sha",
+                    status="done",
+                    expires_at=datetime.now(UTC) + timedelta(days=3),
+                )
+            )
+            s.add(
+                FastReportSection(
+                    id="sec-old",
+                    report_id="fr1",
+                    query="Initial question",
+                    title="Initial",
+                    summary="Initial summary",
+                    markdown="# Initial",
+                    citations_json="[]",
+                    evidence_blocks_json="[]",
+                    related_wiki_pages_json="[]",
+                    related_diagrams_json="[]",
+                    status="done",
+                )
+            )
+            await s.flush()
+            report = await s.get(FastReport, "fr1")
+            assert report is not None
+            report.active_section_id = "sec-old"
+            await s.commit()
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/api/repos/r1/fast-reports",
+                json={
+                    "question": "What changed in the auth flow?",
+                    "report_id": "fr1",
+                },
+            )
+
+        assert response.status_code == 202
+        body = response.json()
+        assert body["job_id"] == "fr1"
+        assert body["report_id"] == "fr1"
+        assert body["status"] == "queued"
+        assert body["section_id"] != "sec-old"
+
+        async with get_session(db_path) as s:
+            job = await s.get(Job, "fr1")
+            report = await s.get(FastReport, "fr1")
+            new_section = await s.get(FastReportSection, body["section_id"])
+            old_section = await s.get(FastReportSection, "sec-old")
+
+            assert job is not None
+            assert job.status == "queued"
+            assert job.progress == 0
+            assert job.error is None
+
+            assert report is not None
+            assert report.status == "queued"
+            assert report.commit_sha == "old-sha"
+            assert report.active_section_id == "sec-old"
+            assert report.expires_at > datetime.now() + timedelta(days=6)
+
+            assert old_section is not None
+            assert old_section.status == "done"
+
+            assert new_section is not None
+            assert new_section.report_id == "fr1"
+            assert new_section.query == "What changed in the auth flow?"
+            assert new_section.status == "queued"
+
+        assert calls == [
+            {
+                "repo_id": "r1",
+                "job_id": "fr1",
+                "report_id": "fr1",
+                "section_id": body["section_id"],
+                "question": "What changed in the auth flow?",
+            }
+        ]
+    finally:
+        await dispose_db(db_path)
+
+
+async def test_start_fast_report_rejects_append_for_expired_report(fast_report_env):
+    """Expired reports cannot be appended to; clients must start a fresh report."""
+    from api.main import app
+    from shared.database import dispose_db, get_session, init_db
+    from shared.models import FastReport, Job, Repository
+
+    db_path = fast_report_env
+    await init_db(db_path)
+
+    try:
+        async with get_session(db_path) as s:
+            s.add(Repository(id="r1", owner="o", name="n", status="ready"))
+            s.add(Job(id="fr-expired", repo_id="r1", type="fast_report", status="done"))
+            s.add(
+                FastReport(
+                    id="fr-expired",
+                    repo_id="r1",
+                    commit_sha="deadbeef",
+                    status="done",
+                    expires_at=datetime.now(UTC) - timedelta(seconds=1),
+                )
+            )
+            await s.commit()
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/api/repos/r1/fast-reports",
+                json={"question": "Follow-up", "report_id": "fr-expired"},
+            )
+
+        assert response.status_code == 410
+        assert response.json()["detail"] == "Report expired"
+    finally:
+        await dispose_db(db_path)
+
+
+async def test_get_fast_report_returns_410_for_expired_report(fast_report_env):
+    """Expired reports are not reloadable through the persisted report endpoint."""
+    from api.main import app
+    from shared.database import dispose_db, get_session, init_db
+    from shared.models import FastReport, Job, Repository
+
+    db_path = fast_report_env
+    await init_db(db_path)
+
+    try:
+        async with get_session(db_path) as s:
+            s.add(Repository(id="r1", owner="o", name="n", status="ready"))
+            s.add(Job(id="fr-expired", repo_id="r1", type="fast_report", status="done"))
+            s.add(
+                FastReport(
+                    id="fr-expired",
+                    repo_id="r1",
+                    commit_sha="deadbeef",
+                    status="done",
+                    expires_at=datetime.now(UTC) - timedelta(seconds=1),
+                )
+            )
+            await s.commit()
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get("/api/repos/r1/fast-reports/fr-expired")
+
+        assert response.status_code == 410
+        assert response.json()["detail"] == "Report expired"
+    finally:
+        await dispose_db(db_path)
+
+
 async def test_ws_fast_report_streams_section_and_report_completion(fast_report_env):
     """Completed reports stream section_complete followed by report_complete."""
     from starlette.testclient import TestClient

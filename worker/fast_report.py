@@ -12,6 +12,7 @@ retrieval layers:
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -364,6 +365,56 @@ def _filter_evidence_blocks(
     return filtered
 
 
+def _tokenize_for_wiki_rank(text: str) -> set[str]:
+    return {
+        token for token in re.findall(r"[a-z0-9]+", text.lower()) if len(token) >= 3
+    }
+
+
+def _select_related_wiki_pages(
+    *,
+    question: str,
+    report_title: str,
+    section_claims: dict[str, list[FastReportClaim]],
+    candidate_pages: list[FastReportWikiLink],
+    limit: int = 3,
+) -> list[FastReportWikiLink]:
+    deduped_pages: list[FastReportWikiLink] = []
+    seen_keys: set[tuple[str, str]] = set()
+    for page in candidate_pages:
+        key = (page.slug, page.title)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        deduped_pages.append(page)
+
+    if not deduped_pages:
+        return []
+
+    context_tokens = _tokenize_for_wiki_rank(question)
+    context_tokens |= _tokenize_for_wiki_rank(report_title)
+    for claims in section_claims.values():
+        for claim in claims:
+            context_tokens |= _tokenize_for_wiki_rank(claim.text)
+
+    def _rank(page: FastReportWikiLink) -> tuple[int, int, int, str, str]:
+        title_tokens = _tokenize_for_wiki_rank(page.title)
+        slug_tokens = _tokenize_for_wiki_rank(page.slug.replace("-", " "))
+        reason_tokens = _tokenize_for_wiki_rank(page.reason or "")
+        title_overlap = len(context_tokens & title_tokens)
+        slug_overlap = len(context_tokens & slug_tokens)
+        reason_overlap = len(context_tokens & reason_tokens)
+        return (
+            -(title_overlap + slug_overlap + reason_overlap),
+            -title_overlap,
+            -slug_overlap,
+            page.title.lower(),
+            page.slug,
+        )
+
+    return sorted(deduped_pages, key=_rank)[:limit]
+
+
 def _build_generation_prompt(
     question: str,
     repo_name: str,
@@ -450,12 +501,18 @@ async def generate_fast_report_section(
     raw = await llm.generate_structured(prompt, _SECTION_SCHEMA)
     section_claims = _parse_draft_sections(raw.get("sections", []))
     notes = list(raw.get("notes", []))
+    related_wiki_pages = _select_related_wiki_pages(
+        question=question,
+        report_title=raw.get("title", "Fast Report"),
+        section_claims=section_claims,
+        candidate_pages=list(layers.curated_knowledge.wiki_pages),
+    )
     markdown = assemble_fast_report_markdown(
         title=raw.get("title", "Fast Report"),
         summary=raw.get("summary", ""),
         section_claims=section_claims,
         notes=notes,
-        related_wiki_pages=layers.curated_knowledge.wiki_pages,
+        related_wiki_pages=related_wiki_pages,
         related_diagrams=layers.curated_knowledge.diagrams,
     )
     citations_by_id = {
@@ -481,6 +538,6 @@ async def generate_fast_report_section(
         markdown=markdown,
         citations=citations,
         evidence_blocks=evidence_blocks,
-        related_wiki_pages=list(layers.curated_knowledge.wiki_pages),
+        related_wiki_pages=related_wiki_pages,
         related_diagrams=list(layers.curated_knowledge.diagrams),
     )

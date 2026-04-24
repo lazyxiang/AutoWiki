@@ -5,12 +5,14 @@ import { useRouter, useSearchParams } from "next/navigation";
 
 import {
   getFastReport,
-  startFastReport,
   type FastReport,
   type FastReportSection,
 } from "@/lib/api";
 import { repoPath } from "@/lib/utils";
-import { useFastReportStream, type FastReportCompleteEvent } from "@/lib/ws";
+import {
+  connectFastReportStream,
+  type FastReportCompleteEvent,
+} from "@/lib/ws";
 
 import { ReportStack } from "./ReportStack";
 import { EvidenceRail } from "./EvidenceRail";
@@ -45,6 +47,8 @@ export function createWorkspaceState(): FastReportWorkspaceState {
     bufferedCompletion: null,
   };
 }
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 
 function mergeSection(section: FastReportSection, existing: FastReportSection[]) {
   const next = existing.filter((item) => item.id !== section.id);
@@ -204,7 +208,9 @@ export function FastReportWorkspace({
   const [state, setState] = useState<FastReportWorkspaceState>(createWorkspaceState);
   const [evidenceSectionId, setEvidenceSectionId] = useState<string | null>(null);
   const [focusedCitationId, setFocusedCitationId] = useState<string | null>(null);
+  const [streamNonce, setStreamNonce] = useState(0);
   const requestedInitialReport = useRef(false);
+  const handledQuestionKeys = useRef(new Set<string>());
   const activeReportId = reportId ?? createdReportId;
 
   useEffect(() => {
@@ -257,14 +263,33 @@ export function FastReportWorkspace({
         isStarting: true,
         streamState: "running",
         error: null,
+        report: current.report
+          ? {
+              ...current.report,
+              status: "queued",
+            }
+          : current.report,
       }));
 
       try {
-        const next = await startFastReport(repoId, trimmed);
+        const res = await fetch(`${API_URL}/api/repos/${repoId}/fast-reports`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            question: trimmed,
+            report_id: activeReportId,
+          }),
+        });
+        if (!res.ok) {
+          throw new Error(await res.text());
+        }
+        const next = (await res.json()) as {
+          report_id: string;
+        };
+        const destination = `${repoPath(owner, repo, repoId)}/fast/${encodeURIComponent(next.report_id)}`;
         setCreatedReportId(next.report_id);
-        router.replace(
-          `${repoPath(owner, repo, repoId)}/fast/${encodeURIComponent(next.report_id)}`,
-        );
+        setStreamNonce((current) => current + 1);
+        router.replace(destination);
       } catch (err) {
         setState((current) => ({
           ...current,
@@ -274,20 +299,26 @@ export function FastReportWorkspace({
         }));
       }
     },
-    [owner, repo, repoId, router],
+    [activeReportId, owner, repo, repoId, router],
   );
 
   useEffect(() => {
-    if (requestedInitialReport.current || activeReportId) {
-      return;
-    }
-
     const initialQuestion = searchParams.get("q");
     if (!initialQuestion) {
       return;
     }
+    const requestKey = `${activeReportId ?? "new"}:${initialQuestion}`;
+    if (handledQuestionKeys.current.has(requestKey)) {
+      return;
+    }
+    if (!activeReportId && requestedInitialReport.current) {
+      return;
+    }
 
-    requestedInitialReport.current = true;
+    handledQuestionKeys.current.add(requestKey);
+    if (!activeReportId) {
+      requestedInitialReport.current = true;
+    }
     setTimeout(() => void beginReport(initialQuestion), 0);
   }, [activeReportId, beginReport, searchParams]);
 
@@ -306,13 +337,27 @@ export function FastReportWorkspace({
     setState((current) => applyStreamError(current, message));
   }, []);
 
-  useFastReportStream(
-    repoId,
+  useEffect(() => {
+    if (!activeReportId) {
+      return;
+    }
+
+    const ws = connectFastReportStream(repoId, activeReportId, {
+      onSectionComplete: handleSectionComplete,
+      onReportComplete: handleReportComplete,
+      onError: handleStreamError,
+    });
+    return () => {
+      ws.close();
+    };
+  }, [
     activeReportId,
-    handleSectionComplete,
     handleReportComplete,
+    handleSectionComplete,
     handleStreamError,
-  );
+    repoId,
+    streamNonce,
+  ]);
 
   const bottomPadding = useMemo(() => getWorkspaceBottomPadding(), []);
   const view = getWorkspaceViewModel(state, activeReportId);

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter, useParams } from "next/navigation";
+import { useRouter, useParams, usePathname } from "next/navigation";
 import { MessageSquare, Send, Sparkles } from "lucide-react";
 import { cn, repoPath } from "@/lib/utils";
 import { Button } from "./ui/button";
@@ -15,10 +15,12 @@ export function FloatingAssistant({ repoId }: FloatingAssistantProps) {
   const [mode, setMode] = useState<"report" | "research">("report");
   const router = useRouter();
   const params = useParams();
+  const pathname = usePathname();
   const containerRef = useRef<HTMLDivElement>(null);
 
   const owner = typeof params.owner === "string" ? params.owner : "";
   const repo = typeof params.repo === "string" ? params.repo : "";
+  const reportId = typeof params.reportId === "string" ? params.reportId : "";
 
   useEffect(() => {
     const node = containerRef.current;
@@ -48,8 +50,12 @@ export function FloatingAssistant({ repoId }: FloatingAssistantProps) {
 
     const basePath = repoPath(owner, repo, repoId);
     const targetPath =
-      mode === "report" ? `${basePath}/chat` : `${basePath}/research`;
-    
+      mode === "report"
+        ? reportId && pathname?.includes(`/fast/${reportId}`)
+          ? `${basePath}/fast/${reportId}`
+          : `${basePath}/chat`
+        : `${basePath}/research`;
+
     router.push(`${targetPath}?q=${encodeURIComponent(query.trim())}`);
     setQuery("");
   };

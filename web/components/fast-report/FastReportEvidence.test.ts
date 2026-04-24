@@ -22,12 +22,12 @@ const {
   getFastReportMock,
   startFastReportMock,
   replaceMock,
-  useFastReportStreamMock,
+  connectFastReportStreamMock,
 } = vi.hoisted(() => ({
   getFastReportMock: vi.fn(),
   startFastReportMock: vi.fn(),
   replaceMock: vi.fn(),
-  useFastReportStreamMock: vi.fn(),
+  connectFastReportStreamMock: vi.fn(() => ({ close: vi.fn() })),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -48,7 +48,7 @@ vi.mock("@/lib/ws", async () => {
   const actual = await vi.importActual<typeof import("@/lib/ws")>("@/lib/ws");
   return {
     ...actual,
-    useFastReportStream: useFastReportStreamMock,
+    connectFastReportStream: connectFastReportStreamMock,
   };
 });
 
@@ -171,7 +171,8 @@ describe("fast report evidence interactions", () => {
     getFastReportMock.mockReset();
     startFastReportMock.mockReset();
     replaceMock.mockReset();
-    useFastReportStreamMock.mockReset();
+    connectFastReportStreamMock.mockReset();
+    connectFastReportStreamMock.mockImplementation(() => ({ close: vi.fn() }));
     Object.defineProperty(Element.prototype, "scrollIntoView", {
       configurable: true,
       value: scrollIntoView,

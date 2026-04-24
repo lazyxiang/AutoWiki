@@ -143,6 +143,38 @@ describe("FastReportWorkspace", () => {
     });
   });
 
+  it("preserves prior sections and marks the report running while an append is queued", () => {
+    const baseState = applyLoadedReport(
+      createWorkspaceState(),
+      makeReport({
+        status: "done",
+        active_section_id: "section-1",
+        sections: [makeSection()],
+      }),
+    );
+
+    const appending = {
+      ...baseState,
+      isStarting: true,
+      streamState: "running" as const,
+      error: null,
+      report: baseState.report
+        ? {
+            ...baseState.report,
+            status: "queued",
+          }
+        : null,
+    };
+
+    expect(appending.report?.sections.map((section) => section.id)).toEqual([
+      "section-1",
+    ]);
+    expect(getWorkspaceViewModel(appending, "report-1")).toMatchObject({
+      isRunning: true,
+      activeSectionId: "section-1",
+    });
+  });
+
   it("stops reporting running when a stream error lands after a queued snapshot", () => {
     const errored = applyStreamError(
       applyLoadedReport(
