@@ -304,6 +304,53 @@ describe("fast report evidence interactions", () => {
     expect(screen.queryByText("line 2")).toBeNull();
   });
 
+  it("keeps a valid focus target for later citations supported only by a shared diagram", async () => {
+    const section = makeSection({
+      evidence_blocks: [
+        makeEvidenceBlock(),
+      ],
+      related_diagrams: [makeDiagram()],
+    });
+    const diagramOnlyCitationSection = {
+      ...section,
+      citations: [
+        makeCitation(),
+        makeCitation({
+          id: "cite-cache",
+          file_path: "worker/cache.py",
+          start_line: 7,
+          end_line: 14,
+          label: "Cache lookup",
+        }),
+      ],
+      evidence_blocks: [
+        makeEvidenceBlock(),
+      ],
+    };
+    render(
+      React.createElement(EvidenceRail, {
+        section: diagramOnlyCitationSection,
+        focusedCitationId: "cite-cache",
+      }),
+    );
+
+    await waitFor(() => {
+      const sharedTarget = document.querySelector('[data-evidence-target="cite-auth"]');
+      expect(sharedTarget?.getAttribute("data-evidence-targets")).toBe(
+        "cite-auth,cite-cache",
+      );
+      expect(sharedTarget?.getAttribute("data-focused")).toBe("true");
+      expect(scrollIntoView).toHaveBeenCalled();
+      expect(scrollIntoView.mock.instances.at(-1)).toBe(sharedTarget);
+    });
+
+    const diagram = document.querySelector(
+      '[data-diagram-id="diagram-auth-cache"]',
+    );
+    expect(screen.getAllByText("Auth and cache flow")).toHaveLength(1);
+    expect(diagram?.getAttribute("data-focused")).toBe("true");
+  });
+
   it("dedupes diagrams shared by multiple citations while keeping them focus-aware", () => {
     const section = makeSection({
       related_diagrams: [makeDiagram()],

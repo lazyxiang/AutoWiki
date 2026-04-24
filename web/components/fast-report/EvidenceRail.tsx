@@ -11,6 +11,7 @@ export type EvidenceRailItem = {
   citation: FastReportSection["citations"][number];
   blocks: FastReportSection["evidence_blocks"];
   diagrams: FastReportSection["related_diagrams"];
+  targetCitationIds: string[];
 };
 
 export function buildEvidenceRailItems(
@@ -21,28 +22,54 @@ export function buildEvidenceRailItems(
   }
 
   const renderedDiagramIds = new Set<string>();
+  const diagramTargetById = new Map<string, string>();
+  const items: EvidenceRailItem[] = [];
 
-  return section.citations.flatMap((citation) => {
+  for (const citation of section.citations) {
     const blocks = section.evidence_blocks.filter(
       (block) => block.citation_id === citation.id,
     );
-    const diagrams = section.related_diagrams.filter((diagram) => {
-      if (!diagram.citations.includes(citation.id)) {
-        return false;
-      }
+    const relatedDiagrams = section.related_diagrams.filter((diagram) =>
+      diagram.citations.includes(citation.id),
+    );
+    const diagrams = relatedDiagrams.filter((diagram) => {
       if (renderedDiagramIds.has(diagram.id)) {
         return false;
       }
       renderedDiagramIds.add(diagram.id);
+      diagramTargetById.set(diagram.id, citation.id);
       return true;
     });
 
-    if (blocks.length === 0 && diagrams.length === 0) {
-      return [];
+    if (blocks.length === 0 && diagrams.length === 0 && relatedDiagrams.length === 0) {
+      continue;
     }
 
-    return [{ citation, blocks, diagrams }];
-  });
+    if (blocks.length === 0 && diagrams.length === 0) {
+      const aliasedTargetCitationId = relatedDiagrams
+        .map((diagram) => diagramTargetById.get(diagram.id) ?? null)
+        .find((targetCitationId) => targetCitationId !== null);
+
+      if (aliasedTargetCitationId) {
+        const targetItem = items.find(
+          (item) => item.citation.id === aliasedTargetCitationId,
+        );
+        if (targetItem && !targetItem.targetCitationIds.includes(citation.id)) {
+          targetItem.targetCitationIds.push(citation.id);
+        }
+      }
+      continue;
+    }
+
+    items.push({
+      citation,
+      blocks,
+      diagrams,
+      targetCitationIds: [citation.id],
+    });
+  }
+
+  return items;
 }
 
 export function EvidenceRail({
@@ -54,8 +81,8 @@ export function EvidenceRail({
 }) {
   const items = useMemo(() => buildEvidenceRailItems(section), [section]);
   const itemRefs = useRef<Record<string, HTMLDivElement | null>>({});
-  const activeFocusedCitationId = items.some(
-    (item) => item.citation.id === focusedCitationId,
+  const activeFocusedCitationId = items.some((item) =>
+    item.targetCitationIds.includes(focusedCitationId ?? ""),
   )
     ? focusedCitationId
     : null;
@@ -112,16 +139,21 @@ export function EvidenceRail({
       ) : (
         <div className="space-y-5">
           {items.map((item) => {
-            const isFocused = item.citation.id === activeFocusedCitationId;
+            const isFocused = item.targetCitationIds.includes(
+              activeFocusedCitationId ?? "",
+            );
 
             return (
               <div
                 key={item.citation.id}
                 id={`evidence-${item.citation.id}`}
                 data-evidence-target={item.citation.id}
+                data-evidence-targets={item.targetCitationIds.join(",")}
                 data-focused={isFocused ? "true" : "false"}
                 ref={(node) => {
-                  itemRefs.current[item.citation.id] = node;
+                  item.targetCitationIds.forEach((citationId) => {
+                    itemRefs.current[citationId] = node;
+                  });
                 }}
                 className="scroll-mt-24 space-y-3"
               >
