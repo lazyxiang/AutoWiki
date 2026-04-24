@@ -131,6 +131,8 @@ export function EvidenceRail({
               <div
                 key={item.citation.id}
                 id={`evidence-${item.citation.id}`}
+                data-evidence-target={item.citation.id}
+                data-focused={isFocused ? "true" : "false"}
                 ref={(node) => {
                   itemRefs.current[item.citation.id] = node;
                 }}

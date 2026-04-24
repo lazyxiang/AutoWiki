@@ -10,16 +10,14 @@ export type VisibleEvidenceLine = {
   content: string;
 };
 
-export function getEvidenceExpansionStep(block: FastReportEvidenceBlock) {
-  return Math.max(15, block.expanded_context - block.default_context);
-}
+export const EVIDENCE_EXPANSION_STEP = 15;
 
 export function getVisibleEvidenceRange(
   block: FastReportEvidenceBlock,
   expansionCount: number,
 ) {
   const context =
-    block.default_context + expansionCount * getEvidenceExpansionStep(block);
+    block.default_context + expansionCount * EVIDENCE_EXPANSION_STEP;
 
   return {
     start: Math.max(block.full_start, block.snippet_start - context),
@@ -68,12 +66,13 @@ export function EvidenceBlock({
     () => getVisibleEvidenceRange(block, expansionCount),
     [block, expansionCount],
   );
-  const stepSize = getEvidenceExpansionStep(block);
   const canExpand =
     visibleRange.start > block.full_start || visibleRange.end < block.full_end;
 
   return (
     <section
+      data-evidence-citation-id={citation.id}
+      data-focused={isFocused ? "true" : "false"}
       className={cn(
         "rounded-[1.4rem] border bg-white p-4 shadow-sm transition-colors",
         isFocused ? "border-slate-900 bg-slate-50" : "border-slate-200",
@@ -97,7 +96,7 @@ export function EvidenceBlock({
               className="rounded-full border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 transition-colors hover:border-slate-400 hover:bg-slate-100"
               onClick={() => setExpansionCount((count) => count + 1)}
             >
-              Expand +{stepSize}
+              Expand +{EVIDENCE_EXPANSION_STEP}
             </button>
           ) : null}
           {expansionCount > 0 ? (

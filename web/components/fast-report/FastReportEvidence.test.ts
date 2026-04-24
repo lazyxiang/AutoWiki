@@ -1,20 +1,25 @@
+// @vitest-environment jsdom
+
 import React from "react";
-import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   FastReportCitation,
-  FastReportDiagram,
   FastReportEvidenceBlock,
   FastReportSection,
 } from "@/lib/api";
 
-import {
-  getVisibleEvidenceLines,
-  getVisibleEvidenceRange,
-} from "./EvidenceBlock";
-import { buildEvidenceRailItems } from "./EvidenceRail";
-import { ReportSection, injectCitationLinks } from "./ReportSection";
+import { EvidenceBlock } from "./EvidenceBlock";
+import { EvidenceRail } from "./EvidenceRail";
+import { ReportSection } from "./ReportSection";
 
 function makeCitation(
   overrides: Partial<FastReportCitation> = {},
@@ -42,26 +47,10 @@ function makeEvidenceBlock(
     full_start: 1,
     full_end: 80,
     default_context: 3,
-    expanded_context: 18,
+    expanded_context: 99,
     is_collapsed: true,
     code: Array.from({ length: 80 }, (_, index) => `line ${index + 1}`).join("\n"),
     symbol_path: "AuthService.validate",
-    ...overrides,
-  };
-}
-
-function makeDiagram(
-  overrides: Partial<FastReportDiagram> = {},
-): FastReportDiagram {
-  return {
-    id: "diagram-1",
-    title: "Auth flow",
-    type: "mermaid",
-    source: "flowchart TD\nA[Request] --> B[Auth]",
-    caption: "Authentication flow",
-    reason: "Clarifies request path",
-    citations: ["cite-auth"],
-    placement: "rail",
     ...overrides,
   };
 }
@@ -76,7 +65,7 @@ function makeSection(
     title: "Authentication flow",
     summary: "Maps the validation path.",
     markdown:
-      "## Overview\n\n- Requests pass through the guard [cite-auth, cite-cache]\n",
+      "## Overview\n\n- Requests pass through the guard [cite-auth].\n- Cache usage is separate [cite-cache].\n",
     citations: [
       makeCitation(),
       makeCitation({
@@ -88,90 +77,122 @@ function makeSection(
       }),
     ],
     evidence_blocks: [
-      makeEvidenceBlock({ citation_id: "cite-cache", snippet_start: 7, snippet_end: 10 }),
       makeEvidenceBlock(),
+      makeEvidenceBlock({
+        citation_id: "cite-cache",
+        snippet_start: 7,
+        snippet_end: 10,
+        default_context: 3,
+        expanded_context: 60,
+        code: Array.from({ length: 80 }, (_, index) => `cache ${index + 1}`).join("\n"),
+        symbol_path: "Cache.read",
+      }),
     ],
     related_wiki_pages: [],
-    related_diagrams: [makeDiagram()],
+    related_diagrams: [],
     created_at: "2026-04-24T01:00:00Z",
     status: "done",
     ...overrides,
   };
 }
 
-describe("fast report citation rendering", () => {
-  it("rewrites markdown citations into structured link targets without touching code fences", () => {
-    const markdown = [
-      "Here is the claim [cite-auth].",
-      "",
-      "```ts",
-      "const example = '[cite-auth]';",
-      "```",
-    ].join("\n");
+describe("fast report evidence interactions", () => {
+  const scrollIntoView = vi.fn();
 
-    const result = injectCitationLinks(markdown, new Set(["cite-auth"]));
-
-    expect(result).toContain("[cite-auth](#evidence-cite-auth)");
-    expect(result).toContain("const example = '[cite-auth]';");
+  beforeEach(() => {
+    scrollIntoView.mockReset();
+    Object.defineProperty(Element.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
   });
 
-  it("renders clickable citation controls inside report markdown", () => {
-    const html = renderToStaticMarkup(
-      React.createElement(ReportSection, { section: makeSection() }),
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it("clicking a citation focuses and targets the matching evidence block", async () => {
+    const user = userEvent.setup();
+    const section = makeSection();
+
+    render(
+      React.createElement(
+        "div",
+        { className: "grid" },
+        React.createElement(ReportSection, { section }),
+        React.createElement(EvidenceRail, { section }),
+      ),
     );
 
-    expect(html).toContain('data-citation-id="cite-auth"');
-    expect(html).toContain('aria-controls="evidence-cite-auth"');
-    expect(html).toContain('data-citation-id="cite-cache"');
-    expect(html).toContain("Jump to evidence");
-  });
-});
+    const citationButton = screen.getByRole("button", {
+      name: "Jump to evidence for worker/auth.py:20-24",
+    });
 
-describe("buildEvidenceRailItems", () => {
-  it("orders evidence by citation appearance and keeps related diagrams", () => {
-    const items = buildEvidenceRailItems(
-      makeSection({
-        citations: [
-          makeCitation({ id: "cite-b", file_path: "b.py" }),
-          makeCitation({ id: "cite-a", file_path: "a.py" }),
-        ],
-        evidence_blocks: [
-          makeEvidenceBlock({ citation_id: "cite-a" }),
-          makeEvidenceBlock({ citation_id: "cite-b" }),
-        ],
-        related_diagrams: [
-          makeDiagram({
-            citations: ["cite-b"],
-          }),
-        ],
+    await user.click(citationButton);
+
+    await waitFor(() => {
+      const target = document.querySelector('[data-evidence-target="cite-auth"]');
+      expect(target?.getAttribute("data-focused")).toBe("true");
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView.mock.instances[0]).toBe(target);
+    });
+
+    const focusedBlock = document.querySelector(
+      '[data-evidence-citation-id="cite-auth"]',
+    );
+    expect(focusedBlock?.getAttribute("data-focused")).toBe("true");
+
+    const unfocusedBlock = document.querySelector(
+      '[data-evidence-citation-id="cite-cache"]',
+    );
+    expect(unfocusedBlock?.getAttribute("data-focused")).toBe("false");
+  });
+
+  it("expands by a fixed 15 lines per click and collapses back through UI interaction", async () => {
+    const user = userEvent.setup();
+    const block = makeEvidenceBlock({
+      expanded_context: 200,
+    });
+
+    render(
+      React.createElement(EvidenceBlock, {
+        citation: makeCitation(),
+        block,
       }),
     );
 
-    expect(items.map((item) => item.citation.id)).toEqual(["cite-b", "cite-a"]);
-    expect(items[0]?.blocks.map((block) => block.citation_id)).toEqual(["cite-b"]);
-    expect(items[1]?.blocks.map((block) => block.citation_id)).toEqual(["cite-a"]);
-    expect(items[0]?.diagrams.map((diagram) => diagram.id)).toEqual(["diagram-1"]);
+    expect(screen.getByText("line 17")).toBeTruthy();
+    expect(screen.getByText("line 25")).toBeTruthy();
+    expect(screen.queryByText("line 2")).toBeNull();
+    expect(screen.queryByText("line 1")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Expand +15" }));
+
+    const evidence = screen.getByRole("table").closest("div")?.parentElement;
+    expect(evidence).toBeTruthy();
+    expect(screen.getByText("line 2")).toBeTruthy();
+    expect(screen.getByText("line 40")).toBeTruthy();
+    expect(screen.queryByText("line 1")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Collapse" }));
+
+    expect(screen.getByText("line 17")).toBeTruthy();
+    expect(screen.getByText("line 25")).toBeTruthy();
+    expect(screen.queryByText("line 2")).toBeNull();
+    expect(screen.queryByText("line 40")).toBeNull();
   });
-});
 
-describe("evidence expansion", () => {
-  it("shows default context first and expands by 15 lines per step", () => {
-    const block = makeEvidenceBlock();
+  it("renders clickable citation controls inside the actual report section UI", () => {
+    render(React.createElement(ReportSection, { section: makeSection() }));
 
-    expect(getVisibleEvidenceRange(block, 0)).toEqual({ start: 17, end: 25 });
-    expect(getVisibleEvidenceRange(block, 1)).toEqual({ start: 2, end: 40 });
-    expect(getVisibleEvidenceRange(block, 2)).toEqual({ start: 1, end: 55 });
-  });
-
-  it("returns the currently visible code lines for rendering and collapses by resetting to step 0", () => {
-    const block = makeEvidenceBlock();
-
-    const expanded = getVisibleEvidenceLines(block, 1);
-    const collapsed = getVisibleEvidenceLines(block, 0);
-
-    expect(expanded[0]).toEqual({ lineNumber: 2, content: "line 2" });
-    expect(expanded.at(-1)).toEqual({ lineNumber: 40, content: "line 40" });
-    expect(collapsed[0]).toEqual({ lineNumber: 17, content: "line 17" });
-    expect(collapsed.at(-1)).toEqual({ lineNumber: 25, content: "line 25" });
+    const buttons = screen.getAllByRole("button", { name: /Jump to evidence for/ });
+    expect(buttons).toHaveLength(2);
+    expect(
+      within(buttons[0] as HTMLButtonElement).getByText("[1]"),
+    ).toBeTruthy();
+    expect(
+      within(buttons[1] as HTMLButtonElement).getByText("[2]"),
+    ).toBeTruthy();
   });
 });
