@@ -1,5 +1,9 @@
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import httpx
+import pytest
+
+from worker.llm.base import LoggingLLMProvider
 from worker.llm.prompt_segment import PromptSegment, normalize_prompt, segments_to_text
 
 
@@ -46,10 +50,6 @@ def test_segments_to_text_empty():
 
 
 async def test_logging_provider_forwards_segment_list():
-    from unittest.mock import AsyncMock
-
-    from worker.llm.base import LoggingLLMProvider
-
     inner = AsyncMock()
     inner.generate.return_value = "response"
     provider = LoggingLLMProvider(inner)
@@ -61,7 +61,6 @@ async def test_logging_provider_forwards_segment_list():
 
 @pytest.fixture(autouse=True)
 def mock_clients():
-    from unittest.mock import patch
     with (
         patch("worker.llm.openai_provider.AsyncOpenAI"),
         patch("worker.llm.anthropic_provider.anthropic.AsyncAnthropic"),
@@ -70,8 +69,6 @@ def mock_clients():
 
 
 async def test_anthropic_provider_builds_cache_control_blocks(monkeypatch):
-    from unittest.mock import MagicMock
-
     from worker.llm.anthropic_provider import AnthropicProvider
 
     provider = AnthropicProvider(api_key="test-key", model="test-model")
@@ -99,8 +96,6 @@ async def test_anthropic_provider_builds_cache_control_blocks(monkeypatch):
 
 
 async def test_anthropic_provider_plain_string_unchanged(monkeypatch):
-    from unittest.mock import MagicMock
-
     from worker.llm.anthropic_provider import AnthropicProvider
 
     provider = AnthropicProvider(api_key="test-key", model="test-model")
@@ -119,8 +114,6 @@ async def test_anthropic_provider_plain_string_unchanged(monkeypatch):
 
 
 async def test_anthropic_provider_system_segments(monkeypatch):
-    from unittest.mock import MagicMock
-
     from worker.llm.anthropic_provider import AnthropicProvider
 
     provider = AnthropicProvider(api_key="test-key", model="test-model")
@@ -146,10 +139,6 @@ async def test_anthropic_provider_system_segments(monkeypatch):
 
 
 async def test_logging_provider_forwards_string():
-    from unittest.mock import AsyncMock
-
-    from worker.llm.base import LoggingLLMProvider
-
     inner = AsyncMock()
     inner.generate.return_value = "response"
     provider = LoggingLLMProvider(inner)
@@ -203,8 +192,6 @@ async def test_openai_provider_concatenates_segments(monkeypatch):
 
     async def mock_create(**kwargs):
         captured_kwargs.update(kwargs)
-        from unittest.mock import MagicMock
-
         resp = MagicMock()
         resp.choices = [MagicMock(message=MagicMock(content="ok"))]
         return resp
@@ -233,16 +220,10 @@ async def test_ollama_provider_concatenates_segments(monkeypatch):
 
     async def mock_post(url, json=None):
         captured_payload.update(json)
-        from unittest.mock import MagicMock
-
         resp = MagicMock()
         resp.raise_for_status = MagicMock()
         resp.json.return_value = {"response": "ok"}
         return resp
-
-    from unittest.mock import AsyncMock, MagicMock
-
-    import httpx
 
     mock_client = MagicMock()
     mock_client.post = AsyncMock(side_effect=mock_post)
