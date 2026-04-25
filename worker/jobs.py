@@ -401,7 +401,7 @@ async def _build_default_fast_report_retrievers(
                         id="struct-1",
                         file_path="README.md",
                         start_line=1,
-                        end_line=max(1, min(len(readme.splitlines()), 20)),
+                        end_line=1,
                         label="README",
                         kind="repository_structure",
                     )
@@ -413,11 +413,10 @@ async def _build_default_fast_report_retrievers(
         question: str, intent: FastReportQuestionIntent
     ) -> CodeEvidenceLayer:
         query_vec = await embedding.embed(_make_fast_report_query(question, intent))
-        chunks = [
-            chunk
-            for chunk in store.search(query_vec, k=6, doc_k=0)
-            if _is_source_like_chunk(chunk)
-        ][:4]
+        raw = await loop.run_in_executor(
+            None, lambda: store.search(query_vec, k=6, doc_k=0)
+        )
+        chunks = [chunk for chunk in raw if _is_source_like_chunk(chunk)][:4]
         citations = [
             _make_fast_report_citation(chunk, f"code-{i + 1}", "code_evidence")
             for i, chunk in enumerate(chunks)
@@ -435,7 +434,9 @@ async def _build_default_fast_report_retrievers(
         question: str, intent: FastReportQuestionIntent
     ) -> SemanticRetrievalLayer:
         query_vec = await embedding.embed(_make_fast_report_query(question, intent))
-        chunks = store.search(query_vec, k=3, doc_k=3)
+        chunks = await loop.run_in_executor(
+            None, lambda: store.search(query_vec, k=3, doc_k=3)
+        )
         return SemanticRetrievalLayer(
             passages=[chunk.get("text", "") for chunk in chunks],
             citations=[

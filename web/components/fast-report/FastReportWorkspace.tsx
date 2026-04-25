@@ -320,7 +320,11 @@ export function FastReportWorkspace({
     if (!activeReportId) {
       requestedInitialReport.current = true;
     }
-    setTimeout(() => void beginReport(initialQuestion), 0);
+    setTimeout(() => {
+      void beginReport(initialQuestion).finally(() => {
+        handledQuestionKeys.current.delete(requestKey);
+      });
+    }, 0);
   }, [activeReportId, beginReport, searchParams]);
 
   const handleSectionComplete = useCallback((section: FastReportSection) => {

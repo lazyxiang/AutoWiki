@@ -132,6 +132,7 @@ class FastReport(Base):
         ForeignKeyConstraint(
             ["id", "active_section_id"],
             ["fast_report_sections.report_id", "fast_report_sections.id"],
+            ondelete="SET NULL",
         ),
     )
     id: Mapped[str] = mapped_column(String, primary_key=True)
