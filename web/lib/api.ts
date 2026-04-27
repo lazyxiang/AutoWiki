@@ -262,6 +262,20 @@ export interface FastReportDiagram {
   placement: string;
 }
 
+export interface FastReportAnalysisTraceFile {
+  path: string;
+  role: string;
+  reason: string;
+  status: string;
+}
+
+export interface FastReportAnalysisTrace {
+  phase?: string;
+  language?: string;
+  search_plan?: Record<string, unknown>;
+  files?: FastReportAnalysisTraceFile[];
+}
+
 export interface FastReportSection {
   id: string;
   report_id: string;
@@ -273,6 +287,7 @@ export interface FastReportSection {
   evidence_blocks: FastReportEvidenceBlock[];
   related_wiki_pages: FastReportWikiLink[];
   related_diagrams: FastReportDiagram[];
+  analysis_trace: FastReportAnalysisTrace;
   created_at: string;
   status: string;
 }

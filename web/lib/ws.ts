@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 
-import type { FastReportSection } from "./api";
+import type { FastReportAnalysisTrace, FastReportSection } from "./api";
 
 const WS_URL = process.env.NEXT_PUBLIC_API_URL?.replace("http", "ws") ?? "ws://localhost:3001";
 
@@ -98,6 +98,7 @@ export function connectFastReportStream(
   handlers: {
     onSectionComplete: (section: FastReportSection) => void;
     onReportComplete: (event: FastReportCompleteEvent) => void;
+    onAnalysisUpdate?: (sectionId: string, trace: FastReportAnalysisTrace) => void;
     onError: (msg: string) => void;
   },
 ): WebSocket {
@@ -106,6 +107,8 @@ export function connectFastReportStream(
     const msg = JSON.parse(e.data) as {
       type: string;
       section?: FastReportSection;
+      section_id?: string;
+      analysis_trace?: FastReportAnalysisTrace;
       report_id?: string;
       job_id?: string | null;
       active_section_id?: string | null;
@@ -114,6 +117,8 @@ export function connectFastReportStream(
     };
     if (msg.type === "section_complete" && msg.section) {
       handlers.onSectionComplete(msg.section);
+    } else if (msg.type === "analysis_update" && msg.section_id && msg.analysis_trace) {
+      handlers.onAnalysisUpdate?.(msg.section_id, msg.analysis_trace);
     } else if (msg.type === "report_complete") {
       handlers.onReportComplete({
         report_id: msg.report_id ?? reportId,
@@ -140,6 +145,7 @@ export function useFastReportStream(
   onSectionComplete: (section: FastReportSection) => void,
   onReportComplete: (event: FastReportCompleteEvent) => void,
   onError: (msg: string) => void,
+  onAnalysisUpdate?: (sectionId: string, trace: FastReportAnalysisTrace) => void,
 ) {
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -148,6 +154,7 @@ export function useFastReportStream(
     const ws = connectFastReportStream(repoId, reportId, {
       onSectionComplete,
       onReportComplete,
+      onAnalysisUpdate,
       onError,
     });
     wsRef.current = ws;
@@ -155,7 +162,7 @@ export function useFastReportStream(
       ws.close();
       wsRef.current = null;
     };
-  }, [repoId, reportId, onSectionComplete, onReportComplete, onError]);
+  }, [repoId, reportId, onSectionComplete, onReportComplete, onError, onAnalysisUpdate]);
 
   return {
     close: () => {

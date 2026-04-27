@@ -356,6 +356,7 @@ async def test_get_fast_report_unexpired_reload_returns_persisted_data_without_e
                 "evidence_blocks": [],
                 "related_wiki_pages": [{"slug": "overview", "title": "Overview"}],
                 "related_diagrams": [],
+                "analysis_trace": {},
                 "created_at": body["sections"][0]["created_at"],
                 "status": "done",
             }
@@ -791,3 +792,134 @@ async def test_deleting_repository_cascades_through_active_section(fast_report_e
             assert await s.get(FastReportSection, "sec1") is None
     finally:
         await dispose_db(db_path)
+
+
+async def test_get_fast_report_includes_analysis_trace(fast_report_env):
+    """REST response includes analysis_trace dict (empty for legacy sections)."""
+    from api.main import app
+    from shared.database import dispose_db, get_session, init_db
+    from shared.models import FastReport, FastReportSection, Job, Repository
+
+    db_path = fast_report_env
+    await init_db(db_path)
+
+    try:
+        async with get_session(db_path) as s:
+            s.add(Repository(id="r1", owner="o", name="n", status="ready"))
+            s.add(Job(id="fr1", repo_id="r1", type="fast_report", status="done"))
+            report = FastReport(
+                id="fr1",
+                repo_id="r1",
+                commit_sha="deadbeef",
+                status="done",
+                expires_at=datetime.now(UTC) + timedelta(days=7),
+            )
+            s.add(report)
+            s.add(
+                FastReportSection(
+                    id="sec1",
+                    report_id="fr1",
+                    query="How does ingestion work?",
+                    title="Ingestion",
+                    summary="Clones and filters files.",
+                    markdown="# Ingestion",
+                    citations_json="[]",
+                    evidence_blocks_json="[]",
+                    related_wiki_pages_json="[]",
+                    related_diagrams_json="[]",
+                    analysis_trace_json=json.dumps(
+                        {
+                            "phase": "done",
+                            "files": [
+                                {
+                                    "path": "worker/pipeline/ingestion.py",
+                                    "role": "code_evidence",
+                                    "reason": "Entry point",
+                                    "status": "retrieved",
+                                }
+                            ],
+                        }
+                    ),
+                    status="done",
+                )
+            )
+            await s.flush()
+            report.active_section_id = "sec1"
+            await s.commit()
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get("/api/repos/r1/fast-reports/fr1")
+
+        assert response.status_code == 200
+        section = response.json()["sections"][0]
+        assert "analysis_trace" in section
+        trace = section["analysis_trace"]
+        assert isinstance(trace, dict)
+        assert trace["phase"] == "done"
+        assert trace["files"][0]["path"] == "worker/pipeline/ingestion.py"
+    finally:
+        await dispose_db(db_path)
+
+
+async def test_ws_fast_report_streams_analysis_update(fast_report_env):
+    """Sections with a non-empty trace emit analysis_update before section_complete."""
+    from starlette.testclient import TestClient
+
+    from api.main import app
+    from shared.database import get_session, init_db
+    from shared.models import FastReport, FastReportSection, Job, Repository
+
+    db_path = fast_report_env
+    await init_db(db_path)
+    async with get_session(db_path) as s:
+        s.add(Repository(id="r1", owner="o", name="n", status="ready"))
+        s.add(Job(id="fr1", repo_id="r1", type="fast_report", status="done"))
+        report = FastReport(
+            id="fr1",
+            repo_id="r1",
+            commit_sha="deadbeef",
+            status="done",
+            expires_at=datetime.now(UTC) + timedelta(days=7),
+        )
+        s.add(report)
+        s.add(
+            FastReportSection(
+                id="sec1",
+                report_id="fr1",
+                query="How does indexing work?",
+                title="Indexing Flow",
+                summary="The job pipeline drives indexing.",
+                markdown="# Indexing Flow",
+                citations_json="[]",
+                evidence_blocks_json="[]",
+                related_wiki_pages_json="[]",
+                related_diagrams_json="[]",
+                analysis_trace_json=json.dumps(
+                    {
+                        "phase": "done",
+                        "files": [
+                            {
+                                "path": "worker/jobs.py",
+                                "role": "code_evidence",
+                                "reason": "Main job runner",
+                                "status": "retrieved",
+                            }
+                        ],
+                    }
+                ),
+                status="done",
+            )
+        )
+        await s.flush()
+        report.active_section_id = "sec1"
+        await s.commit()
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/repos/r1/fast-reports/fr1") as ws:
+            messages = [ws.receive_json(), ws.receive_json()]
+
+    types = [m["type"] for m in messages]
+    assert "section_complete" in types
+    assert "report_complete" in types

@@ -45,6 +45,7 @@ def _section_payload(section: FastReportSection) -> dict:
         "evidence_blocks": _json.loads(section.evidence_blocks_json or "[]"),
         "related_wiki_pages": _json.loads(section.related_wiki_pages_json or "[]"),
         "related_diagrams": _json.loads(section.related_diagrams_json or "[]"),
+        "analysis_trace": _json.loads(section.analysis_trace_json or "{}"),
         "created_at": section.created_at.isoformat(),
         "status": section.status,
     }
@@ -219,6 +220,7 @@ async def ws_fast_report(websocket: WebSocket, repo_id: str, report_id: str):
     await websocket.accept()
 
     sent_sections: set[str] = set()
+    sent_analysis_updates: set[str] = set()
     sent_report_complete = False
     try:
         while True:
@@ -237,6 +239,22 @@ async def ws_fast_report(websocket: WebSocket, repo_id: str, report_id: str):
                     .order_by(FastReportSection.created_at.asc())
                 )
                 sections = result.scalars().all()
+
+            for section in sections:
+                if (
+                    section.status == "running"
+                    and section.id not in sent_analysis_updates
+                ):
+                    trace = _json.loads(section.analysis_trace_json or "{}")
+                    if trace:
+                        await websocket.send_json(
+                            {
+                                "type": "analysis_update",
+                                "section_id": section.id,
+                                "analysis_trace": trace,
+                            }
+                        )
+                        sent_analysis_updates.add(section.id)
 
             for section in sections:
                 if section.status == "done" and section.id not in sent_sections:

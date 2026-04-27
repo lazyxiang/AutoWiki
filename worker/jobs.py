@@ -2020,6 +2020,18 @@ async def run_fast_report(
             ),
         )
 
+        analysis_trace = {
+            "phase": "done",
+            "files": [
+                {
+                    "path": c.file_path,
+                    "role": c.kind,
+                    "reason": c.reason,
+                    "status": "retrieved",
+                }
+                for c in result.citations
+            ],
+        }
         await _update_fast_report_section(
             db_path,
             section_id,
@@ -2036,6 +2048,7 @@ async def run_fast_report(
             related_diagrams_json=_json.dumps(
                 [asdict_s(item) for item in result.related_diagrams]
             ),
+            analysis_trace_json=_json.dumps(analysis_trace),
             status="done",
         )
         await _update_fast_report(

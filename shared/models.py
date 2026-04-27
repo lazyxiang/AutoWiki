@@ -186,6 +186,7 @@ class FastReportSection(Base):
     related_diagrams_json: Mapped[str] = mapped_column(
         Text, nullable=False, default="[]"
     )
+    analysis_trace_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(UTC)
     )
