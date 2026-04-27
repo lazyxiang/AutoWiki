@@ -331,6 +331,7 @@ describe("FastReportWorkspace", () => {
         onSectionComplete: expect.any(Function),
         onReportComplete: expect.any(Function),
         onError: expect.any(Function),
+        onAnalysisUpdate: expect.any(Function),
       }),
     );
 

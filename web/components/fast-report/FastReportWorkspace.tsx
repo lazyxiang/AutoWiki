@@ -487,6 +487,7 @@ export function FastReportWorkspace({
             sections={state.report?.sections ?? []}
             activeSectionId={view.activeSectionId}
             isRunning={view.isRunning}
+            bufferedAnalysis={state.bufferedAnalysis}
           />
           {view.isLoading ? (
             <div className="mt-6 max-w-3xl text-sm leading-6 text-slate-500">
