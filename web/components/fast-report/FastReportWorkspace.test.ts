@@ -43,6 +43,7 @@ vi.mock("@/lib/ws", async () => {
 import {
   FLOATING_ASSISTANT_HEIGHT_VAR,
   FastReportWorkspace,
+  applyAnalysisEvent,
   applyLoadedReport,
   applyReportCompleteEvent,
   applySectionEvent,
@@ -67,6 +68,7 @@ function makeSection(
     evidence_blocks: [],
     related_wiki_pages: [],
     related_diagrams: [],
+    analysis_trace: {},
     created_at: "2026-04-24T01:00:00Z",
     status: "done",
     ...overrides,
@@ -399,6 +401,19 @@ describe("FastReportWorkspace", () => {
         body: expect.stringContaining("Create question"),
       }),
     );
+  });
+
+  it("applyAnalysisEvent buffers the analysis trace by section_id", () => {
+    const state = createWorkspaceState();
+    const next = applyAnalysisEvent(state, {
+      section_id: "sec-1",
+      analysis_trace: {
+        phase: "expanding_call_chain",
+        files: [{ path: "worker/jobs.py", role: "entrypoint", reason: "matched symbol", status: "selected" }],
+      },
+    });
+    expect(next.bufferedAnalysis["sec-1"].files![0].path).toBe("worker/jobs.py");
+    expect(next.streamState).toBe("running");
   });
 });
 

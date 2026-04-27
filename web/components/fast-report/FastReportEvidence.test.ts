@@ -140,6 +140,7 @@ function makeSection(
     ],
     related_wiki_pages: [],
     related_diagrams: [],
+    analysis_trace: {},
     created_at: "2026-04-24T01:00:00Z",
     status: "done",
     ...overrides,
@@ -403,6 +404,28 @@ describe("fast report evidence interactions", () => {
         .getElementById("evidence-cite-cache")
         ?.getAttribute("data-evidence-alias-for"),
     ).toBe("cite-auth");
+  });
+
+  it("ReportSection renders AnalysisTracePanel when section has no body but has analysis trace files", () => {
+    const section = makeSection({
+      markdown: "",
+      status: "running",
+      analysis_trace: {
+        phase: "retrieving_code_evidence",
+        files: [{ path: "worker/jobs.py", role: "entrypoint", reason: "found match", status: "selected" }],
+      },
+    });
+    render(React.createElement(ReportSection, { section }));
+    expect(screen.getByText("worker/jobs.py")).toBeTruthy();
+  });
+
+  it("EvidenceRail renders AnalysisTracePanel when section is null but analysisTrace has files", () => {
+    const trace = {
+      phase: "retrieving_code_evidence" as const,
+      files: [{ path: "worker/jobs.py", role: "entrypoint", reason: "found match", status: "selected" }],
+    };
+    render(React.createElement(EvidenceRail, { section: null, focusedCitationId: null, analysisTrace: trace }));
+    expect(screen.getByText("worker/jobs.py")).toBeTruthy();
   });
 
   it("dedupes diagrams shared by multiple citations while keeping them focus-aware", () => {

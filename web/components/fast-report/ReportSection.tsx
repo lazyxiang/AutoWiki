@@ -1,5 +1,5 @@
 import type { Components } from "react-markdown";
-import type { FastReportSection as FastReportSectionData } from "@/lib/api";
+import type { FastReportAnalysisTrace, FastReportSection as FastReportSectionData } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
@@ -7,6 +7,7 @@ import remarkGfm from "remark-gfm";
 
 import { MermaidBlock } from "@/components/WikiPage";
 
+import { AnalysisTracePanel } from "./AnalysisTracePanel";
 import { CitationLink } from "./CitationLink";
 
 const STATUS_LABELS: Record<string, string> = {
@@ -48,11 +49,14 @@ export function injectCitationLinks(markdown: string, citationIds: Set<string>) 
 export function ReportSection({
   section,
   isActive = false,
+  analysisTrace,
 }: {
   section: FastReportSectionData;
   isActive?: boolean;
+  analysisTrace?: FastReportAnalysisTrace;
 }) {
   const hasBody = section.markdown.trim().length > 0;
+  const effectiveTrace = analysisTrace ?? section.analysis_trace;
   const label = STATUS_LABELS[section.status] ?? section.status;
   const citationIds = new Set(section.citations.map((citation) => citation.id));
   const markdown = injectCitationLinks(section.markdown, citationIds);
@@ -150,6 +154,10 @@ export function ReportSection({
           >
             {markdown}
           </ReactMarkdown>
+        </div>
+      ) : effectiveTrace?.files?.length ? (
+        <div className="mt-5 max-w-3xl rounded-2xl border border-dashed border-slate-200 bg-slate-50/80 px-4 py-5">
+          <AnalysisTracePanel trace={effectiveTrace} />
         </div>
       ) : (
         <div className="mt-5 max-w-3xl rounded-2xl border border-dashed border-slate-200 bg-slate-50/80 px-4 py-5 text-sm leading-6 text-slate-500">

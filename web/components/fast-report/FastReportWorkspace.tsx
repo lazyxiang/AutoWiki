@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import {
   getFastReport,
   type FastReport,
+  type FastReportAnalysisTrace,
   type FastReportSection,
 } from "@/lib/api";
 import { repoPath } from "@/lib/utils";
@@ -31,6 +32,7 @@ export type FastReportWorkspaceState = {
   isStarting: boolean;
   bufferedSections: FastReportSection[];
   bufferedCompletion: FastReportCompleteEvent | null;
+  bufferedAnalysis: Record<string, FastReportAnalysisTrace>;
 };
 
 export function getWorkspaceBottomPadding() {
@@ -45,6 +47,21 @@ export function createWorkspaceState(): FastReportWorkspaceState {
     isStarting: false,
     bufferedSections: [],
     bufferedCompletion: null,
+    bufferedAnalysis: {},
+  };
+}
+
+export function applyAnalysisEvent(
+  state: FastReportWorkspaceState,
+  event: { section_id: string; analysis_trace: FastReportAnalysisTrace },
+): FastReportWorkspaceState {
+  return {
+    ...state,
+    bufferedAnalysis: {
+      ...state.bufferedAnalysis,
+      [event.section_id]: event.analysis_trace,
+    },
+    streamState: "running",
   };
 }
 
@@ -356,6 +373,15 @@ export function FastReportWorkspace({
     setState((current) => applyStreamError(current, message));
   }, []);
 
+  const handleAnalysisUpdate = useCallback(
+    (sectionId: string, trace: FastReportAnalysisTrace) => {
+      setState((current) =>
+        applyAnalysisEvent(current, { section_id: sectionId, analysis_trace: trace }),
+      );
+    },
+    [],
+  );
+
   useEffect(() => {
     if (!activeReportId) {
       return;
@@ -364,6 +390,7 @@ export function FastReportWorkspace({
     const ws = connectFastReportStream(repoId, activeReportId, {
       onSectionComplete: handleSectionComplete,
       onReportComplete: handleReportComplete,
+      onAnalysisUpdate: handleAnalysisUpdate,
       onError: handleStreamError,
     });
     return () => {
@@ -371,6 +398,7 @@ export function FastReportWorkspace({
     };
   }, [
     activeReportId,
+    handleAnalysisUpdate,
     handleReportComplete,
     handleSectionComplete,
     handleStreamError,
@@ -474,6 +502,11 @@ export function FastReportWorkspace({
           <EvidenceRail
             section={railSection}
             focusedCitationId={railFocusedCitationId}
+            analysisTrace={
+              railSection
+                ? state.bufferedAnalysis[railSection.id]
+                : state.bufferedAnalysis[view.activeSectionId ?? ""]
+            }
           />
         </aside>
       </div>
