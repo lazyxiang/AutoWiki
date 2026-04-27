@@ -34,6 +34,17 @@ _PLANNER_INSTRUCTIONS: dict[str, str] = {
     ),
 }
 
+_FAST_REPORT_INSTRUCTIONS: dict[str, str] = {
+    "en": "",
+    "zh": (
+        "\n\nIMPORTANT: Write the fast report body in Chinese (简体中文). "
+        "The report title, summary, section headings, bullet text, and notes "
+        "must all be in Chinese. Keep file paths, code identifiers, class names, "
+        "function names, configuration keys, URLs, and established technical "
+        "terms in their original English form."
+    ),
+}
+
 
 def get_language_instruction(wiki_language: str) -> str:
     """Return the LLM prompt suffix for content generation in *wiki_language*.
@@ -65,3 +76,9 @@ def get_planner_language_instruction(wiki_language: str) -> str:
         A prompt suffix string to append to the planner system prompt.
     """
     return _PLANNER_INSTRUCTIONS.get(wiki_language, "")
+
+
+def get_fast_report_language_instruction(language: str) -> str:
+    """Return the LLM prompt suffix for fast-report generation."""
+
+    return _FAST_REPORT_INSTRUCTIONS.get(language, "")

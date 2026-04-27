@@ -24,7 +24,12 @@ from shared.fast_report_types import (
     FastReportWikiLink,
 )
 from worker.deep_research import format_retrieved_chunks_for_prompt
+from worker.fast_report_search import (
+    detect_question_language,
+    normalize_fast_report_language,
+)
 from worker.llm.base import LLMProvider
+from worker.pipeline.language import get_fast_report_language_instruction
 
 CANONICAL_HEADINGS = [
     "Overview",
@@ -39,32 +44,66 @@ CANONICAL_HEADINGS = [
 SUPPORTED_CLAIM_LAYERS = {"repository_structure", "code_evidence"}
 HEADING_ALIASES = {
     "overview": "Overview",
+    "概述": "Overview",
     "core components": "Core Implementation Components",
     "implementation components": "Core Implementation Components",
     "core implementation components": "Core Implementation Components",
+    "核心实现组件": "Core Implementation Components",
     "key implementation details": "Key Implementation Details",
     "implementation details": "Key Implementation Details",
     "key details": "Key Implementation Details",
+    "关键实现细节": "Key Implementation Details",
     "execution flow": "Execution Flow / Steps",
     "execution flow / steps": "Execution Flow / Steps",
     "execution steps": "Execution Flow / Steps",
     "flow": "Execution Flow / Steps",
+    "执行流程": "Execution Flow / Steps",
+    "执行步骤": "Execution Flow / Steps",
+    "执行流程 / 步骤": "Execution Flow / Steps",
     "configuration": "Configuration",
     "config": "Configuration",
+    "配置": "Configuration",
     "use cases": "Use Cases",
     "use case": "Use Cases",
+    "使用场景": "Use Cases",
     "notes": "Notes",
+    "备注": "Notes",
+    "说明": "Notes",
     "further explore": "Further Explore",
     "further reading": "Further Explore",
+    "进一步阅读": "Further Explore",
+    "延伸阅读": "Further Explore",
+}
+
+DISPLAY_HEADINGS = {
+    "en": {heading: heading for heading in CANONICAL_HEADINGS},
+    "zh": {
+        "Overview": "概述",
+        "Core Implementation Components": "核心实现组件",
+        "Key Implementation Details": "关键实现细节",
+        "Execution Flow / Steps": "执行流程 / 步骤",
+        "Configuration": "配置",
+        "Use Cases": "使用场景",
+        "Notes": "说明",
+        "Further Explore": "进一步阅读",
+    },
+}
+
+DISPLAY_LINK_LABELS = {
+    "en": {"wiki": "Wiki", "diagram": "Diagram"},
+    "zh": {"wiki": "维基", "diagram": "图表"},
 }
 
 
 @dataclass(slots=True)
 class FastReportQuestionIntent:
     question_type: str
+    language: str = "en"
     target: str = ""
     answer_shape: str = ""
     evidence_shape: str = ""
+    search_terms: list[str] = field(default_factory=list)
+    retrieval_focus: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -138,15 +177,24 @@ CuratedKnowledgeRetriever = Callable[
     [str, FastReportQuestionIntent], Awaitable[CuratedKnowledgeLayer]
 ]
 
-_CLASSIFY_SCHEMA = {
+_SEARCH_PLAN_SCHEMA = {
     "type": "object",
     "properties": {
+        "language": {"type": "string"},
         "question_type": {"type": "string"},
         "target": {"type": "string"},
         "answer_shape": {"type": "string"},
         "evidence_shape": {"type": "string"},
+        "search_terms": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "retrieval_focus": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
     },
-    "required": ["question_type"],
+    "required": ["language", "question_type"],
 }
 
 _SECTION_SCHEMA = {
@@ -191,22 +239,34 @@ _SECTION_SCHEMA = {
 }
 
 
-async def classify_fast_report_question(
+async def plan_fast_report_search(
     question: str, repo_name: str, llm: LLMProvider
 ) -> FastReportQuestionIntent:
-    """Classify a user question into a lightweight fast-report intent."""
+    """Plan fast-report retrieval with a structured, language-aware intent."""
+    detected_language = normalize_fast_report_language(
+        detect_question_language(question)
+    )
+    search_language = detected_language
     prompt = (
-        "Classify the user's repository question for fast report generation.\n"
+        "Plan the repository search strategy for fast report generation.\n"
         f"Repository: {repo_name}\n"
         f"Question: {question}\n\n"
-        "Return JSON with question_type, target, answer_shape, and evidence_shape."
+        "Return JSON with language, question_type, target, answer_shape, "
+        "evidence_shape, search_terms, and retrieval_focus.\n"
+        f"Use '{search_language}' for language unless the question clearly "
+        "requires a different answer language."
+        f"{get_fast_report_language_instruction(search_language)}"
     )
-    raw = await llm.generate_structured(prompt, _CLASSIFY_SCHEMA)
+    raw = await llm.generate_structured(prompt, _SEARCH_PLAN_SCHEMA)
+    planned_language = normalize_fast_report_language(raw.get("language"))
     return FastReportQuestionIntent(
+        language=planned_language or search_language,
         question_type=raw.get("question_type", "unknown"),
         target=raw.get("target", ""),
         answer_shape=raw.get("answer_shape", ""),
         evidence_shape=raw.get("evidence_shape", ""),
+        search_terms=list(raw.get("search_terms", [])),
+        retrieval_focus=list(raw.get("retrieval_focus", [])),
     )
 
 
@@ -284,9 +344,13 @@ def assemble_fast_report_markdown(
     notes: list[str],
     related_wiki_pages: list[FastReportWikiLink],
     related_diagrams: list[FastReportDiagram],
+    language: str = "en",
 ) -> str:
     """Assemble report markdown using the canonical heading order."""
     lines = [f"# {title}", "", summary]
+    display_language = normalize_fast_report_language(language)
+    heading_map = DISPLAY_HEADINGS.get(display_language, DISPLAY_HEADINGS["en"])
+    link_labels = DISPLAY_LINK_LABELS.get(display_language, DISPLAY_LINK_LABELS["en"])
 
     for heading in CANONICAL_HEADINGS:
         claim_list = section_claims.get(heading, [])
@@ -297,7 +361,8 @@ def assemble_fast_report_markdown(
         if not claim_list and not note_lines and not include_further_explore:
             continue
 
-        lines.extend(["", f"## {heading}", ""])
+        visible_heading = heading_map.get(heading, heading)
+        lines.extend(["", f"## {visible_heading}", ""])
         for claim in claim_list:
             citation_suffix = (
                 f" [{' ,'.join(claim.citation_ids)}]".replace(" ,", ",")
@@ -312,10 +377,14 @@ def assemble_fast_report_markdown(
         if heading == "Further Explore":
             for page in related_wiki_pages:
                 reason = f" - {page.reason}" if page.reason else ""
-                lines.append(f"- Wiki: [{page.title}](wiki://{page.slug}){reason}")
+                lines.append(
+                    f"- {link_labels['wiki']}: [{page.title}](wiki://{page.slug}){reason}"
+                )
             for diagram in related_diagrams:
                 reason = f" - {diagram.reason}" if diagram.reason else ""
-                lines.append(f"- Diagram: {diagram.title} (`{diagram.type}`){reason}")
+                lines.append(
+                    f"- {link_labels['diagram']}: {diagram.title} (`{diagram.type}`){reason}"
+                )
 
     return "\n".join(lines).strip()
 
@@ -366,9 +435,27 @@ def _filter_evidence_blocks(
 
 
 def _tokenize_for_wiki_rank(text: str) -> set[str]:
-    return {
-        token for token in re.findall(r"[a-z0-9]+", text.lower()) if len(token) >= 3
-    }
+    tokens: set[str] = set()
+    cjk_runs = re.findall(
+        r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]+",
+        text.lower(),
+    )
+    for token in re.findall(r"[a-z0-9]+", text.lower()):
+        if token.isascii():
+            if len(token) >= 3:
+                tokens.add(token)
+    for run in cjk_runs:
+        if not run:
+            continue
+        tokens.add(run)
+        if len(run) == 1:
+            tokens.add(run)
+            continue
+        max_ngram = min(3, len(run))
+        for size in range(2, max_ngram + 1):
+            for index in range(0, len(run) - size + 1):
+                tokens.add(run[index : index + size])
+    return tokens
 
 
 def _citation_tokens(citation: FastReportCitation) -> set[str]:
@@ -448,14 +535,21 @@ def _build_generation_prompt(
             for page in layers.curated_knowledge.wiki_pages
         ]
     )
+    search_terms = "\n".join(f"- {term}" for term in intent.search_terms)
+    retrieval_focus = "\n".join(f"- {item}" for item in intent.retrieval_focus)
     return (
         "Draft a fast report section as structured JSON.\n"
         f"Repository: {repo_name}\n"
         f"Question: {question}\n"
+        f"Answer language: {intent.language}\n"
         f"Question type: {intent.question_type}\n"
         f"Target: {intent.target}\n"
         f"Expected answer shape: {intent.answer_shape}\n"
         f"Likely evidence shape: {intent.evidence_shape}\n\n"
+        "Search terms:\n"
+        f"{search_terms or '- None'}\n\n"
+        "Retrieval focus:\n"
+        f"{retrieval_focus or '- None'}\n\n"
         "Repository structure layer:\n"
         f"{structure_summary or '- None'}\n\n"
         "Code evidence layer:\n"
@@ -466,6 +560,7 @@ def _build_generation_prompt(
         f"{curated_summary or '- None'}\n\n"
         "Use the canonical headings where relevant. Final claims must cite code "
         "or repository structure evidence."
+        f"{get_fast_report_language_instruction(intent.language)}"
     )
 
 
@@ -501,7 +596,7 @@ async def generate_fast_report_section(
     curated_knowledge_retriever: CuratedKnowledgeRetriever,
 ) -> FastReportSectionResult:
     """Generate one fast report section from layered retrieval context."""
-    intent = await classify_fast_report_question(question, repo_name, llm)
+    intent = await plan_fast_report_search(question, repo_name, llm)
     layers = await retrieve_fast_report_layers(
         question=question,
         intent=intent,
@@ -529,6 +624,7 @@ async def generate_fast_report_section(
         notes=notes,
         related_wiki_pages=related_wiki_pages,
         related_diagrams=layers.curated_knowledge.diagrams,
+        language=intent.language,
     )
     citations_by_id = {
         citation.id: citation

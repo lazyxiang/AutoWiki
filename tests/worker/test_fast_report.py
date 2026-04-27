@@ -93,6 +93,185 @@ def test_assemble_fast_report_markdown_uses_canonical_heading_order():
     assert "- Diagram: Pipeline Flow (`flowchart`) - Visual call path" in markdown
 
 
+def test_detect_question_language_defaults_to_english():
+    from worker.fast_report_search import detect_question_language
+
+    assert detect_question_language("How does indexing work?") == "en"
+
+
+def test_detect_question_language_switches_to_chinese_for_cjk_input():
+    from worker.fast_report_search import detect_question_language
+
+    assert detect_question_language("索引流程是怎么执行的？") == "zh"
+
+
+def test_detect_question_language_treats_japanese_and_korean_as_cjk():
+    from worker.fast_report_search import detect_question_language
+
+    assert detect_question_language("インデックス処理はどう動きますか？") == "zh"
+    assert detect_question_language("인덱싱 흐름은 어떻게 동작하나요?") == "zh"
+
+
+def test_normalize_heading_accepts_chinese_aliases():
+    from worker.fast_report import _normalize_heading
+
+    assert _normalize_heading("概述") == "Overview"
+    assert _normalize_heading("执行流程 / 步骤") == "Execution Flow / Steps"
+
+
+async def test_plan_fast_report_search_appends_language_instruction(mock_llm):
+    from worker.fast_report import plan_fast_report_search
+
+    captured: dict[str, str] = {}
+
+    async def _structured(prompt, schema):
+        captured["prompt"] = prompt
+        return {
+            "language": "zh",
+            "question_type": "execution_flow",
+            "target": "索引流程",
+            "answer_shape": "report",
+            "evidence_shape": "entry-points",
+            "search_terms": ["indexing"],
+            "retrieval_focus": ["worker/jobs.py"],
+        }
+
+    mock_llm.generate_structured.side_effect = _structured
+
+    await plan_fast_report_search("索引流程是怎么执行的？", "autowiki", mock_llm)
+
+    assert "IMPORTANT: Write the fast report body in Chinese" in captured["prompt"]
+
+
+async def test_plan_fast_report_search_normalizes_common_chinese_variants(mock_llm):
+    from worker.fast_report import plan_fast_report_search
+
+    async def _structured(prompt, schema):
+        return {
+            "language": "zh-CN",
+            "question_type": "execution_flow",
+            "target": "索引流程",
+            "answer_shape": "report",
+            "evidence_shape": "entry-points",
+        }
+
+    mock_llm.generate_structured.side_effect = _structured
+
+    intent = await plan_fast_report_search(
+        "索引流程是怎么执行的？", "autowiki", mock_llm
+    )
+
+    assert intent.language == "zh"
+
+
+async def test_plan_fast_report_search_normalizes_japanese_and_korean_variants(
+    mock_llm,
+):
+    from worker.fast_report import plan_fast_report_search
+
+    responses = iter(
+        [
+            {
+                "language": "ja-JP",
+                "question_type": "execution_flow",
+                "target": "indexing flow",
+                "answer_shape": "report",
+                "evidence_shape": "entry-points",
+            },
+            {
+                "language": "ko-KR",
+                "question_type": "execution_flow",
+                "target": "indexing flow",
+                "answer_shape": "report",
+                "evidence_shape": "entry-points",
+            },
+        ]
+    )
+
+    async def _structured(prompt, schema):
+        return next(responses)
+
+    mock_llm.generate_structured.side_effect = _structured
+
+    ja_intent = await plan_fast_report_search(
+        "インデックス処理はどう動きますか？", "autowiki", mock_llm
+    )
+    ko_intent = await plan_fast_report_search(
+        "인덱싱 흐름은 어떻게 동작하나요?", "autowiki", mock_llm
+    )
+
+    assert ja_intent.language == "zh"
+    assert ko_intent.language == "zh"
+
+
+def test_select_related_wiki_pages_supports_localized_tokens():
+    from worker.fast_report import _select_related_wiki_pages
+
+    pages = [
+        FastReportWikiLink(
+            slug="执行流程",
+            title="执行流程",
+            reason="索引步骤说明",
+        ),
+        FastReportWikiLink(
+            slug="概述",
+            title="概述",
+            reason="系统总览",
+        ),
+    ]
+
+    selected = _select_related_wiki_pages(
+        question="索引的执行流程是什么？",
+        evidence_citations=[
+            FastReportCitation(
+                id="code-1",
+                file_path="worker/jobs.py",
+                start_line=1,
+                end_line=20,
+                label="执行流程",
+                kind="code_evidence",
+            )
+        ],
+        candidate_pages=pages,
+    )
+
+    assert [page.slug for page in selected] == ["执行流程"]
+
+
+def test_select_related_wiki_pages_matches_partial_cjk_phrase_overlap():
+    from worker.fast_report import _select_related_wiki_pages
+
+    pages = [
+        FastReportWikiLink(
+            slug="执行流程",
+            title="执行流程",
+            reason="索引步骤说明",
+        ),
+        FastReportWikiLink(
+            slug="配置",
+            title="配置",
+            reason="配置说明",
+        ),
+    ]
+
+    selected = _select_related_wiki_pages(
+        question="索引的执行流程是什么？",
+        evidence_citations=[
+            FastReportCitation(
+                id="code-1",
+                file_path="worker/jobs.py",
+                start_line=1,
+                end_line=20,
+                label="run_full_index",
+                kind="code_evidence",
+            )
+        ],
+        candidate_pages=pages,
+    )
+
+    assert [page.slug for page in selected] == ["执行流程"]
+
+
 async def test_generate_fast_report_section_returns_structured_section(mock_llm):
     from worker.fast_report import (
         CodeEvidenceLayer,
@@ -105,8 +284,9 @@ async def test_generate_fast_report_section_returns_structured_section(mock_llm)
 
     async def _structured(*args, **kwargs):
         prompt = args[0]
-        if "Classify the user's repository question" in prompt:
+        if "Plan the repository search strategy" in prompt:
             return {
+                "language": "en",
                 "question_type": "execution_flow",
                 "target": "indexing pipeline",
                 "answer_shape": "report",
@@ -342,8 +522,9 @@ async def test_run_fast_report_persists_completed_section(
 
     async def _structured(*args, **kwargs):
         prompt = args[0]
-        if "Classify the user's repository question" in prompt:
+        if "Plan the repository search strategy" in prompt:
             return {
+                "language": "en",
                 "question_type": "execution_flow",
                 "target": "indexing",
                 "answer_shape": "report",
