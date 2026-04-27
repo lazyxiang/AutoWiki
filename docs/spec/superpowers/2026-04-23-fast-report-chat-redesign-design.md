@@ -23,7 +23,7 @@ This design also removes the existing streaming chat UI once the new fast report
 - Allow markdown citations to deep-link into the evidence rail and highlight the corresponding block.
 - Persist generated fast reports for 7 days behind a stable URL.
 - Reopen persisted reports without requiring additional LLM calls.
-- Use mixed retrieval for coverage, but require code evidence or repository structure evidence for final claims.
+- Use deterministic repository analysis, keyword retrieval, and bounded code graph expansion as the primary evidence path, while still requiring code evidence or repository structure evidence for final claims.
 - Automatically attach related generated wiki pages as further reading.
 - Support Mermaid diagrams as first-class report content when they improve understanding.
 
@@ -138,6 +138,19 @@ Preferred report headings:
 
 The generation layer may omit empty headings, but the prompt and schema should encourage this shape.
 
+The implementation should keep stable internal canonical heading keys while rendering the visible heading text in the detected report language. This allows the generator to accept either English or Chinese heading labels while still normalizing the result into one stable internal shape.
+
+## Language Strategy
+
+Fast report output should follow the detected language of the user's question.
+
+- default to English
+- switch to Simplified Chinese when the question is detected to be Chinese
+- keep code identifiers, class names, function names, file paths, config keys, and other repository-native tokens in their original English form
+- keep internal JSON keys and canonical section identifiers in English regardless of output language
+
+The initial implementation should not introduce a persisted `report_language` field. Language should be inferred per question at generation time.
+
 ## Retrieval and Evidence Model
 
 ### Retrieval Layers
@@ -171,15 +184,15 @@ This layer contains directly inspectable implementation evidence:
 
 This layer is not limited to symbol names. It must include implementation detail and relationship detail.
 
-#### 3. Semantic Retrieval Layer
+#### 3. Interpretive Context Layer
 
-This layer contains semantic context that helps interpret the code:
+This layer contains explanatory context that helps interpret the code:
 
-- RAG chunks
 - docstrings
 - inline comments
 - README passages
-- other natural-language explanation fragments
+- heading-level documentation fragments
+- other natural-language explanation fragments selected from deterministic candidates
 
 This layer helps explain meaning, but does not independently justify key claims.
 
@@ -195,26 +208,45 @@ This layer is for organization and further reading, not final claim arbitration.
 
 ### Retrieval Policy
 
-All four layers should be retrieved in parallel.
+All four layers should be retrieved in parallel after a lightweight search-planning pass.
 
 The arbitration rule is:
 
 - final claims must be supported by the `Code Evidence Layer` or the `Repository Structure Layer`
-- `Semantic Retrieval Layer` may clarify or connect evidence
+- `Interpretive Context Layer` may clarify or connect evidence
 - `Curated Knowledge Layer` may enrich organization and further reading
 
 This preserves coverage without allowing unsupported narrative drift.
 
+The initial implementation should avoid embedding- and vector-search-driven retrieval in the fast report path. Instead, retrieval should be driven by deterministic repository signals, keyword search, symbol lookup, and bounded dependency / reference expansion.
+
 ## Report Generation Pipeline
 
-### 1. Question Classification
+### 1. Question Language Detection
 
-Convert the raw user question into a lightweight structured intent:
+Detect the language of the incoming question before any LLM generation step.
+
+Rules:
+
+- default to English
+- detect Chinese from the question text locally
+- use the detected language to control title, summary, notes, and markdown generation
+
+### 2. Search Plan Generation
+
+Use a lightweight first LLM call to convert the raw question into a structured search plan.
+
+The search plan should capture:
 
 - question type
 - target subsystem or symbol
 - expected answer form
 - likely evidence shape
+- English keyword hints
+- Chinese keyword hints when useful
+- symbol hints
+- path hints
+- retrieval modes
 
 Example question types:
 
@@ -226,9 +258,9 @@ Example question types:
 - testing
 - dependency relationship
 
-### 2. Retrieval
+### 3. Deterministic Retrieval and Expansion
 
-Retrieve candidates from the four layers described above.
+Retrieve candidates from the four layers described above without relying on vector similarity.
 
 The retrieval stage should prefer:
 
@@ -236,8 +268,19 @@ The retrieval stage should prefer:
 - boundary and entry-point files for flow questions
 - configuration touchpoints for behavior questions
 - dependency and structure signals for architecture questions
+- symbol definitions and reference sites over broad file-level excerpts
 
-### 3. Evidence Arbitration
+Code evidence retrieval should combine:
+
+- path and filename keyword matching
+- symbol and signature matching
+- docstring and README heading matching
+- bounded dependency expansion from matched seed files
+- bounded symbol / reference expansion where available
+
+For execution-flow and dependency questions, the generator should capture a small call-chain-style evidence set with explicit roles such as `entrypoint`, `callee`, `config_touchpoint`, `interface`, or `test_assertion`.
+
+### 4. Evidence Arbitration
 
 Before final markdown assembly, the system should prune or downgrade unsupported claims.
 
@@ -247,7 +290,7 @@ Allowed outcomes:
 - `qualified`: plausible but incomplete, explicitly marked as uncertain
 - `dropped`: excluded from the final report
 
-### 4. Report Assembly
+### 5. Report Assembly
 
 Generate structured markdown with:
 
@@ -257,13 +300,19 @@ Generate structured markdown with:
 - optional Mermaid diagrams
 - related wiki references
 
-### 5. Evidence Packing
+### 6. Evidence Packing
 
 For every inline citation in the markdown:
 
 - create or reuse a stable citation id
 - attach a matching evidence block payload
 - preserve citation order
+
+### 7. Analysis Trace
+
+Before the final markdown is ready, the system should stream a lightweight analysis trace that explains which files are currently being inspected and why.
+
+The trace should be good enough to support a temporary pre-report UI state, not a full debug transcript.
 
 ## Data Model
 
@@ -293,6 +342,7 @@ Suggested fields:
 - `title`
 - `summary`
 - `markdown`
+- `analysis_trace`
 - `citations`
 - `related_wiki_pages`
 - `related_diagrams`
@@ -331,6 +381,22 @@ Suggested fields:
 - `is_collapsed`
 - `code`
 - `symbol_path`
+
+### Analysis Trace
+
+Suggested fields:
+
+- `phase`
+- `language`
+- `search_plan`
+- `files`
+
+Each file entry should include:
+
+- `path`
+- `role`
+- `reason`
+- `status`
 
 ### Related Wiki Link
 
@@ -445,11 +511,25 @@ The generator may reuse:
 
 - AST outputs
 - dependency graph outputs
-- RAG index
 - generated wiki data
 - Mermaid sanitization and rendering path
 
-But it should emit a dedicated structured report schema.
+It should also introduce a fast-report-specific repository analysis index that is persisted during repository indexing and reused at report time.
+
+The initial implementation should not require the FAISS index or embedding provider to serve fast reports.
+
+The fast report path should emit a dedicated structured report schema plus an intermediate analysis trace.
+
+### WebSocket Contract
+
+The fast report WebSocket stream should support intermediate analysis events before the final section payload is available.
+
+Suggested event types:
+
+- `analysis_update`
+- `section_complete`
+- `report_complete`
+- `error`
 
 ## Frontend Changes
 
@@ -471,6 +551,16 @@ Suggested UI split:
 `FloatingAssistant` should continue routing questions into the fast report flow.
 
 The component may need a small mode update, but should remain the user's visible question entry point.
+
+### Analysis-First Rendering
+
+Before a section is fully generated, the workspace should be able to render a temporary analysis state that shows:
+
+- the current analysis phase
+- the list of files being inspected
+- the role of each file in the current retrieval pass
+
+Once the section is complete, this temporary state should be replaced by the final markdown section and evidence rail.
 
 ### Safe Bottom Spacing
 
@@ -514,12 +604,16 @@ Streaming generation may still exist internally, but it should surface as report
 - commit SHA binding is preserved
 - unsupported claims are downgraded or removed during arbitration
 - related wiki links are attached deterministically
+- detected Chinese questions produce Chinese report output while preserving repository-native code tokens
+- fast report generation does not depend on FAISS availability
+- analysis trace events are persisted and streamed in a deterministic order
 
 ### End-to-End
 
 - submit a question from `FloatingAssistant`
 - land on a fast report page
-- see section content and synchronized evidence
+- see an analysis state with the current file list
+- see final section content and synchronized evidence
 - reopen the report URL within TTL without regeneration
 - ask a follow-up question and see a new section appended
 
@@ -530,6 +624,8 @@ Streaming generation may still exist internally, but it should surface as report
 - Retrieval overlap if the four retrieval layers are not enforced clearly.
 - Rendering complexity if evidence expansion is implemented with repeated file reads without caching.
 - UI regressions if `FloatingAssistant` height changes are not measured robustly on mobile widths.
+- Quality regressions if deterministic keyword and call-chain expansion are too shallow for loosely named codebases.
+- Cold-start latency if fast-report-specific repository analysis artifacts are not generated during indexing.
 
 ## Acceptance Criteria
 
@@ -542,6 +638,9 @@ Streaming generation may still exist internally, but it should surface as report
 - Bottom page content remains visible above the floating overlay.
 - Reports persist behind a unique URL for 7 days.
 - Reopening a valid report URL does not trigger fresh LLM generation.
+- Chinese questions yield Chinese report prose without translating repository-native identifiers.
+- Fast reports do not require embedding or vector search to produce the initial implementation's results.
 - Final claims are grounded in code evidence or repository structure evidence.
 - Related wiki content appears as further reading, not as primary evidence.
+- The workspace can display the active analysis file list before the final markdown section is rendered.
 - Legacy chat UI code paths are safely removable.
