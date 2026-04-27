@@ -50,6 +50,7 @@ from worker.fast_report import (
 from worker.llm import make_fast_llm_provider, make_llm_provider
 from worker.pipeline.ast_analysis import FileAnalysis, analyze_all_files
 from worker.pipeline.dependency_graph import build_dependency_graph
+from worker.pipeline.fast_report_index import build_fast_report_index
 from worker.pipeline.ingestion import (
     clone_or_fetch,
     extract_readme,
@@ -636,6 +637,10 @@ async def _snapshot_full_index_state(
                 repo_data_dir / "ast" / "wiki_plan.json",
                 backup_dir / "ast" / "wiki_plan.json",
             )
+        _copy_file_if_exists(
+            repo_data_dir / "ast" / "fast_report_index.json",
+            backup_dir / "ast" / "fast_report_index.json",
+        )
         return had_wiki_dir, snapshot_faiss, snapshot_plan
 
     loop = asyncio.get_running_loop()
@@ -708,6 +713,10 @@ async def _restore_full_index_state(
                 backup.backup_dir / "ast" / "wiki_plan.json",
                 repo_data_dir / "ast" / "wiki_plan.json",
             )
+        _restore_file_from_backup(
+            backup.backup_dir / "ast" / "fast_report_index.json",
+            repo_data_dir / "ast" / "fast_report_index.json",
+        )
 
     await asyncio.get_running_loop().run_in_executor(None, _restore_files)
 
@@ -741,6 +750,7 @@ async def _cleanup_first_time_index_failure(
             _remove_path(repo_data_dir / "faiss.meta.pkl")
         if not reuse_plan:
             _remove_path(repo_data_dir / "ast" / "wiki_plan.json")
+        _remove_path(repo_data_dir / "ast" / "fast_report_index.json")
 
     await asyncio.get_running_loop().run_in_executor(None, _cleanup_files)
     async with get_session(db_path) as s:
@@ -973,6 +983,17 @@ async def run_full_index(
             "Dependency graph built: %d nodes, %d edges",
             sum(len(c) for c in dep_graph.clusters),
             sum(len(e) for e in dep_graph.edges.values()),
+        )
+        fast_report_index = build_fast_report_index(
+            root=clone_root,
+            files=files,
+            file_analysis=file_analysis,
+            dep_graph=dep_graph,
+            readme=readme,
+        )
+        await _write_text_async(
+            ast_dir / "fast_report_index.json",
+            json.dumps(fast_report_index, indent=2, ensure_ascii=False),
         )
         await _update_job(
             db_path,
@@ -1568,6 +1589,17 @@ async def run_refresh_index(
             "Dependency graph built: %d nodes, %d edges",
             sum(len(c) for c in dep_graph.clusters),
             sum(len(e) for e in dep_graph.edges.values()),
+        )
+        fast_report_index = build_fast_report_index(
+            root=clone_root,
+            files=files,
+            file_analysis=file_analysis,
+            dep_graph=dep_graph,
+            readme=readme,
+        )
+        await _write_text_async(
+            ast_dir / "fast_report_index.json",
+            json.dumps(fast_report_index, indent=2, ensure_ascii=False),
         )
         await _update_job(
             db_path, job_id, progress=30, status_description="Rebuilding RAG index..."
