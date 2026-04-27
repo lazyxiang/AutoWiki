@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from shared.fast_report_types import (
     FastReportCitation,
@@ -117,6 +117,219 @@ def test_normalize_heading_accepts_chinese_aliases():
 
     assert _normalize_heading("概述") == "Overview"
     assert _normalize_heading("执行流程 / 步骤") == "Execution Flow / Steps"
+
+
+def test_retrieve_code_evidence_prefers_symbol_seed_and_expands_call_chain():
+    from worker.fast_report import FastReportQuestionIntent
+    from worker.fast_report_search import retrieve_code_evidence
+
+    index = {
+        "top_level_entries": ["worker", "tests"],
+        "readme_headings": ["AutoWiki", "Indexing"],
+        "files": {
+            "worker/jobs.py": {
+                "path": "worker/jobs.py",
+                "tokens": [
+                    "worker",
+                    "jobs",
+                    "run",
+                    "full",
+                    "index",
+                    "indexing",
+                ],
+                "imports": ["worker/pipeline/ingestion.py"],
+                "imported_by": ["worker/main.py", "tests/worker/test_jobs.py"],
+                "external_deps": [],
+                "entities": [
+                    {
+                        "name": "run_full_index",
+                        "type": "function",
+                        "start_line": 10,
+                        "end_line": 42,
+                        "signature": "run_full_index(ctx, repo_id)",
+                        "docstring": "Coordinate the indexing pipeline.",
+                        "symbol_path": "worker.jobs.run_full_index",
+                    }
+                ],
+                "is_test": False,
+                "is_config": False,
+            },
+            "worker/pipeline/ingestion.py": {
+                "path": "worker/pipeline/ingestion.py",
+                "tokens": [
+                    "worker",
+                    "pipeline",
+                    "ingestion",
+                    "clone",
+                    "fetch",
+                    "repository",
+                ],
+                "imports": ["worker/pipeline/ast_analysis.py"],
+                "imported_by": ["worker/jobs.py"],
+                "external_deps": [],
+                "entities": [
+                    {
+                        "name": "clone_or_fetch",
+                        "type": "function",
+                        "start_line": 5,
+                        "end_line": 24,
+                        "signature": "clone_or_fetch(repo_url)",
+                        "docstring": "Prepare the repository snapshot.",
+                        "symbol_path": "worker.pipeline.ingestion.clone_or_fetch",
+                    }
+                ],
+                "is_test": False,
+                "is_config": False,
+            },
+            "worker/pipeline/ast_analysis.py": {
+                "path": "worker/pipeline/ast_analysis.py",
+                "tokens": [
+                    "worker",
+                    "pipeline",
+                    "ast",
+                    "analysis",
+                    "analyze",
+                    "files",
+                ],
+                "imports": [],
+                "imported_by": ["worker/pipeline/ingestion.py"],
+                "external_deps": [],
+                "entities": [
+                    {
+                        "name": "analyze_all_files",
+                        "type": "function",
+                        "start_line": 30,
+                        "end_line": 80,
+                        "signature": "analyze_all_files(files)",
+                        "docstring": "Build AST summaries for source files.",
+                        "symbol_path": (
+                            "worker.pipeline.ast_analysis.analyze_all_files"
+                        ),
+                    }
+                ],
+                "is_test": False,
+                "is_config": False,
+            },
+            "tests/worker/test_jobs.py": {
+                "path": "tests/worker/test_jobs.py",
+                "tokens": ["tests", "worker", "jobs", "index"],
+                "imports": ["worker/jobs.py"],
+                "imported_by": [],
+                "external_deps": [],
+                "entities": [],
+                "is_test": True,
+                "is_config": False,
+            },
+        },
+    }
+    plan = FastReportQuestionIntent(
+        question_type="execution_flow",
+        language="en",
+        target="indexing pipeline",
+        answer_shape="report",
+        evidence_shape="call-chain",
+        search_terms=["indexing", "clone_or_fetch"],
+        retrieval_focus=["worker.jobs.run_full_index"],
+    )
+
+    layer = retrieve_code_evidence(
+        index,
+        plan,
+        "How does run_full_index trigger clone_or_fetch during indexing?",
+    )
+
+    assert [citation.file_path for citation in layer.citations] == [
+        "worker/jobs.py",
+        "worker/pipeline/ingestion.py",
+        "worker/pipeline/ast_analysis.py",
+    ]
+    assert [block.symbol_path for block in layer.evidence_blocks] == [
+        "worker.jobs.run_full_index",
+        "worker.pipeline.ingestion.clone_or_fetch",
+        "worker.pipeline.ast_analysis.analyze_all_files",
+    ]
+    assert [snippet["file"] for snippet in layer.snippets] == [
+        "worker/jobs.py",
+        "worker/pipeline/ingestion.py",
+        "worker/pipeline/ast_analysis.py",
+    ]
+    assert all("tests/worker/test_jobs.py" != c.file_path for c in layer.citations)
+
+
+def test_retrieve_code_evidence_keeps_relevant_config_files_for_config_questions():
+    from worker.fast_report import FastReportQuestionIntent
+    from worker.fast_report_search import retrieve_code_evidence
+
+    index = {
+        "files": {
+            "pyproject.toml": {
+                "path": "pyproject.toml",
+                "tokens": [
+                    "pyproject",
+                    "settings",
+                    "configuration",
+                    "config",
+                    "env",
+                    "provider",
+                ],
+                "imports": [],
+                "imported_by": [],
+                "external_deps": [],
+                "entities": [],
+                "is_test": False,
+                "is_config": True,
+            },
+            "worker/settings.py": {
+                "path": "worker/settings.py",
+                "tokens": [
+                    "worker",
+                    "settings",
+                    "configuration",
+                    "config",
+                    "env",
+                    "provider",
+                    "openai",
+                ],
+                "imports": [],
+                "imported_by": [],
+                "external_deps": [],
+                "entities": [
+                    {
+                        "name": "LLMConfig",
+                        "type": "class",
+                        "start_line": 8,
+                        "end_line": 34,
+                        "signature": "class LLMConfig",
+                        "docstring": "Model and provider settings.",
+                        "symbol_path": "worker.settings.LLMConfig",
+                    }
+                ],
+                "is_test": False,
+                "is_config": True,
+            },
+        }
+    }
+    plan = FastReportQuestionIntent(
+        question_type="configuration",
+        language="en",
+        target="provider settings",
+        answer_shape="report",
+        evidence_shape="config",
+        search_terms=["configuration", "settings", "env", "provider"],
+        retrieval_focus=[],
+    )
+
+    layer = retrieve_code_evidence(
+        index,
+        plan,
+        "Which configuration settings and env values control the provider setup?",
+    )
+
+    assert [citation.file_path for citation in layer.citations] == [
+        "worker/settings.py",
+        "pyproject.toml",
+    ]
+    assert layer.evidence_blocks[0].symbol_path == "worker.settings.LLMConfig"
 
 
 async def test_plan_fast_report_search_appends_language_instruction(mock_llm):
@@ -461,7 +674,7 @@ async def test_generate_fast_report_section_returns_structured_section(mock_llm)
 
 
 async def test_run_fast_report_persists_completed_section(
-    tmp_path, monkeypatch, mock_llm, mock_embedding
+    tmp_path, monkeypatch, mock_llm
 ):
     from shared.database import dispose_db, get_session, init_db
     from shared.models import FastReport, FastReportSection, Job, Repository, WikiPage
@@ -519,6 +732,74 @@ async def test_run_fast_report_persists_completed_section(
     repo_root = tmp_path / "repos" / "r1" / "clone"
     repo_root.mkdir(parents=True)
     (repo_root / "README.md").write_text("# AutoWiki\n\nIndexing overview.")
+    ast_dir = tmp_path / "repos" / "r1" / "ast"
+    ast_dir.mkdir(parents=True)
+    (ast_dir / "fast_report_index.json").write_text(
+        json.dumps(
+            {
+                "top_level_entries": ["README.md", "worker"],
+                "readme_headings": ["AutoWiki", "Indexing overview"],
+                "files": {
+                    "worker/jobs.py": {
+                        "path": "worker/jobs.py",
+                        "tokens": [
+                            "worker",
+                            "jobs",
+                            "run",
+                            "full",
+                            "index",
+                            "indexing",
+                        ],
+                        "imports": ["worker/pipeline/ingestion.py"],
+                        "imported_by": [],
+                        "external_deps": [],
+                        "entities": [
+                            {
+                                "name": "run_full_index",
+                                "type": "function",
+                                "start_line": 539,
+                                "end_line": 566,
+                                "signature": "run_full_index(ctx, repo_id, job_id)",
+                                "docstring": "Coordinate the indexing pipeline.",
+                                "symbol_path": "worker.jobs.run_full_index",
+                            }
+                        ],
+                        "is_test": False,
+                        "is_config": False,
+                    },
+                    "worker/pipeline/ingestion.py": {
+                        "path": "worker/pipeline/ingestion.py",
+                        "tokens": [
+                            "worker",
+                            "pipeline",
+                            "ingestion",
+                            "clone",
+                            "fetch",
+                            "indexing",
+                        ],
+                        "imports": [],
+                        "imported_by": ["worker/jobs.py"],
+                        "external_deps": [],
+                        "entities": [
+                            {
+                                "name": "clone_or_fetch",
+                                "type": "function",
+                                "start_line": 10,
+                                "end_line": 40,
+                                "signature": "clone_or_fetch(repo_url)",
+                                "docstring": "Clone the repository snapshot.",
+                                "symbol_path": (
+                                    "worker.pipeline.ingestion.clone_or_fetch"
+                                ),
+                            }
+                        ],
+                        "is_test": False,
+                        "is_config": False,
+                    },
+                },
+            }
+        )
+    )
 
     async def _structured(*args, **kwargs):
         prompt = args[0]
@@ -529,6 +810,8 @@ async def test_run_fast_report_persists_completed_section(
                 "target": "indexing",
                 "answer_shape": "report",
                 "evidence_shape": "entry-points",
+                "search_terms": ["indexing", "clone_or_fetch"],
+                "retrieval_focus": ["worker.jobs.run_full_index"],
             }
         return {
             "title": "Indexing Flow",
@@ -550,45 +833,19 @@ async def test_run_fast_report_persists_completed_section(
 
     mock_llm.generate_structured.side_effect = _structured
 
-    fake_store = MagicMock()
-
-    def _search(query_vec, k=5, doc_k=None):
-        if doc_k == 3:
-            return [
-                {
-                    "file": "README.md",
-                    "text": "The README describes the indexing pipeline.",
-                    "start_line": 1,
-                    "end_line": 3,
-                    "score": 0.61,
-                }
-            ]
-        return [
-            {
-                "file": "README.md",
-                "text": "AutoWiki generates repository documentation.",
-                "start_line": 1,
-                "end_line": 2,
-                "score": 0.95,
-            },
-            {
-                "file": "worker/jobs.py",
-                "text": "async def run_full_index(...): ...",
-                "start_line": 539,
-                "end_line": 566,
-                "score": 0.92,
-            },
-        ]
-
-    fake_store.search.side_effect = _search
-
     ctx = {}
     await startup(ctx)
 
     with (
         patch("worker.jobs.make_llm_provider", return_value=mock_llm),
-        patch("worker.jobs.make_embedding_provider", return_value=mock_embedding),
-        patch("worker.jobs._load_faiss_for_research", return_value=fake_store),
+        patch(
+            "worker.jobs.make_embedding_provider",
+            side_effect=AssertionError("fast report should not embed queries"),
+        ),
+        patch(
+            "worker.jobs._load_faiss_for_research",
+            side_effect=AssertionError("fast report should not load FAISS"),
+        ),
     ):
         try:
             await run_fast_report(
@@ -619,12 +876,152 @@ async def test_run_fast_report_persists_completed_section(
                 citations = json.loads(section.citations_json)
                 assert citations[0]["id"] == "code-1"
                 assert citations[0]["file_path"] == "worker/jobs.py"
-                assert json.loads(section.evidence_blocks_json)[0]["citation_id"] == (
-                    "code-1"
-                )
+                evidence_blocks = json.loads(section.evidence_blocks_json)
+                assert evidence_blocks[0]["citation_id"] == "code-1"
+                assert evidence_blocks[0]["symbol_path"] == "worker.jobs.run_full_index"
                 assert "README.md" not in section.citations_json
                 assert json.loads(section.related_wiki_pages_json) == []
                 assert "diagram" not in section.related_diagrams_json.lower()
         finally:
             await dispose_db(db_path)
             reset_config()
+
+
+async def test_build_default_fast_report_retrievers_tolerates_corrupt_index_file(
+    tmp_path, monkeypatch
+):
+    from shared.database import dispose_db, get_session, init_db
+    from shared.models import Repository, WikiPage
+    from worker.fast_report import FastReportQuestionIntent
+    from worker.jobs import _build_default_fast_report_retrievers
+
+    db_path = str(tmp_path / "t.db")
+    monkeypatch.setenv("DATABASE_PATH", db_path)
+    monkeypatch.setenv("AUTOWIKI_DATA_DIR", str(tmp_path))
+    from shared.config import get_config, reset_config
+
+    reset_config()
+    await init_db(db_path)
+    async with get_session(db_path) as s:
+        s.add(Repository(id="r1", owner="o", name="n", status="ready"))
+        s.add(
+            WikiPage(
+                id="wp1",
+                repo_id="r1",
+                slug="overview",
+                title="Overview",
+                content="Architecture summary for the indexing pipeline.",
+                description="System overview",
+                page_order=0,
+            )
+        )
+        await s.commit()
+
+    repo_root = tmp_path / "repos" / "r1" / "clone"
+    repo_root.mkdir(parents=True)
+    (repo_root / "README.md").write_text("# AutoWiki\n\n## Runtime\n\nFallback docs.")
+    (repo_root / "worker").mkdir()
+    ast_dir = tmp_path / "repos" / "r1" / "ast"
+    ast_dir.mkdir(parents=True)
+    (ast_dir / "fast_report_index.json").write_text('{"files": ')
+
+    cfg = get_config()
+
+    try:
+        retrievers = await _build_default_fast_report_retrievers(
+            repo_id="r1",
+            db_path=db_path,
+            cfg=cfg,
+        )
+        intent = FastReportQuestionIntent(
+            question_type="execution_flow",
+            language="en",
+            target="runtime",
+            answer_shape="report",
+            evidence_shape="entry-points",
+        )
+
+        structure = await retrievers["repository_structure_retriever"](
+            "How does runtime start?", intent
+        )
+        code = await retrievers["code_evidence_retriever"](
+            "How does runtime start?", intent
+        )
+
+        assert structure.signals[0] == "Top-level entries: README.md, worker"
+        assert structure.citations[0].file_path == "README.md"
+        assert code.citations == []
+        assert code.evidence_blocks == []
+    finally:
+        await dispose_db(db_path)
+        reset_config()
+
+
+async def test_build_default_fast_report_retrievers_tolerates_non_utf8_index_bytes(
+    tmp_path, monkeypatch
+):
+    from shared.database import dispose_db, get_session, init_db
+    from shared.models import Repository, WikiPage
+    from worker.fast_report import FastReportQuestionIntent
+    from worker.jobs import _build_default_fast_report_retrievers
+
+    db_path = str(tmp_path / "t.db")
+    monkeypatch.setenv("DATABASE_PATH", db_path)
+    monkeypatch.setenv("AUTOWIKI_DATA_DIR", str(tmp_path))
+    from shared.config import get_config, reset_config
+
+    reset_config()
+    await init_db(db_path)
+    async with get_session(db_path) as s:
+        s.add(Repository(id="r1", owner="o", name="n", status="ready"))
+        s.add(
+            WikiPage(
+                id="wp1",
+                repo_id="r1",
+                slug="overview",
+                title="Overview",
+                content="Architecture summary for the indexing pipeline.",
+                description="System overview",
+                page_order=0,
+            )
+        )
+        await s.commit()
+
+    repo_root = tmp_path / "repos" / "r1" / "clone"
+    repo_root.mkdir(parents=True)
+    (repo_root / "README.md").write_text("# AutoWiki\n\n## Runtime\n\nFallback docs.")
+    (repo_root / "worker").mkdir()
+    ast_dir = tmp_path / "repos" / "r1" / "ast"
+    ast_dir.mkdir(parents=True)
+    (ast_dir / "fast_report_index.json").write_bytes(b"\xff\xfe\xfa")
+
+    cfg = get_config()
+
+    try:
+        retrievers = await _build_default_fast_report_retrievers(
+            repo_id="r1",
+            db_path=db_path,
+            cfg=cfg,
+        )
+        intent = FastReportQuestionIntent(
+            question_type="execution_flow",
+            language="en",
+            target="runtime",
+            answer_shape="report",
+            evidence_shape="entry-points",
+        )
+
+        structure = await retrievers["repository_structure_retriever"](
+            "How does runtime start?", intent
+        )
+        code = await retrievers["code_evidence_retriever"](
+            "How does runtime start?", intent
+        )
+
+        assert structure.signals[0] == "Top-level entries: README.md, worker"
+        assert structure.citations[0].file_path == "README.md"
+        assert code.citations == []
+        assert code.evidence_blocks == []
+    finally:
+        await dispose_db(db_path)
+        reset_config()

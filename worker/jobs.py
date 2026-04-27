@@ -34,7 +34,6 @@ from shared.config import get_config
 from shared.database import get_session, init_db
 from shared.fast_report_types import (
     FastReportCitation,
-    FastReportEvidenceBlock,
     FastReportWikiLink,
 )
 from shared.models import FastReport, FastReportSection, Job, Repository, WikiPage
@@ -47,6 +46,7 @@ from worker.fast_report import (
     SemanticRetrievalLayer,
     generate_fast_report_section,
 )
+from worker.fast_report_search import retrieve_code_evidence
 from worker.llm import make_fast_llm_provider, make_llm_provider
 from worker.pipeline.ast_analysis import FileAnalysis, analyze_all_files
 from worker.pipeline.dependency_graph import build_dependency_graph
@@ -280,76 +280,6 @@ def _missing_fast_report_retriever(name: str):
 
 
 FastReportRetrieverFactory = Callable[..., Awaitable[dict[str, Callable]]]
-_SOURCE_LIKE_EXTENSIONS = frozenset(
-    {
-        ".py",
-        ".js",
-        ".jsx",
-        ".ts",
-        ".tsx",
-        ".java",
-        ".go",
-        ".rs",
-        ".c",
-        ".cc",
-        ".cpp",
-        ".cxx",
-        ".h",
-        ".hh",
-        ".hpp",
-        ".hxx",
-        ".cs",
-    }
-)
-
-
-def _is_source_like_chunk(chunk: dict) -> bool:
-    return Path(chunk.get("file", "")).suffix.lower() in _SOURCE_LIKE_EXTENSIONS
-
-
-def _make_fast_report_query(question: str, intent: FastReportQuestionIntent) -> str:
-    parts = [question]
-    if intent.target:
-        parts.append(intent.target)
-    if intent.question_type:
-        parts.append(intent.question_type.replace("_", " "))
-    return "\n".join(parts)
-
-
-def _make_fast_report_citation(
-    chunk: dict,
-    citation_id: str,
-    kind: str,
-) -> FastReportCitation:
-    file_path = chunk.get("file", "unknown")
-    start_line = int(chunk.get("start_line") or 1)
-    end_line = int(chunk.get("end_line") or start_line)
-    return FastReportCitation(
-        id=citation_id,
-        file_path=file_path,
-        start_line=start_line,
-        end_line=end_line,
-        label=Path(file_path).name,
-        kind=kind,
-        score=chunk.get("score"),
-    )
-
-
-def _make_fast_report_evidence_block(
-    chunk: dict,
-    citation_id: str,
-) -> FastReportEvidenceBlock:
-    start_line = int(chunk.get("start_line") or 1)
-    end_line = int(chunk.get("end_line") or start_line)
-    return FastReportEvidenceBlock(
-        citation_id=citation_id,
-        snippet_start=start_line,
-        snippet_end=end_line,
-        full_start=start_line,
-        full_end=end_line,
-        code=chunk.get("text", ""),
-        symbol_path=chunk.get("symbol_path"),
-    )
 
 
 async def _load_fast_report_wiki_pages(
@@ -367,6 +297,31 @@ async def _load_fast_report_wiki_pages(
         ]
 
 
+async def _load_fast_report_index(repo_data_dir: Path) -> dict:
+    index_path = repo_data_dir / "ast" / "fast_report_index.json"
+    if not index_path.exists():
+        return {}
+    loop = asyncio.get_running_loop()
+    try:
+        raw = await loop.run_in_executor(None, index_path.read_text)
+        loaded = json.loads(raw)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        logger.warning(
+            "Ignoring unreadable fast report index at %s: %s",
+            index_path,
+            exc,
+        )
+        return {}
+    if not isinstance(loaded, dict):
+        logger.warning(
+            "Ignoring unexpected fast report index payload at %s: %s",
+            index_path,
+            type(loaded).__name__,
+        )
+        return {}
+    return loaded
+
+
 async def _build_default_fast_report_retrievers(
     *,
     repo_id: str,
@@ -377,13 +332,20 @@ async def _build_default_fast_report_retrievers(
     clone_root = repo_data_dir / "clone"
     loop = asyncio.get_running_loop()
     readme = await loop.run_in_executor(None, extract_readme, clone_root)
-    embedding = make_embedding_provider(cfg)
-    store = await _load_faiss_for_research(repo_data_dir, embedding)
+    fast_report_index = await _load_fast_report_index(repo_data_dir)
+    indexed_files = fast_report_index.get("files", {})
     wiki_pages = await _load_fast_report_wiki_pages(db_path, repo_id)
-    top_level_entries = await loop.run_in_executor(
-        None,
-        lambda: sorted(p.name for p in clone_root.iterdir() if p.name != ".git")[:8],
-    )
+    top_level_entries = list(fast_report_index.get("top_level_entries") or [])
+    if not top_level_entries and clone_root.exists():
+
+        def _read_top_level_entries() -> list[str]:
+            return sorted(p.name for p in clone_root.iterdir() if p.name != ".git")[:8]
+
+        top_level_entries = await loop.run_in_executor(
+            None,
+            _read_top_level_entries,
+        )
+    readme_headings = list(fast_report_index.get("readme_headings") or [])
 
     async def _repository_structure(
         question: str, intent: FastReportQuestionIntent
@@ -393,6 +355,8 @@ async def _build_default_fast_report_retrievers(
             if top_level_entries
             else "Top-level entries unavailable."
         ]
+        if readme_headings:
+            signals.append(f"README headings: {', '.join(readme_headings[:6])}")
         if readme:
             signals.append(readme.splitlines()[0][:160])
             return RepositoryStructureLayer(
@@ -413,41 +377,35 @@ async def _build_default_fast_report_retrievers(
     async def _code_evidence(
         question: str, intent: FastReportQuestionIntent
     ) -> CodeEvidenceLayer:
-        query_vec = await embedding.embed(_make_fast_report_query(question, intent))
-        raw = await loop.run_in_executor(
-            None, lambda: store.search(query_vec, k=6, doc_k=0)
-        )
-        chunks = [chunk for chunk in raw if _is_source_like_chunk(chunk)][:4]
-        citations = [
-            _make_fast_report_citation(chunk, f"code-{i + 1}", "code_evidence")
-            for i, chunk in enumerate(chunks)
-        ]
-        return CodeEvidenceLayer(
-            snippets=list(chunks),
-            citations=citations,
-            evidence_blocks=[
-                _make_fast_report_evidence_block(chunk, citation.id)
-                for chunk, citation in zip(chunks, citations, strict=False)
-            ],
-        )
+        return retrieve_code_evidence(fast_report_index, intent, question)
 
     async def _semantic(
         question: str, intent: FastReportQuestionIntent
     ) -> SemanticRetrievalLayer:
-        query_vec = await embedding.embed(_make_fast_report_query(question, intent))
-        chunks = await loop.run_in_executor(
-            None, lambda: store.search(query_vec, k=3, doc_k=3)
-        )
-        return SemanticRetrievalLayer(
-            passages=[chunk.get("text", "") for chunk in chunks],
-            citations=[
-                _make_fast_report_citation(
-                    chunk,
-                    f"sem-{i + 1}",
-                    "semantic_retrieval",
+        passages: list[str] = []
+        citations: list[FastReportCitation] = []
+        if readme_headings:
+            passages.append(f"README headings: {', '.join(readme_headings[:6])}")
+        if readme:
+            passages.append(readme[:400])
+            citations.append(
+                FastReportCitation(
+                    id="sem-1",
+                    file_path="README.md",
+                    start_line=1,
+                    end_line=max(1, min(len(readme.splitlines()), 20)),
+                    label="README",
+                    kind="semantic_retrieval",
                 )
-                for i, chunk in enumerate(chunks)
-            ],
+            )
+        elif top_level_entries:
+            passages.append(f"Top-level entries: {', '.join(top_level_entries[:8])}")
+        if indexed_files:
+            file_list = ", ".join(sorted(indexed_files)[:6])
+            passages.append(f"Indexed files: {file_list}")
+        return SemanticRetrievalLayer(
+            passages=passages,
+            citations=citations,
         )
 
     async def _curated(

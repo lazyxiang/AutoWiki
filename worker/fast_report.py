@@ -262,11 +262,11 @@ async def plan_fast_report_search(
     return FastReportQuestionIntent(
         language=planned_language or search_language,
         question_type=raw.get("question_type", "unknown"),
-        target=raw.get("target", ""),
-        answer_shape=raw.get("answer_shape", ""),
-        evidence_shape=raw.get("evidence_shape", ""),
-        search_terms=list(raw.get("search_terms", [])),
-        retrieval_focus=list(raw.get("retrieval_focus", [])),
+        target=str(raw.get("target", "") or "").strip(),
+        answer_shape=str(raw.get("answer_shape", "") or "").strip(),
+        evidence_shape=str(raw.get("evidence_shape", "") or "").strip(),
+        search_terms=_normalize_string_list(raw.get("search_terms", [])),
+        retrieval_focus=_normalize_string_list(raw.get("retrieval_focus", [])),
     )
 
 
@@ -394,6 +394,23 @@ def assemble_fast_report_markdown(
 def _normalize_heading(heading: str) -> str:
     normalized = " ".join(heading.lower().replace("_", " ").split())
     return HEADING_ALIASES.get(normalized, heading.strip())
+
+
+def _normalize_string_list(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        item = value.strip()
+        key = item.lower()
+        if not item or key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
 
 
 def _dedupe_citations(citations: list[FastReportCitation]) -> list[FastReportCitation]:
