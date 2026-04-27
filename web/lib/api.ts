@@ -1,7 +1,7 @@
 /**
  * API client for interacting with the AutoWiki backend.
  * Provides functions for submitting repositories, fetching wiki pages,
- * managing chat sessions, and retrieving repository lists.
+ * and retrieving repository lists.
  */
 
 // INTERNAL_API_URL is used for server-side SSR calls (Docker: http://api:3001)
@@ -136,33 +136,6 @@ export async function getWikiPage(repoId: string, slug: string) {
 }
 
 /**
- * Creates a new chat session for a repository.
- * 
- * @param repoId - The repository ID.
- * @returns The session ID.
- */
-export async function createChatSession(repoId: string): Promise<{ session_id: string }> {
-  const res = await fetch(`${API_URL}/api/repos/${repoId}/chat`, { method: "POST" });
-  if (!res.ok) throw new Error(`Failed to create chat session: ${res.status}`);
-  return res.json();
-}
-
-/**
- * Retrieves the message history for a chat session.
- * 
- * @param repoId - The repository ID.
- * @param sessionId - The chat session ID.
- * @returns A list of messages with roles and content.
- */
-export async function getChatHistory(repoId: string, sessionId: string): Promise<{
-  messages: Array<{ role: string; content: string }>;
-}> {
-  const res = await fetch(`${API_URL}/api/repos/${repoId}/chat/${sessionId}`);
-  if (!res.ok) throw new Error(`Failed to get chat history: ${res.status}`);
-  return res.json();
-}
-
-/**
  * Triggers a manual refresh/re-index of a repository.
  * 
  * @param repoId - The repository ID.
@@ -248,6 +221,75 @@ export interface ResearchPlanStep {
   rationale: string;
 }
 
+export interface FastReportCitation {
+  id: string;
+  file_path: string;
+  start_line: number;
+  end_line: number;
+  label: string;
+  kind: string;
+  reason?: string;
+  score?: number | null;
+}
+
+export interface FastReportEvidenceBlock {
+  citation_id: string;
+  snippet_start: number;
+  snippet_end: number;
+  full_start: number;
+  full_end: number;
+  default_context: number;
+  expanded_context: number;
+  is_collapsed: boolean;
+  code: string;
+  symbol_path?: string | null;
+}
+
+export interface FastReportWikiLink {
+  slug: string;
+  title: string;
+  reason?: string;
+}
+
+export interface FastReportDiagram {
+  id: string;
+  title: string;
+  type: string;
+  source: string;
+  caption?: string;
+  reason?: string;
+  citations: string[];
+  placement: string;
+}
+
+export interface FastReportSection {
+  id: string;
+  report_id: string;
+  query: string;
+  title: string;
+  summary: string | null;
+  markdown: string;
+  citations: FastReportCitation[];
+  evidence_blocks: FastReportEvidenceBlock[];
+  related_wiki_pages: FastReportWikiLink[];
+  related_diagrams: FastReportDiagram[];
+  created_at: string;
+  status: string;
+}
+
+export interface FastReport {
+  id: string;
+  repo_id: string;
+  job_id: string | null;
+  commit_sha: string;
+  status: string;
+  error: string | null;
+  active_section_id: string | null;
+  created_at: string;
+  expires_at: string;
+  sections: FastReportSection[];
+}
+
 /**
  * Fetches a completed (or in-progress) Deep Research report.
  */
@@ -263,6 +305,33 @@ export async function getResearchReport(
   error: string | null;
 }> {
   const res = await fetch(`${API_URL}/api/repos/${repoId}/research/${jobId}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function startFastReport(
+  repoId: string,
+  question: string,
+): Promise<{
+  job_id: string;
+  report_id: string;
+  section_id: string;
+  status: string;
+}> {
+  const res = await fetch(`${API_URL}/api/repos/${repoId}/fast-reports`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getFastReport(
+  repoId: string,
+  reportId: string,
+): Promise<FastReport> {
+  const res = await fetch(`${API_URL}/api/repos/${repoId}/fast-reports/${reportId}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

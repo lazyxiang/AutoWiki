@@ -75,26 +75,7 @@ def test_refresh_cmd_success(runner):
     assert "Refresh complete" in result.output
 
 
-def test_chat_cmd_prints_response(runner):
+def test_cli_does_not_register_chat_command(runner):
     cli, app = runner
-
-    def mock_run(coro):
-        coro.close()
-        return "It does foo things."
-
-    with (
-        patch("cli.commands.chat_cmd.httpx.get") as mock_get,
-        patch("cli.commands.chat_cmd.httpx.post") as mock_post,
-        patch("cli.commands.chat_cmd.asyncio.run", side_effect=mock_run),
-    ):
-        mock_get.return_value = MagicMock(
-            status_code=200, json=lambda: {"id": "r1", "status": "ready"}
-        )
-        mock_post.return_value = MagicMock(
-            status_code=201, json=lambda: {"session_id": "s1"}
-        )
-        result = cli.invoke(
-            app, ["chat", "github.com/psf/requests", "What does foo do?"]
-        )
-    assert result.exit_code == 0
-    assert "It does foo things." in result.output
+    result = cli.invoke(app, ["--help"])
+    assert "chat" not in result.output

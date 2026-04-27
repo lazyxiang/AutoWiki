@@ -6,7 +6,13 @@ configures logging, wires up Redis settings from the ``REDIS_URL`` environment
 variable, and hands control to ARQ's ``run_worker``.
 """
 
-from worker.jobs import run_deep_research, run_full_index, run_refresh_index
+from worker.jobs import (
+    _build_default_fast_report_retrievers,
+    run_deep_research,
+    run_fast_report,
+    run_full_index,
+    run_refresh_index,
+)
 
 
 async def startup(ctx):
@@ -21,7 +27,7 @@ async def startup(ctx):
         ctx (dict): Mutable ARQ context dictionary shared across all jobs
             running in this worker process.
     """
-    pass  # connection pool setup if needed
+    ctx["fast_report_retriever_factory"] = _build_default_fast_report_retrievers
 
 
 async def shutdown(ctx):
@@ -61,7 +67,7 @@ class WorkerSettings:
             low avoids multiplying LLM/embedding provider quota pressure.
     """
 
-    functions = [run_full_index, run_refresh_index, run_deep_research]
+    functions = [run_full_index, run_refresh_index, run_deep_research, run_fast_report]
     on_startup = startup
     on_shutdown = shutdown
     redis_settings = None  # set from REDIS_URL env at runtime

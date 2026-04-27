@@ -90,6 +90,145 @@ async def test_chat_models_created(tmp_path):
         await dispose_db(db_path)
 
 
+async def test_fast_report_persists_commit_sha_and_expiry(db):
+    import json
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import select
+
+    from shared.models import FastReport, FastReportSection
+
+    expires_at = datetime.now(UTC) + timedelta(days=7)
+
+    async with get_session(str(db)) as session:
+        session.add(
+            Repository(
+                id="repo-fast",
+                owner="owner",
+                name="repo",
+                platform="github",
+                status="ready",
+            )
+        )
+        session.add(
+            FastReport(
+                id="report-1",
+                repo_id="repo-fast",
+                commit_sha="deadbeef",
+                expires_at=expires_at,
+                status="done",
+            )
+        )
+        session.add(
+            FastReportSection(
+                id="section-1",
+                report_id="report-1",
+                query="How does indexing work?",
+                title="Indexing Flow",
+                summary="Short summary",
+                markdown="## Overview",
+                citations_json="[]",
+                evidence_blocks_json=json.dumps(
+                    [{"citation_id": "cite-1", "snippet_start": 10}]
+                ),
+                related_wiki_pages_json="[]",
+                related_diagrams_json="[]",
+                status="done",
+            )
+        )
+        await session.flush()
+        report = await session.get(FastReport, "report-1")
+        report.active_section_id = "section-1"
+        await session.commit()
+
+    async with get_session(str(db)) as session:
+        report = await session.get(FastReport, "report-1")
+        assert report is not None
+        assert report.commit_sha == "deadbeef"
+        assert report.expires_at == expires_at.replace(tzinfo=None)
+        assert report.active_section_id == "section-1"
+        result = await session.execute(
+            select(FastReportSection).where(FastReportSection.report_id == "report-1")
+        )
+        section = result.scalar_one()
+        assert section.query == "How does indexing work?"
+        assert section.report_id == "report-1"
+        assert json.loads(section.evidence_blocks_json)[0]["citation_id"] == "cite-1"
+
+
+async def test_fast_report_active_section_requires_existing_section(db):
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy.exc import IntegrityError
+
+    from shared.models import FastReport
+
+    expires_at = datetime.now(UTC) + timedelta(days=7)
+
+    async with get_session(str(db)) as session:
+        session.add(
+            Repository(
+                id="repo-fast-fk",
+                owner="owner",
+                name="repo",
+                platform="github",
+                status="ready",
+            )
+        )
+        session.add(
+            FastReport(
+                id="report-fk",
+                repo_id="repo-fast-fk",
+                commit_sha="cafebabe",
+                expires_at=expires_at,
+                status="done",
+                active_section_id="missing-section",
+            )
+        )
+        with pytest.raises(IntegrityError):
+            await session.commit()
+
+
+async def test_fast_report_active_section_fk_requires_existing_section(db):
+    # active_section_id references fast_report_sections.id; setting it to a
+    # non-existent section UUID must raise. Cross-report integrity is enforced
+    # by application code (worker always creates sections with the same report_id).
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy.exc import IntegrityError
+
+    from shared.models import FastReport
+
+    expires_at = datetime.now(UTC) + timedelta(days=7)
+
+    async with get_session(str(db)) as session:
+        session.add(
+            Repository(
+                id="repo-fast-same-report",
+                owner="owner",
+                name="repo",
+                platform="github",
+                status="ready",
+            )
+        )
+        session.add(
+            FastReport(
+                id="report-a",
+                repo_id="repo-fast-same-report",
+                commit_sha="aaa111",
+                expires_at=expires_at,
+                status="done",
+            )
+        )
+        await session.flush()
+
+        report_a = await session.get(FastReport, "report-a")
+        report_a.active_section_id = "nonexistent-section-uuid"
+
+        with pytest.raises(IntegrityError):
+            await session.commit()
+
+
 async def test_platform_token_crud(tmp_path):
     from datetime import UTC, datetime
 

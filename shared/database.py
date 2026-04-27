@@ -4,13 +4,27 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy import event, text
+from sqlalchemy.ext.asyncio import (
+    AsyncConnection,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from shared.models import Base
 
 _engines: dict[str, Any] = {}
 _session_factories: dict[str, async_sessionmaker] = {}
+
+
+async def _apply_legacy_migrations(conn: AsyncConnection) -> None:
+    # Keep init_db additive for existing SQLite files; new tables come from create_all.
+    result = await conn.execute(text("PRAGMA table_info(repositories)"))
+    columns = {row[1] for row in result.fetchall()}
+    if "is_private" not in columns:
+        await conn.execute(
+            text("ALTER TABLE repositories ADD COLUMN is_private BOOLEAN DEFAULT 0")
+        )
 
 
 async def init_db(database_path: str) -> None:
@@ -21,16 +35,15 @@ async def init_db(database_path: str) -> None:
             path.parent.chmod(0o700)
     url = f"sqlite+aiosqlite:///{database_path}"
     engine = create_async_engine(url, echo=False)
+    event.listen(
+        engine.sync_engine,
+        "connect",
+        lambda dbapi_conn, _: dbapi_conn.execute("PRAGMA foreign_keys=ON"),
+    )
     _engines[database_path] = engine
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # Add columns that may be missing in databases created before Phase 5.
-        result = await conn.execute(text("PRAGMA table_info(repositories)"))
-        columns = {row[1] for row in result.fetchall()}
-        if "is_private" not in columns:
-            await conn.execute(
-                text("ALTER TABLE repositories ADD COLUMN is_private BOOLEAN DEFAULT 0")
-            )
+        await _apply_legacy_migrations(conn)
     if database_path != ":memory:":
         path.chmod(0o600)
     _session_factories[database_path] = async_sessionmaker(

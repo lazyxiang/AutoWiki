@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    and_,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -30,6 +38,9 @@ class Repository(Base):
     jobs: Mapped[list[Job]] = relationship("Job", back_populates="repository")
     pages: Mapped[list[WikiPage]] = relationship(
         "WikiPage", back_populates="repository"
+    )
+    fast_reports: Mapped[list[FastReport]] = relationship(
+        "FastReport", back_populates="repository", cascade="all, delete-orphan"
     )
 
 
@@ -111,6 +122,79 @@ class ResearchReport(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     repository: Mapped[Repository] = relationship("Repository")
     job: Mapped[Job] = relationship("Job")
+
+
+class FastReport(Base):
+    __tablename__ = "fast_reports"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    repo_id: Mapped[str] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"), nullable=False
+    )
+    commit_sha: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    # Single-column FK so SET NULL targets only the nullable column.
+    # A composite FK (id, active_section_id) → (report_id, id) would attempt to
+    # NULL the primary key fast_reports.id, which fails on SQLite. Application
+    # code (worker.jobs) ensures active_section_id always points to a section
+    # belonging to this report.
+    active_section_id: Mapped[str | None] = mapped_column(
+        String,
+        ForeignKey("fast_report_sections.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(UTC)
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    repository: Mapped[Repository] = relationship(
+        "Repository", back_populates="fast_reports"
+    )
+    sections: Mapped[list[FastReportSection]] = relationship(
+        "FastReportSection",
+        back_populates="report",
+        foreign_keys="FastReportSection.report_id",
+        cascade="all, delete-orphan",
+    )
+    active_section: Mapped[FastReportSection | None] = relationship(
+        "FastReportSection",
+        primaryjoin=lambda: and_(
+            FastReport.id == FastReportSection.report_id,
+            FastReport.active_section_id == FastReportSection.id,
+        ),
+        foreign_keys=[active_section_id],
+        post_update=True,
+    )
+
+
+class FastReportSection(Base):
+    __tablename__ = "fast_report_sections"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    report_id: Mapped[str] = mapped_column(
+        ForeignKey("fast_reports.id", ondelete="CASCADE"), nullable=False
+    )
+    query: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(String, nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    markdown: Mapped[str] = mapped_column(Text, nullable=False)
+    citations_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    evidence_blocks_json: Mapped[str] = mapped_column(
+        Text, nullable=False, default="[]"
+    )
+    related_wiki_pages_json: Mapped[str] = mapped_column(
+        Text, nullable=False, default="[]"
+    )
+    related_diagrams_json: Mapped[str] = mapped_column(
+        Text, nullable=False, default="[]"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(UTC)
+    )
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    report: Mapped[FastReport] = relationship(
+        "FastReport",
+        back_populates="sections",
+        foreign_keys=[report_id],
+    )
 
 
 class PlatformToken(Base):
