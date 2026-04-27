@@ -864,7 +864,10 @@ async def test_get_fast_report_includes_analysis_trace(fast_report_env):
 
 
 async def test_ws_fast_report_streams_analysis_update(fast_report_env):
-    """Sections with a non-empty trace emit analysis_update before section_complete."""
+    """Running sections with trace emit analysis_update before section_complete."""
+    import asyncio
+    import threading
+
     from starlette.testclient import TestClient
 
     from api.main import app
@@ -873,14 +876,27 @@ async def test_ws_fast_report_streams_analysis_update(fast_report_env):
 
     db_path = fast_report_env
     await init_db(db_path)
+
+    trace_data = {
+        "phase": "retrieving_code_evidence",
+        "files": [
+            {
+                "path": "worker/jobs.py",
+                "role": "entrypoint",
+                "reason": "matched symbol",
+                "status": "selected",
+            }
+        ],
+    }
+
     async with get_session(db_path) as s:
         s.add(Repository(id="r1", owner="o", name="n", status="ready"))
-        s.add(Job(id="fr1", repo_id="r1", type="fast_report", status="done"))
+        s.add(Job(id="fr1", repo_id="r1", type="fast_report", status="running"))
         report = FastReport(
             id="fr1",
             repo_id="r1",
             commit_sha="deadbeef",
-            status="done",
+            status="running",
             expires_at=datetime.now(UTC) + timedelta(days=7),
         )
         s.add(report)
@@ -890,36 +906,64 @@ async def test_ws_fast_report_streams_analysis_update(fast_report_env):
                 report_id="fr1",
                 query="How does indexing work?",
                 title="Indexing Flow",
-                summary="The job pipeline drives indexing.",
-                markdown="# Indexing Flow",
+                summary=None,
+                markdown="",
                 citations_json="[]",
                 evidence_blocks_json="[]",
                 related_wiki_pages_json="[]",
                 related_diagrams_json="[]",
-                analysis_trace_json=json.dumps(
-                    {
-                        "phase": "done",
-                        "files": [
-                            {
-                                "path": "worker/jobs.py",
-                                "role": "code_evidence",
-                                "reason": "Main job runner",
-                                "status": "retrieved",
-                            }
-                        ],
-                    }
-                ),
-                status="done",
+                analysis_trace_json=json.dumps(trace_data),
+                status="running",
             )
         )
-        await s.flush()
-        report.active_section_id = "sec1"
         await s.commit()
 
+    async def _transition_to_done():
+        """Update section and report to done after a short delay."""
+        await asyncio.sleep(0.4)
+        async with get_session(db_path) as s:
+            section = await s.get(FastReportSection, "sec1")
+            report = await s.get(FastReport, "fr1")
+            job = await s.get(Job, "fr1")
+            if section is not None:
+                section.status = "done"
+                section.title = "Indexing Flow"
+                section.summary = "The job pipeline drives indexing."
+                section.markdown = "# Indexing Flow"
+            if report is not None:
+                report.status = "done"
+                report.active_section_id = "sec1"
+            if job is not None:
+                job.status = "done"
+            await s.commit()
+
+    def _run_transition():
+        asyncio.run(_transition_to_done())
+
+    messages: list[dict] = []
     with TestClient(app) as client:
         with client.websocket_connect("/ws/repos/r1/fast-reports/fr1") as ws:
-            messages = [ws.receive_json(), ws.receive_json()]
+            # Read the analysis_update emitted on the first poll (section is running)
+            first_msg = ws.receive_json()
+            messages.append(first_msg)
+
+            # Now trigger the transition to done in a background thread
+            t = threading.Thread(target=_run_transition, daemon=True)
+            t.start()
+
+            # Collect remaining messages until report_complete arrives
+            while True:
+                msg = ws.receive_json()
+                messages.append(msg)
+                if msg["type"] in ("report_complete", "error"):
+                    break
+            t.join(timeout=5)
 
     types = [m["type"] for m in messages]
+    analysis_msgs = [m for m in messages if m["type"] == "analysis_update"]
+    assert analysis_msgs, "Expected at least one analysis_update message"
+    assert analysis_msgs[0]["section_id"] == "sec1"
+    trace = analysis_msgs[0]["analysis_trace"]
+    assert trace["files"][0]["path"] == "worker/jobs.py"
     assert "section_complete" in types
     assert "report_complete" in types
