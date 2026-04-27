@@ -72,7 +72,11 @@ export function applySectionEvent(
   state: FastReportWorkspaceState,
   section: FastReportSection,
 ): FastReportWorkspaceState {
-  if (!state.report) {
+  // Buffer the event when state.report is unset OR belongs to a different
+  // report. Without the report_id guard, navigating from /fast/A → /fast/B
+  // would merge B's streaming sections into A's stale state.report before
+  // getFastReport(B) resolves.
+  if (!state.report || state.report.id !== section.report_id) {
     return {
       ...state,
       streamState: "running",
@@ -95,7 +99,7 @@ export function applyReportCompleteEvent(
   state: FastReportWorkspaceState,
   event: FastReportCompleteEvent,
 ): FastReportWorkspaceState {
-  if (!state.report) {
+  if (!state.report || state.report.id !== event.report_id) {
     return {
       ...state,
       streamState: event.status === "failed" ? "error" : "ready",
@@ -209,9 +213,22 @@ export function FastReportWorkspace({
   const [evidenceSectionId, setEvidenceSectionId] = useState<string | null>(null);
   const [focusedCitationId, setFocusedCitationId] = useState<string | null>(null);
   const [streamNonce, setStreamNonce] = useState(0);
-  const requestedInitialReport = useRef(false);
-  const handledQuestionKeys = useRef(new Set<string>());
+  const consumedInitialQuestionRef = useRef<string | null>(null);
   const activeReportId = reportId ?? createdReportId;
+  const previousReportId = useRef<string | null>(activeReportId);
+
+  // Reset workspace state when navigating between reports. Without this,
+  // bufferedSections from a failed load (e.g. /fast/A → /fast/B where
+  // getFastReport(B) errors) would later be merged into a different report.
+  useEffect(() => {
+    if (previousReportId.current === activeReportId) {
+      return;
+    }
+    previousReportId.current = activeReportId;
+    setState(createWorkspaceState());
+    setEvidenceSectionId(null);
+    setFocusedCitationId(null);
+  }, [activeReportId]);
 
   useEffect(() => {
     if (!activeReportId) {
@@ -305,27 +322,24 @@ export function FastReportWorkspace({
 
   useEffect(() => {
     const initialQuestion = searchParams.get("q");
+    // Reset the dedup ref once the URL no longer carries ?q so that a future
+    // re-navigation with ?q= can fire again.
     if (!initialQuestion) {
+      consumedInitialQuestionRef.current = null;
       return;
     }
-    const requestKey = `${activeReportId ?? "new"}:${initialQuestion}`;
-    if (handledQuestionKeys.current.has(requestKey)) {
+    // Track consumed question by content alone, not by activeReportId. The
+    // activeReportId-keyed approach fires a second POST during the null → realId
+    // transition that happens when setCreatedReportId + router.replace are not
+    // batched into a single render with the useSearchParams update.
+    if (consumedInitialQuestionRef.current === initialQuestion) {
       return;
     }
-    if (!activeReportId && requestedInitialReport.current) {
-      return;
-    }
-
-    handledQuestionKeys.current.add(requestKey);
-    if (!activeReportId) {
-      requestedInitialReport.current = true;
-    }
+    consumedInitialQuestionRef.current = initialQuestion;
     setTimeout(() => {
-      void beginReport(initialQuestion).finally(() => {
-        handledQuestionKeys.current.delete(requestKey);
-      });
+      void beginReport(initialQuestion);
     }, 0);
-  }, [activeReportId, beginReport, searchParams]);
+  }, [beginReport, searchParams]);
 
   const handleSectionComplete = useCallback((section: FastReportSection) => {
     setState((current) => applySectionEvent(current, section));

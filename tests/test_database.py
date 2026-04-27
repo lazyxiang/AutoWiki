@@ -189,12 +189,15 @@ async def test_fast_report_active_section_requires_existing_section(db):
             await session.commit()
 
 
-async def test_fast_report_active_section_must_belong_to_same_report(db):
+async def test_fast_report_active_section_fk_requires_existing_section(db):
+    # active_section_id references fast_report_sections.id; setting it to a
+    # non-existent section UUID must raise. Cross-report integrity is enforced
+    # by application code (worker always creates sections with the same report_id).
     from datetime import UTC, datetime, timedelta
 
     from sqlalchemy.exc import IntegrityError
 
-    from shared.models import FastReport, FastReportSection
+    from shared.models import FastReport
 
     expires_at = datetime.now(UTC) + timedelta(days=7)
 
@@ -208,41 +211,19 @@ async def test_fast_report_active_section_must_belong_to_same_report(db):
                 status="ready",
             )
         )
-        session.add_all(
-            [
-                FastReport(
-                    id="report-a",
-                    repo_id="repo-fast-same-report",
-                    commit_sha="aaa111",
-                    expires_at=expires_at,
-                    status="done",
-                ),
-                FastReport(
-                    id="report-b",
-                    repo_id="repo-fast-same-report",
-                    commit_sha="bbb222",
-                    expires_at=expires_at,
-                    status="done",
-                ),
-                FastReportSection(
-                    id="section-b1",
-                    report_id="report-b",
-                    query="What does B do?",
-                    title="Report B",
-                    summary="Summary",
-                    markdown="## B",
-                    citations_json="[]",
-                    evidence_blocks_json="[]",
-                    related_wiki_pages_json="[]",
-                    related_diagrams_json="[]",
-                    status="done",
-                ),
-            ]
+        session.add(
+            FastReport(
+                id="report-a",
+                repo_id="repo-fast-same-report",
+                commit_sha="aaa111",
+                expires_at=expires_at,
+                status="done",
+            )
         )
         await session.flush()
 
         report_a = await session.get(FastReport, "report-a")
-        report_a.active_section_id = "section-b1"
+        report_a.active_section_id = "nonexistent-section-uuid"
 
         with pytest.raises(IntegrityError):
             await session.commit()

@@ -348,6 +348,58 @@ describe("FastReportWorkspace", () => {
       screen.getByRole("heading", { name: "Follow-up section" }),
     ).toBeTruthy();
   });
+
+  it("fires exactly one POST during the null→realId transition when ?q= drives report creation", async () => {
+    // Verifies that when beginReport() calls setCreatedReportId() + router.replace()
+    // before useSearchParams() has cleared ?q=, the dedup ref prevents a second POST
+    // from being issued on the intermediate re-render where activeReportId is the new
+    // id but searchParams still contains ?q=.
+    searchParamsState.value = new URLSearchParams("q=Create question");
+    getFastReportMock.mockResolvedValue(
+      makeReport({ id: "new-report", status: "queued", sections: [] }),
+    );
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        report_id: "new-report",
+        job_id: "new-report",
+        section_id: "sec-1",
+        status: "queued",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      React.createElement(FastReportWorkspace, {
+        owner: "openai",
+        repo: "autowiki",
+        repoId: "repo-1",
+        repoLabel: "openai/autowiki",
+        // No reportId — simulates /fast/new navigation
+      }),
+    );
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    // Simulate the intermediate re-render where searchParams still has ?q= but
+    // activeReportId has already transitioned from null to the newly created id.
+    // The dedup ref must suppress any additional POST.
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:3001/api/repos/repo-1/fast-reports",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.stringContaining("Create question"),
+      }),
+    );
+  });
 });
 
 describe("sortSectionsForDisplay", () => {

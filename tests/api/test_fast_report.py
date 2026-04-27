@@ -684,3 +684,110 @@ async def test_ws_fast_report_404_closes_with_4004(fast_report_env):
                 ws.receive_json()
 
     assert exc_info.value.code == 4004
+
+
+async def test_deleting_active_section_nulls_active_section_id(fast_report_env):
+    """Deleting the active section must null active_section_id, not raise."""
+    db_path = fast_report_env
+    await _prep_repo(db_path)
+
+    from shared.database import dispose_db, get_session
+    from shared.models import FastReport, FastReportSection
+
+    try:
+        async with get_session(db_path) as s:
+            s.add(
+                FastReport(
+                    id="fr1",
+                    repo_id="r1",
+                    commit_sha="deadbeef",
+                    status="done",
+                    expires_at=datetime.now(UTC) + timedelta(days=7),
+                )
+            )
+            s.add(
+                FastReportSection(
+                    id="sec1",
+                    report_id="fr1",
+                    query="q",
+                    title="t",
+                    summary=None,
+                    markdown="m",
+                    citations_json="[]",
+                    evidence_blocks_json="[]",
+                    related_wiki_pages_json="[]",
+                    related_diagrams_json="[]",
+                    status="done",
+                )
+            )
+            await s.flush()
+            report = await s.get(FastReport, "fr1")
+            assert report is not None
+            report.active_section_id = "sec1"
+            await s.commit()
+
+        async with get_session(db_path) as s:
+            section = await s.get(FastReportSection, "sec1")
+            assert section is not None
+            await s.delete(section)
+            await s.commit()
+
+        async with get_session(db_path) as s:
+            report = await s.get(FastReport, "fr1")
+            assert report is not None
+            assert report.active_section_id is None
+    finally:
+        await dispose_db(db_path)
+
+
+async def test_deleting_repository_cascades_through_active_section(fast_report_env):
+    """Repository delete must cascade to fast_reports and sections without FK errors."""
+    db_path = fast_report_env
+    await _prep_repo(db_path)
+
+    from shared.database import dispose_db, get_session
+    from shared.models import FastReport, FastReportSection, Repository
+
+    try:
+        async with get_session(db_path) as s:
+            s.add(
+                FastReport(
+                    id="fr1",
+                    repo_id="r1",
+                    commit_sha="deadbeef",
+                    status="done",
+                    expires_at=datetime.now(UTC) + timedelta(days=7),
+                )
+            )
+            s.add(
+                FastReportSection(
+                    id="sec1",
+                    report_id="fr1",
+                    query="q",
+                    title="t",
+                    summary=None,
+                    markdown="m",
+                    citations_json="[]",
+                    evidence_blocks_json="[]",
+                    related_wiki_pages_json="[]",
+                    related_diagrams_json="[]",
+                    status="done",
+                )
+            )
+            await s.flush()
+            report = await s.get(FastReport, "fr1")
+            assert report is not None
+            report.active_section_id = "sec1"
+            await s.commit()
+
+        async with get_session(db_path) as s:
+            repo = await s.get(Repository, "r1")
+            assert repo is not None
+            await s.delete(repo)
+            await s.commit()
+
+        async with get_session(db_path) as s:
+            assert await s.get(FastReport, "fr1") is None
+            assert await s.get(FastReportSection, "sec1") is None
+    finally:
+        await dispose_db(db_path)

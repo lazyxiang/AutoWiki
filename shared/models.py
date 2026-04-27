@@ -6,11 +6,9 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
-    ForeignKeyConstraint,
     Integer,
     String,
     Text,
-    UniqueConstraint,
     and_,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -128,20 +126,22 @@ class ResearchReport(Base):
 
 class FastReport(Base):
     __tablename__ = "fast_reports"
-    __table_args__ = (
-        ForeignKeyConstraint(
-            ["id", "active_section_id"],
-            ["fast_report_sections.report_id", "fast_report_sections.id"],
-            ondelete="SET NULL",
-        ),
-    )
     id: Mapped[str] = mapped_column(String, primary_key=True)
     repo_id: Mapped[str] = mapped_column(
         ForeignKey("repositories.id", ondelete="CASCADE"), nullable=False
     )
     commit_sha: Mapped[str] = mapped_column(String, nullable=False)
     status: Mapped[str] = mapped_column(String, nullable=False)
-    active_section_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Single-column FK so SET NULL targets only the nullable column.
+    # A composite FK (id, active_section_id) → (report_id, id) would attempt to
+    # NULL the primary key fast_reports.id, which fails on SQLite. Application
+    # code (worker.jobs) ensures active_section_id always points to a section
+    # belonging to this report.
+    active_section_id: Mapped[str | None] = mapped_column(
+        String,
+        ForeignKey("fast_report_sections.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(UTC)
     )
@@ -168,7 +168,6 @@ class FastReport(Base):
 
 class FastReportSection(Base):
     __tablename__ = "fast_report_sections"
-    __table_args__ = (UniqueConstraint("report_id", "id"),)
     id: Mapped[str] = mapped_column(String, primary_key=True)
     report_id: Mapped[str] = mapped_column(
         ForeignKey("fast_reports.id", ondelete="CASCADE"), nullable=False
