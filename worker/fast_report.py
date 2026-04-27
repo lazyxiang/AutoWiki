@@ -386,9 +386,7 @@ def assemble_fast_report_markdown(
                     f"- {link_labels['diagram']}: "
                     f"{diagram.title} (`{diagram.type}`){reason}"
                 )
-                lines.append(
-                    diagram_line
-                )
+                lines.append(diagram_line)
 
     return "\n".join(lines).strip()
 
