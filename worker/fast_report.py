@@ -382,8 +382,12 @@ def assemble_fast_report_markdown(
                 )
             for diagram in related_diagrams:
                 reason = f" - {diagram.reason}" if diagram.reason else ""
+                diagram_line = (
+                    f"- {link_labels['diagram']}: "
+                    f"{diagram.title} (`{diagram.type}`){reason}"
+                )
                 lines.append(
-                    f"- {link_labels['diagram']}: {diagram.title} (`{diagram.type}`){reason}"
+                    diagram_line
                 )
 
     return "\n".join(lines).strip()
