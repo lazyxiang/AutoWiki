@@ -2032,6 +2032,15 @@ async def run_fast_report(
                 for c in result.citations
             ],
         }
+        # Write the analysis trace first while keeping status="running" so that
+        # the WebSocket handler can emit analysis_update events before section_complete.
+        await _update_fast_report_section(
+            db_path,
+            section_id,
+            analysis_trace_json=_json.dumps(analysis_trace),
+            status="running",
+        )
+        # Now write the content fields and flip status to done.
         await _update_fast_report_section(
             db_path,
             section_id,
@@ -2048,7 +2057,6 @@ async def run_fast_report(
             related_diagrams_json=_json.dumps(
                 [asdict_s(item) for item in result.related_diagrams]
             ),
-            analysis_trace_json=_json.dumps(analysis_trace),
             status="done",
         )
         await _update_fast_report(

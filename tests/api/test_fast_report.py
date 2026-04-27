@@ -937,8 +937,13 @@ async def test_ws_fast_report_streams_analysis_update(fast_report_env):
                 job.status = "done"
             await s.commit()
 
+    _thread_exc: list[BaseException] = []
+
     def _run_transition():
-        asyncio.run(_transition_to_done())
+        try:
+            asyncio.run(_transition_to_done())
+        except Exception as e:
+            _thread_exc.append(e)
 
     messages: list[dict] = []
     with TestClient(app) as client:
@@ -958,6 +963,9 @@ async def test_ws_fast_report_streams_analysis_update(fast_report_env):
                 if msg["type"] in ("report_complete", "error"):
                     break
             t.join(timeout=5)
+            assert not t.is_alive(), "Transition thread did not complete in time"
+            if _thread_exc:
+                raise _thread_exc[0]
 
     types = [m["type"] for m in messages]
     analysis_msgs = [m for m in messages if m["type"] == "analysis_update"]
