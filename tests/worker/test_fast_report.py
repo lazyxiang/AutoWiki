@@ -35,12 +35,66 @@ def test_arbitrate_report_claims_drops_unsupported_claims():
         ),
     ]
 
-    supported = arbitrate_report_claims(claims)
+    supported = arbitrate_report_claims(
+        claims,
+        available_citation_ids={"code-1", "struct-1"},
+    )
 
     assert [claim.text for claim in supported] == [
         "Indexing starts in worker/jobs.py.",
         "The repo is split across api, worker, and web.",
     ]
+
+
+def test_arbitrate_report_claims_rejects_unknown_citations():
+    from worker.fast_report import FastReportClaim, arbitrate_report_claims
+
+    claims = [
+        FastReportClaim(
+            text="Unsupported summary.",
+            citation_ids=["missing-1"],
+            supporting_layers=["code_evidence"],
+        )
+    ]
+    supported = arbitrate_report_claims(
+        claims,
+        available_citation_ids={"code-1"},
+    )
+    assert supported == []
+
+
+def test_arbitrate_report_claims_rejects_claims_with_no_citations():
+    from worker.fast_report import FastReportClaim, arbitrate_report_claims
+
+    claims = [
+        FastReportClaim(
+            text="No citations.",
+            citation_ids=[],
+            supporting_layers=["code_evidence"],
+        )
+    ]
+    supported = arbitrate_report_claims(
+        claims,
+        available_citation_ids={"code-1"},
+    )
+    assert supported == []
+
+
+def test_arbitrate_report_claims_keeps_valid_claims():
+    from worker.fast_report import FastReportClaim, arbitrate_report_claims
+
+    claims = [
+        FastReportClaim(
+            text="Valid claim.",
+            citation_ids=["code-1"],
+            supporting_layers=["code_evidence"],
+        )
+    ]
+    supported = arbitrate_report_claims(
+        claims,
+        available_citation_ids={"code-1"},
+    )
+    assert len(supported) == 1
 
 
 def test_assemble_fast_report_markdown_uses_canonical_heading_order():

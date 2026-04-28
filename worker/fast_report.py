@@ -327,12 +327,21 @@ async def retrieve_fast_report_layers(
     )
 
 
-def arbitrate_report_claims(claims: list[FastReportClaim]) -> list[FastReportClaim]:
-    """Drop claims that are not backed by structure or code evidence."""
+def arbitrate_report_claims(
+    claims: list[FastReportClaim],
+    *,
+    available_citation_ids: set[str],
+) -> list[FastReportClaim]:
+    """Drop claims not backed by structure/code evidence, or with missing citations."""
     supported: list[FastReportClaim] = []
     for claim in claims:
-        if set(claim.supporting_layers) & SUPPORTED_CLAIM_LAYERS:
-            supported.append(claim)
+        if not (set(claim.supporting_layers) & SUPPORTED_CLAIM_LAYERS):
+            continue
+        if not claim.citation_ids:
+            continue
+        if not all(cid in available_citation_ids for cid in claim.citation_ids):
+            continue
+        supported.append(claim)
     return supported
 
 
@@ -585,6 +594,8 @@ def _build_generation_prompt(
 
 def _parse_draft_sections(
     raw_sections: list[dict[str, Any]],
+    *,
+    available_citation_ids: set[str],
 ) -> dict[str, list[FastReportClaim]]:
     section_claims: dict[str, list[FastReportClaim]] = {}
     for raw_section in raw_sections:
@@ -600,7 +611,11 @@ def _parse_draft_sections(
             for claim in raw_section.get("claims", [])
             if claim.get("text")
         ]
-        section_claims.setdefault(heading, []).extend(arbitrate_report_claims(claims))
+        section_claims.setdefault(heading, []).extend(
+            arbitrate_report_claims(
+                claims, available_citation_ids=available_citation_ids
+            )
+        )
     return section_claims
 
 
@@ -626,7 +641,18 @@ async def generate_fast_report_section(
     )
     prompt = _build_generation_prompt(question, repo_name, intent, layers)
     raw = await llm.generate_structured(prompt, _SECTION_SCHEMA)
-    section_claims = _parse_draft_sections(raw.get("sections", []))
+    available_citation_ids = {
+        c.id
+        for c in (
+            layers.repository_structure.citations
+            + layers.code_evidence.citations
+            + layers.semantic_retrieval.citations
+        )
+    }
+    section_claims = _parse_draft_sections(
+        raw.get("sections", []),
+        available_citation_ids=available_citation_ids,
+    )
     notes = list(raw.get("notes", []))
     evidence_citations = _dedupe_citations(
         layers.repository_structure.citations + layers.code_evidence.citations
