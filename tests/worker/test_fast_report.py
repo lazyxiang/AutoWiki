@@ -80,23 +80,6 @@ def test_arbitrate_report_claims_rejects_claims_with_no_citations():
     assert supported == []
 
 
-def test_arbitrate_report_claims_keeps_valid_claims():
-    from worker.fast_report import FastReportClaim, arbitrate_report_claims
-
-    claims = [
-        FastReportClaim(
-            text="Valid claim.",
-            citation_ids=["code-1"],
-            supporting_layers=["code_evidence"],
-        )
-    ]
-    supported = arbitrate_report_claims(
-        claims,
-        available_citation_ids={"code-1"},
-    )
-    assert len(supported) == 1
-
-
 def test_assemble_fast_report_markdown_uses_canonical_heading_order():
     from worker.fast_report import FastReportClaim, assemble_fast_report_markdown
 

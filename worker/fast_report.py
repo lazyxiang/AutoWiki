@@ -644,9 +644,7 @@ async def generate_fast_report_section(
     available_citation_ids = {
         c.id
         for c in (
-            layers.repository_structure.citations
-            + layers.code_evidence.citations
-            + layers.semantic_retrieval.citations
+            layers.repository_structure.citations + layers.code_evidence.citations
         )
     }
     section_claims = _parse_draft_sections(
