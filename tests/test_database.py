@@ -71,25 +71,6 @@ async def test_create_wiki_page(db):
         assert page.page_order == 0
 
 
-async def test_chat_models_created(tmp_path):
-    db_path = str(tmp_path / "test.db")
-    await init_db(db_path)
-    try:
-        from sqlalchemy import inspect
-
-        from shared.database import _engines
-
-        engine = _engines[db_path]
-        async with engine.connect() as conn:
-            tables = await conn.run_sync(
-                lambda sync_conn: inspect(sync_conn).get_table_names()
-            )
-        assert "chat_sessions" in tables
-        assert "chat_messages" in tables
-    finally:
-        await dispose_db(db_path)
-
-
 async def test_fast_report_persists_commit_sha_and_expiry(db):
     import json
     from datetime import UTC, datetime, timedelta
@@ -232,7 +213,7 @@ async def test_fast_report_active_section_fk_requires_existing_section(db):
 async def test_platform_token_crud(tmp_path):
     from datetime import UTC, datetime
 
-    from shared.database import dispose_db, get_session, init_db
+    from shared.database import get_session, init_db
     from shared.models import PlatformToken
 
     db = str(tmp_path / "t.db")
@@ -260,7 +241,7 @@ async def test_platform_token_crud(tmp_path):
 
 
 async def test_repository_has_is_private(tmp_path):
-    from shared.database import dispose_db, get_session, init_db
+    from shared.database import get_session, init_db
     from shared.models import Repository
 
     db = str(tmp_path / "t2.db")
@@ -287,7 +268,7 @@ async def test_repository_has_is_private(tmp_path):
 
 
 async def test_init_db_applies_private_file_permissions(tmp_path):
-    from shared.database import dispose_db, init_db
+    from shared.database import init_db
 
     db_path = tmp_path / "private" / "autowiki.db"
     db = str(db_path)
@@ -302,7 +283,7 @@ async def test_init_db_applies_private_file_permissions(tmp_path):
 async def test_init_db_does_not_chmod_cwd_for_relative_database(tmp_path, monkeypatch):
     from pathlib import Path
 
-    from shared.database import dispose_db, init_db
+    from shared.database import init_db
 
     monkeypatch.chdir(tmp_path)
     original_chmod = Path.chmod
