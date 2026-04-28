@@ -6,6 +6,7 @@ const PHASE_LABELS: Record<string, string> = {
   expanding_call_chain: "Expanding call chain",
   ranking_evidence: "Ranking evidence",
   synthesizing: "Synthesizing answer",
+  done: "Synthesizing answer",
 };
 
 export function AnalysisTracePanel({ trace }: { trace: FastReportAnalysisTrace }) {
@@ -22,8 +23,8 @@ export function AnalysisTracePanel({ trace }: { trace: FastReportAnalysisTrace }
       ) : null}
       {files.length > 0 ? (
         <ul className="space-y-1">
-          {files.map((file) => (
-            <li key={file.path} className="flex items-start gap-2 text-sm">
+          {files.map((file, idx) => (
+            <li key={`${file.path}-${idx}`} className="flex items-start gap-2 text-sm">
               <span className="mt-0.5 shrink-0 font-mono text-xs text-slate-400">
                 {file.role}
               </span>

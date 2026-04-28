@@ -956,12 +956,14 @@ async def test_ws_fast_report_streams_analysis_update(fast_report_env):
             t = threading.Thread(target=_run_transition, daemon=True)
             t.start()
 
-            # Collect remaining messages until report_complete arrives
-            while True:
+            # Collect remaining messages until report_complete arrives (bounded)
+            for _ in range(50):
                 msg = ws.receive_json()
                 messages.append(msg)
                 if msg["type"] in ("report_complete", "error"):
                     break
+            else:
+                raise AssertionError("Never received report_complete or error")
             t.join(timeout=5)
             assert not t.is_alive(), "Transition thread did not complete in time"
             if _thread_exc:

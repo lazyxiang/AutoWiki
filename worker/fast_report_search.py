@@ -184,12 +184,12 @@ def _normalize_search_plan(
         target=str(getter("target", "") or ""),
         answer_shape=str(getter("answer_shape", "") or ""),
         evidence_shape=str(getter("evidence_shape", "") or ""),
-        search_terms=_normalize_string_list(getter("search_terms", []) or []),
-        retrieval_focus=_normalize_string_list(getter("retrieval_focus", []) or []),
+        search_terms=normalize_string_list(getter("search_terms", []) or []),
+        retrieval_focus=normalize_string_list(getter("retrieval_focus", []) or []),
     )
 
 
-def _normalize_string_list(values: Any) -> list[str]:
+def normalize_string_list(values: Any) -> list[str]:
     if not isinstance(values, list):
         return []
     normalized: list[str] = []

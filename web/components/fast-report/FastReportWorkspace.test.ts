@@ -405,7 +405,7 @@ describe("FastReportWorkspace", () => {
   });
 
   it("applyAnalysisEvent buffers the analysis trace by section_id", () => {
-    const state = createWorkspaceState();
+    const state = { ...createWorkspaceState(), streamState: "running" as const };
     const next = applyAnalysisEvent(state, {
       section_id: "sec-1",
       analysis_trace: {

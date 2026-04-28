@@ -220,7 +220,7 @@ async def ws_fast_report(websocket: WebSocket, repo_id: str, report_id: str):
     await websocket.accept()
 
     sent_sections: set[str] = set()
-    sent_analysis_updates: set[str] = set()
+    sent_analysis_updates: dict[str, str] = {}
     sent_report_complete = False
     try:
         while True:
@@ -241,12 +241,10 @@ async def ws_fast_report(websocket: WebSocket, repo_id: str, report_id: str):
                 sections = result.scalars().all()
 
             for section in sections:
-                if (
-                    section.status == "running"
-                    and section.id not in sent_analysis_updates
-                ):
-                    trace = _json.loads(section.analysis_trace_json or "{}")
-                    if trace:
+                if section.status == "running":
+                    raw_trace = section.analysis_trace_json or "{}"
+                    trace = _json.loads(raw_trace)
+                    if trace and sent_analysis_updates.get(section.id) != raw_trace:
                         await websocket.send_json(
                             {
                                 "type": "analysis_update",
@@ -254,7 +252,7 @@ async def ws_fast_report(websocket: WebSocket, repo_id: str, report_id: str):
                                 "analysis_trace": trace,
                             }
                         )
-                        sent_analysis_updates.add(section.id)
+                        sent_analysis_updates[section.id] = raw_trace
                 elif section.status == "done" and section.id not in sent_sections:
                     await websocket.send_json(
                         {

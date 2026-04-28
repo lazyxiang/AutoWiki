@@ -1990,7 +1990,7 @@ async def run_fast_report(
                 {
                     "path": c.file_path,
                     "role": c.kind,
-                    "reason": c.reason,
+                    "reason": c.reason or "",
                     "status": "retrieved",
                 }
                 for c in result.citations
@@ -2004,6 +2004,9 @@ async def run_fast_report(
             analysis_trace_json=_json.dumps(analysis_trace),
             status="running",
         )
+        # Yield to the event loop so the WS poller can pick up the analysis_update
+        # before we flip status to done.
+        await asyncio.sleep(0.5)
         # Now write the content fields and flip status to done.
         await _update_fast_report_section(
             db_path,

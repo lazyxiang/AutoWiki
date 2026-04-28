@@ -108,7 +108,7 @@ export function EvidenceRail({
           <FileSearch className="h-4 w-4" />
           Evidence rail
         </div>
-        {analysisTrace?.files?.length ? (
+        {analysisTrace && (analysisTrace.phase || (analysisTrace.files?.length ?? 0) > 0) ? (
           <AnalysisTracePanel trace={analysisTrace} />
         ) : (
           <p className="text-sm leading-6 text-slate-600">

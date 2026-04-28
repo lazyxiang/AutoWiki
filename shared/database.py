@@ -26,6 +26,16 @@ async def _apply_legacy_migrations(conn: AsyncConnection) -> None:
             text("ALTER TABLE repositories ADD COLUMN is_private BOOLEAN DEFAULT 0")
         )
 
+    result = await conn.execute(text("PRAGMA table_info(fast_report_sections)"))
+    section_columns = {row[1] for row in result.fetchall()}
+    if section_columns and "analysis_trace_json" not in section_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE fast_report_sections"
+                " ADD COLUMN analysis_trace_json TEXT NOT NULL DEFAULT '{}'"
+            )
+        )
+
 
 async def init_db(database_path: str) -> None:
     path = Path(database_path)

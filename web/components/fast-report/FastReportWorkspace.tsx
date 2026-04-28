@@ -166,7 +166,11 @@ export function applyLoadedReport(
     isStarting: false,
     bufferedSections: [],
     bufferedCompletion: null,
-    bufferedAnalysis: {},
+    bufferedAnalysis: Object.fromEntries(
+      Object.entries(state.bufferedAnalysis).filter(
+        ([id]) => !mergedSections.some((s) => s.id === id && s.status === "done"),
+      ),
+    ),
   };
 }
 

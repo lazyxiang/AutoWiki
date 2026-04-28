@@ -24,9 +24,9 @@ from shared.fast_report_types import (
 )
 from worker.deep_research import format_retrieved_chunks_for_prompt
 from worker.fast_report_search import (
-    _normalize_string_list,
     detect_question_language,
     normalize_fast_report_language,
+    normalize_string_list,
 )
 from worker.llm.base import LLMProvider
 from worker.pipeline.language import get_fast_report_language_instruction
@@ -255,8 +255,8 @@ async def plan_fast_report_search(
         target=str(raw.get("target", "") or "").strip(),
         answer_shape=str(raw.get("answer_shape", "") or "").strip(),
         evidence_shape=str(raw.get("evidence_shape", "") or "").strip(),
-        search_terms=_normalize_string_list(raw.get("search_terms", [])),
-        retrieval_focus=_normalize_string_list(raw.get("retrieval_focus", [])),
+        search_terms=normalize_string_list(raw.get("search_terms", [])),
+        retrieval_focus=normalize_string_list(raw.get("retrieval_focus", [])),
     )
 
 
