@@ -76,34 +76,6 @@ class WikiPage(Base):
     repository: Mapped[Repository] = relationship("Repository", back_populates="pages")
 
 
-class ChatSession(Base):
-    __tablename__ = "chat_sessions"
-    id: Mapped[str] = mapped_column(String, primary_key=True)
-    repo_id: Mapped[str] = mapped_column(ForeignKey("repositories.id"), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(UTC)
-    )
-    messages: Mapped[list[ChatMessage]] = relationship(
-        "ChatMessage", back_populates="session"
-    )
-
-
-class ChatMessage(Base):
-    __tablename__ = "chat_messages"
-    id: Mapped[str] = mapped_column(String, primary_key=True)
-    session_id: Mapped[str] = mapped_column(
-        ForeignKey("chat_sessions.id"), nullable=False
-    )
-    role: Mapped[str] = mapped_column(String, nullable=False)  # "user" | "assistant"
-    content: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(UTC)
-    )
-    session: Mapped[ChatSession] = relationship(
-        "ChatSession", back_populates="messages"
-    )
-
-
 class ResearchReport(Base):
     __tablename__ = "research_reports"
     id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -186,6 +158,7 @@ class FastReportSection(Base):
     related_diagrams_json: Mapped[str] = mapped_column(
         Text, nullable=False, default="[]"
     )
+    analysis_trace_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(UTC)
     )

@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useRef } from "react";
 import { FileSearch } from "lucide-react";
 
-import type { FastReportSection } from "@/lib/api";
+import type { FastReportAnalysisTrace, FastReportSection } from "@/lib/api";
+import { AnalysisTracePanel } from "./AnalysisTracePanel";
 import { DiagramPanel } from "./DiagramPanel";
 import { EvidenceBlock } from "./EvidenceBlock";
 
@@ -75,9 +76,11 @@ export function buildEvidenceRailItems(
 export function EvidenceRail({
   section,
   focusedCitationId = null,
+  analysisTrace,
 }: {
   section: FastReportSection | null;
   focusedCitationId?: string | null;
+  analysisTrace?: FastReportAnalysisTrace;
 }) {
   const items = useMemo(() => buildEvidenceRailItems(section), [section]);
   const itemRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -105,10 +108,14 @@ export function EvidenceRail({
           <FileSearch className="h-4 w-4" />
           Evidence rail
         </div>
-        <p className="text-sm leading-6 text-slate-600">
-          Ask a question from the floating assistant to populate evidence blocks
-          and related diagrams for the active section.
-        </p>
+        {analysisTrace && (analysisTrace.phase || (analysisTrace.files?.length ?? 0) > 0) ? (
+          <AnalysisTracePanel trace={analysisTrace} />
+        ) : (
+          <p className="text-sm leading-6 text-slate-600">
+            Ask a question from the floating assistant to populate evidence blocks
+            and related diagrams for the active section.
+          </p>
+        )}
       </div>
     );
   }

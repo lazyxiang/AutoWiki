@@ -356,6 +356,7 @@ async def test_get_fast_report_unexpired_reload_returns_persisted_data_without_e
                 "evidence_blocks": [],
                 "related_wiki_pages": [{"slug": "overview", "title": "Overview"}],
                 "related_diagrams": [],
+                "analysis_trace": {},
                 "created_at": body["sections"][0]["created_at"],
                 "status": "done",
             }
@@ -791,3 +792,186 @@ async def test_deleting_repository_cascades_through_active_section(fast_report_e
             assert await s.get(FastReportSection, "sec1") is None
     finally:
         await dispose_db(db_path)
+
+
+async def test_get_fast_report_includes_analysis_trace(fast_report_env):
+    """REST response includes analysis_trace dict (empty for legacy sections)."""
+    from api.main import app
+    from shared.database import dispose_db, get_session, init_db
+    from shared.models import FastReport, FastReportSection, Job, Repository
+
+    db_path = fast_report_env
+    await init_db(db_path)
+
+    try:
+        async with get_session(db_path) as s:
+            s.add(Repository(id="r1", owner="o", name="n", status="ready"))
+            s.add(Job(id="fr1", repo_id="r1", type="fast_report", status="done"))
+            report = FastReport(
+                id="fr1",
+                repo_id="r1",
+                commit_sha="deadbeef",
+                status="done",
+                expires_at=datetime.now(UTC) + timedelta(days=7),
+            )
+            s.add(report)
+            s.add(
+                FastReportSection(
+                    id="sec1",
+                    report_id="fr1",
+                    query="How does ingestion work?",
+                    title="Ingestion",
+                    summary="Clones and filters files.",
+                    markdown="# Ingestion",
+                    citations_json="[]",
+                    evidence_blocks_json="[]",
+                    related_wiki_pages_json="[]",
+                    related_diagrams_json="[]",
+                    analysis_trace_json=json.dumps(
+                        {
+                            "phase": "done",
+                            "files": [
+                                {
+                                    "path": "worker/pipeline/ingestion.py",
+                                    "role": "code_evidence",
+                                    "reason": "Entry point",
+                                    "status": "retrieved",
+                                }
+                            ],
+                        }
+                    ),
+                    status="done",
+                )
+            )
+            await s.flush()
+            report.active_section_id = "sec1"
+            await s.commit()
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get("/api/repos/r1/fast-reports/fr1")
+
+        assert response.status_code == 200
+        section = response.json()["sections"][0]
+        assert "analysis_trace" in section
+        trace = section["analysis_trace"]
+        assert isinstance(trace, dict)
+        assert trace["phase"] == "done"
+        assert trace["files"][0]["path"] == "worker/pipeline/ingestion.py"
+    finally:
+        await dispose_db(db_path)
+
+
+async def test_ws_fast_report_streams_analysis_update(fast_report_env):
+    """Running sections with trace emit analysis_update before section_complete."""
+    import asyncio
+    import threading
+
+    from starlette.testclient import TestClient
+
+    from api.main import app
+    from shared.database import get_session, init_db
+    from shared.models import FastReport, FastReportSection, Job, Repository
+
+    db_path = fast_report_env
+    await init_db(db_path)
+
+    trace_data = {
+        "phase": "retrieving_code_evidence",
+        "files": [
+            {
+                "path": "worker/jobs.py",
+                "role": "entrypoint",
+                "reason": "matched symbol",
+                "status": "selected",
+            }
+        ],
+    }
+
+    async with get_session(db_path) as s:
+        s.add(Repository(id="r1", owner="o", name="n", status="ready"))
+        s.add(Job(id="fr1", repo_id="r1", type="fast_report", status="running"))
+        report = FastReport(
+            id="fr1",
+            repo_id="r1",
+            commit_sha="deadbeef",
+            status="running",
+            expires_at=datetime.now(UTC) + timedelta(days=7),
+        )
+        s.add(report)
+        s.add(
+            FastReportSection(
+                id="sec1",
+                report_id="fr1",
+                query="How does indexing work?",
+                title="Indexing Flow",
+                summary=None,
+                markdown="",
+                citations_json="[]",
+                evidence_blocks_json="[]",
+                related_wiki_pages_json="[]",
+                related_diagrams_json="[]",
+                analysis_trace_json=json.dumps(trace_data),
+                status="running",
+            )
+        )
+        await s.commit()
+
+    async def _transition_to_done():
+        """Update section and report to done after a short delay."""
+        await asyncio.sleep(0.4)
+        async with get_session(db_path) as s:
+            section = await s.get(FastReportSection, "sec1")
+            report = await s.get(FastReport, "fr1")
+            job = await s.get(Job, "fr1")
+            if section is not None:
+                section.status = "done"
+                section.title = "Indexing Flow"
+                section.summary = "The job pipeline drives indexing."
+                section.markdown = "# Indexing Flow"
+            if report is not None:
+                report.status = "done"
+                report.active_section_id = "sec1"
+            if job is not None:
+                job.status = "done"
+            await s.commit()
+
+    _thread_exc: list[BaseException] = []
+
+    def _run_transition():
+        try:
+            asyncio.run(_transition_to_done())
+        except Exception as e:
+            _thread_exc.append(e)
+
+    messages: list[dict] = []
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/repos/r1/fast-reports/fr1") as ws:
+            # Start the transition thread immediately so it runs concurrently
+            # with message collection; this avoids an unbounded block on the
+            # first receive if the server's initial poll is delayed.
+            t = threading.Thread(target=_run_transition, daemon=True)
+            t.start()
+
+            # Collect all messages until report_complete arrives (bounded)
+            for _ in range(50):
+                msg = ws.receive_json()
+                messages.append(msg)
+                if msg["type"] in ("report_complete", "error"):
+                    break
+            else:
+                raise AssertionError("Never received report_complete or error")
+            t.join(timeout=5)
+            assert not t.is_alive(), "Transition thread did not complete in time"
+            if _thread_exc:
+                raise _thread_exc[0]
+
+    types = [m["type"] for m in messages]
+    analysis_msgs = [m for m in messages if m["type"] == "analysis_update"]
+    assert analysis_msgs, "Expected at least one analysis_update message"
+    assert analysis_msgs[0]["section_id"] == "sec1"
+    trace = analysis_msgs[0]["analysis_trace"]
+    assert trace["files"][0]["path"] == "worker/jobs.py"
+    assert "section_complete" in types
+    assert "report_complete" in types

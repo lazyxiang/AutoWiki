@@ -1,4 +1,4 @@
-import type { FastReportSection as FastReportSectionData } from "@/lib/api";
+import type { FastReportAnalysisTrace, FastReportSection as FastReportSectionData } from "@/lib/api";
 
 import { ReportSection } from "./ReportSection";
 
@@ -21,10 +21,12 @@ export function ReportStack({
   sections,
   activeSectionId,
   isRunning,
+  bufferedAnalysis,
 }: {
   sections: FastReportSectionData[];
   activeSectionId?: string | null;
   isRunning?: boolean;
+  bufferedAnalysis?: Record<string, FastReportAnalysisTrace>;
 }) {
   const sortedIds = sortSectionsForDisplay(sections);
   const sortedSections = sortedIds
@@ -49,6 +51,7 @@ export function ReportStack({
           key={section.id}
           section={section}
           isActive={section.id === activeSectionId}
+          analysisTrace={bufferedAnalysis?.[section.id]}
         />
       ))}
 
