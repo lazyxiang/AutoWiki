@@ -1,12 +1,11 @@
 """Fast report domain service.
 
-Builds a structured, evidence-driven report section from four explicit
+Builds a structured, evidence-driven report section from three explicit
 retrieval layers:
 
 1. Repository structure
-2. Code evidence
-3. Semantic retrieval
-4. Curated knowledge
+2. Code evidence (deterministic keyword/symbol scoring)
+3. Curated knowledge (wiki pages)
 """
 
 from __future__ import annotations
@@ -121,12 +120,6 @@ class CodeEvidenceLayer:
 
 
 @dataclass(slots=True)
-class SemanticRetrievalLayer:
-    passages: list[str] = field(default_factory=list)
-    citations: list[FastReportCitation] = field(default_factory=list)
-
-
-@dataclass(slots=True)
 class CuratedKnowledgeLayer:
     summaries: list[str] = field(default_factory=list)
     wiki_pages: list[FastReportWikiLink] = field(default_factory=list)
@@ -137,7 +130,6 @@ class CuratedKnowledgeLayer:
 class FastReportRetrievalLayers:
     repository_structure: RepositoryStructureLayer
     code_evidence: CodeEvidenceLayer
-    semantic_retrieval: SemanticRetrievalLayer
     curated_knowledge: CuratedKnowledgeLayer
 
 
@@ -170,9 +162,6 @@ RepositoryStructureRetriever = Callable[
 ]
 CodeEvidenceRetriever = Callable[
     [str, FastReportQuestionIntent], Awaitable[CodeEvidenceLayer]
-]
-SemanticRetriever = Callable[
-    [str, FastReportQuestionIntent], Awaitable[SemanticRetrievalLayer]
 ]
 CuratedKnowledgeRetriever = Callable[
     [str, FastReportQuestionIntent], Awaitable[CuratedKnowledgeLayer]
@@ -287,14 +276,6 @@ async def retrieve_code_evidence_layer(
     return await retriever(question, intent)
 
 
-async def retrieve_semantic_retrieval_layer(
-    question: str,
-    intent: FastReportQuestionIntent,
-    retriever: SemanticRetriever,
-) -> SemanticRetrievalLayer:
-    return await retriever(question, intent)
-
-
 async def retrieve_curated_knowledge_layer(
     question: str,
     intent: FastReportQuestionIntent,
@@ -308,22 +289,19 @@ async def retrieve_fast_report_layers(
     intent: FastReportQuestionIntent,
     repository_structure_retriever: RepositoryStructureRetriever,
     code_evidence_retriever: CodeEvidenceRetriever,
-    semantic_retriever: SemanticRetriever,
     curated_knowledge_retriever: CuratedKnowledgeRetriever,
 ) -> FastReportRetrievalLayers:
-    """Fetch the four context layers in parallel."""
-    structure, code, semantic, curated = await asyncio.gather(
+    """Fetch the three context layers in parallel."""
+    structure, code, curated = await asyncio.gather(
         retrieve_repository_structure_layer(
             question, intent, repository_structure_retriever
         ),
         retrieve_code_evidence_layer(question, intent, code_evidence_retriever),
-        retrieve_semantic_retrieval_layer(question, intent, semantic_retriever),
         retrieve_curated_knowledge_layer(question, intent, curated_knowledge_retriever),
     )
     return FastReportRetrievalLayers(
         repository_structure=structure,
         code_evidence=code,
-        semantic_retrieval=semantic,
         curated_knowledge=curated,
     )
 
@@ -537,9 +515,6 @@ def _build_generation_prompt(
         f"- {signal}" for signal in layers.repository_structure.signals
     )
     code_context = format_retrieved_chunks_for_prompt(layers.code_evidence.snippets)
-    semantic_summary = "\n".join(
-        f"- {passage}" for passage in layers.semantic_retrieval.passages
-    )
     curated_summary = "\n".join(
         [f"- {summary}" for summary in layers.curated_knowledge.summaries]
         + [
@@ -566,8 +541,6 @@ def _build_generation_prompt(
         f"{structure_summary or '- None'}\n\n"
         "Code evidence layer:\n"
         f"{code_context}\n\n"
-        "Semantic retrieval layer:\n"
-        f"{semantic_summary or '- None'}\n\n"
         "Curated knowledge layer:\n"
         f"{curated_summary or '- None'}\n\n"
         "Use the canonical headings where relevant. Final claims must cite code "
@@ -610,7 +583,6 @@ async def generate_fast_report_section(
     llm: LLMProvider,
     repository_structure_retriever: RepositoryStructureRetriever,
     code_evidence_retriever: CodeEvidenceRetriever,
-    semantic_retriever: SemanticRetriever,
     curated_knowledge_retriever: CuratedKnowledgeRetriever,
 ) -> FastReportSectionResult:
     """Generate one fast report section from layered retrieval context."""
@@ -620,7 +592,6 @@ async def generate_fast_report_section(
         intent=intent,
         repository_structure_retriever=repository_structure_retriever,
         code_evidence_retriever=code_evidence_retriever,
-        semantic_retriever=semantic_retriever,
         curated_knowledge_retriever=curated_knowledge_retriever,
     )
     prompt = _build_generation_prompt(question, repo_name, intent, layers)
@@ -656,9 +627,7 @@ async def generate_fast_report_section(
     citations_by_id = {
         citation.id: citation
         for citation in _dedupe_citations(
-            layers.repository_structure.citations
-            + layers.code_evidence.citations
-            + layers.semantic_retrieval.citations
+            layers.repository_structure.citations + layers.code_evidence.citations
         )
     }
     citations = [

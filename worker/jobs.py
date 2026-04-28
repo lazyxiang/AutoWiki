@@ -43,7 +43,6 @@ from worker.fast_report import (
     CuratedKnowledgeLayer,
     FastReportQuestionIntent,
     RepositoryStructureLayer,
-    SemanticRetrievalLayer,
     generate_fast_report_section,
 )
 from worker.fast_report_search import retrieve_code_evidence
@@ -333,7 +332,6 @@ async def _build_default_fast_report_retrievers(
     loop = asyncio.get_running_loop()
     readme = await loop.run_in_executor(None, extract_readme, clone_root)
     fast_report_index = await _load_fast_report_index(repo_data_dir)
-    indexed_files = fast_report_index.get("files", {})
     wiki_pages = await _load_fast_report_wiki_pages(db_path, repo_id)
     top_level_entries = list(fast_report_index.get("top_level_entries") or [])
     if not top_level_entries and clone_root.exists():
@@ -379,35 +377,6 @@ async def _build_default_fast_report_retrievers(
     ) -> CodeEvidenceLayer:
         return retrieve_code_evidence(fast_report_index, intent, question)
 
-    async def _semantic(
-        question: str, intent: FastReportQuestionIntent
-    ) -> SemanticRetrievalLayer:
-        passages: list[str] = []
-        citations: list[FastReportCitation] = []
-        if readme_headings:
-            passages.append(f"README headings: {', '.join(readme_headings[:6])}")
-        if readme:
-            passages.append(readme[:400])
-            citations.append(
-                FastReportCitation(
-                    id="sem-1",
-                    file_path="README.md",
-                    start_line=1,
-                    end_line=max(1, min(len(readme.splitlines()), 20)),
-                    label="README",
-                    kind="semantic_retrieval",
-                )
-            )
-        elif top_level_entries:
-            passages.append(f"Top-level entries: {', '.join(top_level_entries[:8])}")
-        if indexed_files:
-            file_list = ", ".join(sorted(indexed_files)[:6])
-            passages.append(f"Indexed files: {file_list}")
-        return SemanticRetrievalLayer(
-            passages=passages,
-            citations=citations,
-        )
-
     async def _curated(
         question: str, intent: FastReportQuestionIntent
     ) -> CuratedKnowledgeLayer:
@@ -436,7 +405,6 @@ async def _build_default_fast_report_retrievers(
     return {
         "repository_structure_retriever": _repository_structure,
         "code_evidence_retriever": _code_evidence,
-        "semantic_retriever": _semantic,
         "curated_knowledge_retriever": _curated,
     }
 
@@ -2009,10 +1977,6 @@ async def run_fast_report(
             code_evidence_retriever=retrievers.get(
                 "code_evidence_retriever",
                 _missing_fast_report_retriever("fast_report_code_evidence"),
-            ),
-            semantic_retriever=retrievers.get(
-                "semantic_retriever",
-                _missing_fast_report_retriever("fast_report_semantic"),
             ),
             curated_knowledge_retriever=retrievers.get(
                 "curated_knowledge_retriever",

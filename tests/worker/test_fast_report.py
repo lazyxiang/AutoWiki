@@ -26,7 +26,7 @@ def test_arbitrate_report_claims_drops_unsupported_claims():
         FastReportClaim(
             text="The system uses Celery workers.",
             citation_ids=["sem-1"],
-            supporting_layers=["semantic_retrieval"],
+            supporting_layers=["external_source"],
         ),
         FastReportClaim(
             text="The repo is split across api, worker, and web.",
@@ -528,7 +528,6 @@ async def test_generate_fast_report_section_returns_structured_section(mock_llm)
         CuratedKnowledgeLayer,
         FastReportQuestionIntent,
         RepositoryStructureLayer,
-        SemanticRetrievalLayer,
         generate_fast_report_section,
     )
 
@@ -557,7 +556,7 @@ async def test_generate_fast_report_section_returns_structured_section(mock_llm)
                         {
                             "text": "The system uses Celery queues.",
                             "citation_ids": ["sem-1"],
-                            "supporting_layers": ["semantic_retrieval"],
+                            "supporting_layers": ["external_source"],
                         },
                     ],
                 },
@@ -642,29 +641,6 @@ async def test_generate_fast_report_section_returns_structured_section(mock_llm)
             ],
         )
 
-    async def _semantic(question: str, intent: FastReportQuestionIntent):
-        return SemanticRetrievalLayer(
-            passages=["The README describes a six-stage pipeline."],
-            citations=[
-                FastReportCitation(
-                    id="code-2",
-                    file_path="worker/ingestion.py",
-                    start_line=10,
-                    end_line=40,
-                    label="clone_or_fetch",
-                    kind="code_evidence",
-                ),
-                FastReportCitation(
-                    id="sem-1",
-                    file_path="README.md",
-                    start_line=1,
-                    end_line=20,
-                    label="README pipeline summary",
-                    kind="semantic_retrieval",
-                ),
-            ],
-        )
-
     async def _curated(question: str, intent: FastReportQuestionIntent):
         return CuratedKnowledgeLayer(
             summaries=["Overview wiki page summarises the system architecture."],
@@ -692,7 +668,6 @@ async def test_generate_fast_report_section_returns_structured_section(mock_llm)
         llm=mock_llm,
         repository_structure_retriever=_repo_structure,
         code_evidence_retriever=_code_evidence,
-        semantic_retriever=_semantic,
         curated_knowledge_retriever=_curated,
     )
 
