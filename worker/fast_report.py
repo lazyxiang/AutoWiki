@@ -152,6 +152,7 @@ class FastReportSectionResult:
     summary: str
     markdown: str
     citations: list[FastReportCitation] = field(default_factory=list)
+    retrieval_citations: list[FastReportCitation] = field(default_factory=list)
     evidence_blocks: list[FastReportEvidenceBlock] = field(default_factory=list)
     related_wiki_pages: list[FastReportWikiLink] = field(default_factory=list)
     related_diagrams: list[FastReportDiagram] = field(default_factory=list)
@@ -248,9 +249,14 @@ async def plan_fast_report_search(
         f"{get_fast_report_language_instruction(search_language)}"
     )
     raw = await llm.generate_structured(prompt, _SEARCH_PLAN_SCHEMA)
-    planned_language = normalize_fast_report_language(raw.get("language"))
+    raw_language = raw.get("language")
+    planned_language = (
+        normalize_fast_report_language(raw_language)
+        if raw_language
+        else search_language
+    )
     return FastReportQuestionIntent(
-        language=planned_language or search_language,
+        language=planned_language,
         question_type=raw.get("question_type", "unknown"),
         target=str(raw.get("target", "") or "").strip(),
         answer_shape=str(raw.get("answer_shape", "") or "").strip(),
@@ -610,6 +616,7 @@ async def generate_fast_report_section(
     evidence_citations = _dedupe_citations(
         layers.repository_structure.citations + layers.code_evidence.citations
     )
+    retrieval_citations = evidence_citations
     related_wiki_pages = _select_related_wiki_pages(
         question=question,
         evidence_citations=evidence_citations,
@@ -644,6 +651,7 @@ async def generate_fast_report_section(
         summary=raw.get("summary", ""),
         markdown=markdown,
         citations=citations,
+        retrieval_citations=retrieval_citations,
         evidence_blocks=evidence_blocks,
         related_wiki_pages=related_wiki_pages,
         related_diagrams=list(layers.curated_knowledge.diagrams),

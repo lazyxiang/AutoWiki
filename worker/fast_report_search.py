@@ -11,6 +11,9 @@ from typing import Any, Protocol
 _CJK_RE = re.compile(
     r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]"
 )
+_CJK_RUN_RE = re.compile(
+    r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]+"
+)
 _TOKEN_SPLIT_RE = re.compile(r"[^A-Za-z0-9]+")
 _CAMEL_CASE_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
@@ -488,6 +491,13 @@ def _make_evidence_block(
 
 def _tokenize(text: str) -> set[str]:
     tokens: set[str] = set()
+    # CJK runs: add whole run plus bigrams/trigrams so partial matches work.
+    for run in _CJK_RUN_RE.findall(text.lower()):
+        tokens.add(run)
+        max_ngram = min(3, len(run))
+        for size in range(2, max_ngram + 1):
+            for i in range(len(run) - size + 1):
+                tokens.add(run[i : i + size])
     for part in _TOKEN_SPLIT_RE.split(text.replace("/", " ").replace(".", " ")):
         if not part:
             continue

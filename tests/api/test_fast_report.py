@@ -948,15 +948,13 @@ async def test_ws_fast_report_streams_analysis_update(fast_report_env):
     messages: list[dict] = []
     with TestClient(app) as client:
         with client.websocket_connect("/ws/repos/r1/fast-reports/fr1") as ws:
-            # Read the analysis_update emitted on the first poll (section is running)
-            first_msg = ws.receive_json()
-            messages.append(first_msg)
-
-            # Now trigger the transition to done in a background thread
+            # Start the transition thread immediately so it runs concurrently
+            # with message collection; this avoids an unbounded block on the
+            # first receive if the server's initial poll is delayed.
             t = threading.Thread(target=_run_transition, daemon=True)
             t.start()
 
-            # Collect remaining messages until report_complete arrives (bounded)
+            # Collect all messages until report_complete arrives (bounded)
             for _ in range(50):
                 msg = ws.receive_json()
                 messages.append(msg)

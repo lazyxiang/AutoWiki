@@ -1985,7 +1985,7 @@ async def run_fast_report(
         )
 
         analysis_trace = {
-            "phase": "done",
+            "phase": "synthesizing",
             "files": [
                 {
                     "path": c.file_path,
@@ -1993,7 +1993,7 @@ async def run_fast_report(
                     "reason": c.reason or "",
                     "status": "retrieved",
                 }
-                for c in result.citations
+                for c in result.retrieval_citations
             ],
         }
         # Write the analysis trace first while keeping status="running" so that
