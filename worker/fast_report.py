@@ -406,7 +406,6 @@ def _normalize_heading(heading: str) -> str:
     return HEADING_ALIASES.get(normalized, heading.strip())
 
 
-
 def _dedupe_citations(citations: list[FastReportCitation]) -> list[FastReportCitation]:
     seen: set[str] = set()
     result: list[FastReportCitation] = []
