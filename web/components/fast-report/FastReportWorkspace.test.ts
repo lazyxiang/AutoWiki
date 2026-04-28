@@ -413,7 +413,7 @@ describe("FastReportWorkspace", () => {
         files: [{ path: "worker/jobs.py", role: "entrypoint", reason: "matched symbol", status: "selected" }],
       },
     });
-    expect(next.bufferedAnalysis["sec-1"].files![0].path).toBe("worker/jobs.py");
+    expect(next.bufferedAnalysis["sec-1"].files?.[0]?.path).toBe("worker/jobs.py");
     expect(next.streamState).toBe("running");
   });
 });

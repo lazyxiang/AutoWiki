@@ -166,6 +166,7 @@ export function applyLoadedReport(
     isStarting: false,
     bufferedSections: [],
     bufferedCompletion: null,
+    bufferedAnalysis: {},
   };
 }
 
@@ -506,7 +507,9 @@ export function FastReportWorkspace({
             analysisTrace={
               railSection
                 ? state.bufferedAnalysis[railSection.id]
-                : state.bufferedAnalysis[view.activeSectionId ?? ""]
+                : (view.activeSectionId
+                    ? state.bufferedAnalysis[view.activeSectionId]
+                    : Object.values(state.bufferedAnalysis).at(-1))
             }
           />
         </aside>
