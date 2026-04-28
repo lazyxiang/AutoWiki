@@ -51,6 +51,17 @@ def build_fast_report_index(
     """Return a deterministic fast-report analysis index."""
     rel_paths = _collect_rel_paths(root, files, file_analysis)
     imported_by = _build_imported_by(dep_graph)
+    normalized_file_info = {
+        _normalize_rel_path(path): info for path, info in file_analysis.files.items()
+    }
+    normalized_edges = {
+        _normalize_rel_path(path): sorted(_normalize_rel_path(dep) for dep in deps)
+        for path, deps in dep_graph.edges.items()
+    }
+    normalized_external_deps = {
+        _normalize_rel_path(path): sorted(deps)
+        for path, deps in dep_graph.external_deps.items()
+    }
 
     return {
         "top_level_entries": _top_level_entries(root, rel_paths),
@@ -58,8 +69,9 @@ def build_fast_report_index(
         "files": {
             rel_path: _build_file_entry(
                 rel_path=rel_path,
-                file_analysis=file_analysis,
-                dep_graph=dep_graph,
+                normalized_file_info=normalized_file_info,
+                normalized_edges=normalized_edges,
+                normalized_external_deps=normalized_external_deps,
                 imported_by=imported_by,
             )
             for rel_path in rel_paths
@@ -107,23 +119,12 @@ def _extract_readme_headings(readme: str | None) -> list[str]:
 def _build_file_entry(
     *,
     rel_path: str,
-    file_analysis: FileAnalysis,
-    dep_graph: DependencyGraph,
+    normalized_file_info: dict[str, Any],
+    normalized_edges: dict[str, list[str]],
+    normalized_external_deps: dict[str, list[str]],
     imported_by: dict[str, list[str]],
 ) -> dict[str, Any]:
     rel_path = _normalize_rel_path(rel_path)
-    normalized_file_info = {
-        _normalize_rel_path(path): info for path, info in file_analysis.files.items()
-    }
-    normalized_edges = {
-        _normalize_rel_path(path): sorted(_normalize_rel_path(dep) for dep in deps)
-        for path, deps in dep_graph.edges.items()
-    }
-    normalized_external_deps = {
-        _normalize_rel_path(path): sorted(deps)
-        for path, deps in dep_graph.external_deps.items()
-    }
-
     info = normalized_file_info.get(rel_path)
     entities = info.entities if info is not None else []
     normalized_entities = [_normalize_entity(rel_path, entity) for entity in entities]

@@ -255,9 +255,7 @@ async def ws_fast_report(websocket: WebSocket, repo_id: str, report_id: str):
                             }
                         )
                         sent_analysis_updates.add(section.id)
-
-            for section in sections:
-                if section.status == "done" and section.id not in sent_sections:
+                elif section.status == "done" and section.id not in sent_sections:
                     await websocket.send_json(
                         {
                             "type": "section_complete",

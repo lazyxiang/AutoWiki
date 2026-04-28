@@ -189,7 +189,9 @@ def _normalize_search_plan(
     )
 
 
-def _normalize_string_list(values: list[Any]) -> list[str]:
+def _normalize_string_list(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        return []
     normalized: list[str] = []
     seen: set[str] = set()
     for value in values:

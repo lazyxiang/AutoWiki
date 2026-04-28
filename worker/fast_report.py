@@ -25,6 +25,7 @@ from shared.fast_report_types import (
 )
 from worker.deep_research import format_retrieved_chunks_for_prompt
 from worker.fast_report_search import (
+    _normalize_string_list,
     detect_question_language,
     normalize_fast_report_language,
 )
@@ -404,22 +405,6 @@ def _normalize_heading(heading: str) -> str:
     normalized = " ".join(heading.lower().replace("_", " ").split())
     return HEADING_ALIASES.get(normalized, heading.strip())
 
-
-def _normalize_string_list(values: Any) -> list[str]:
-    if not isinstance(values, list):
-        return []
-    result: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        if not isinstance(value, str):
-            continue
-        item = value.strip()
-        key = item.lower()
-        if not item or key in seen:
-            continue
-        seen.add(key)
-        result.append(item)
-    return result
 
 
 def _dedupe_citations(citations: list[FastReportCitation]) -> list[FastReportCitation]:
