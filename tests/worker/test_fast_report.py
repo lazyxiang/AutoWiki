@@ -6,6 +6,8 @@ import json
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
+import pytest
+
 from shared.fast_report_types import (
     FastReportCitation,
     FastReportDiagram,
@@ -154,6 +156,15 @@ def test_normalize_heading_accepts_chinese_aliases():
 
     assert _normalize_heading("概述") == "Overview"
     assert _normalize_heading("执行流程 / 步骤") == "Execution Flow / Steps"
+
+
+def test_search_plan_schema_constrains_question_type_to_enum():
+    from worker.fast_report import _SEARCH_PLAN_SCHEMA
+    from worker.fast_report_planning import QUESTION_TYPES
+
+    qt_schema = _SEARCH_PLAN_SCHEMA["properties"]["question_type"]
+
+    assert set(qt_schema["enum"]) == set(QUESTION_TYPES)
 
 
 def test_retrieve_code_evidence_prefers_symbol_seed_and_expands_call_chain():
@@ -454,6 +465,84 @@ async def test_plan_fast_report_search_normalizes_japanese_and_korean_variants(
     assert ko_intent.language == "zh"
 
 
+async def test_plan_fast_report_search_injects_repo_shape_context(mock_llm):
+    from worker.fast_report import plan_fast_report_search
+
+    captured: dict[str, str] = {}
+
+    async def _structured(prompt, schema):
+        captured["prompt"] = prompt
+        return {
+            "language": "en",
+            "question_type": "execution_flow",
+            "search_terms": ["run"],
+            "retrieval_focus": ["worker.fast_report.generate_fast_report_section"],
+        }
+
+    mock_llm.generate_structured.side_effect = _structured
+
+    await plan_fast_report_search(
+        "How does the report flow run?",
+        "autowiki",
+        mock_llm,
+        index={
+            "directory_tree": "worker/\n  fast_report.py\n",
+            "hub_modules": [
+                {
+                    "path": "worker/fast_report.py",
+                    "in_degree": 4,
+                    "purpose": "Fast reports.",
+                }
+            ],
+            "readme_headings": ["AutoWiki", "Architecture"],
+        },
+    )
+
+    assert "Directory tree:" in captured["prompt"]
+    assert "worker/fast_report.py" in captured["prompt"]
+    assert "Hub modules:" in captured["prompt"]
+    assert "README headings:" in captured["prompt"]
+
+
+async def test_plan_fast_report_search_retries_degenerate_output_once(mock_llm):
+    from worker.fast_report import plan_fast_report_search
+
+    prompts: list[str] = []
+    responses = iter(
+        [
+            {
+                "language": "en",
+                "question_type": "unknown",
+                "search_terms": [],
+                "retrieval_focus": [],
+            },
+            {
+                "language": "en",
+                "question_type": "execution_flow",
+                "search_terms": ["run"],
+                "retrieval_focus": ["worker.fast_report.plan_fast_report_search"],
+            },
+        ]
+    )
+
+    async def _structured(prompt, schema):
+        prompts.append(prompt)
+        return next(responses)
+
+    mock_llm.generate_structured.side_effect = _structured
+
+    intent = await plan_fast_report_search(
+        "How does X work?",
+        "autowiki",
+        mock_llm,
+        index={"directory_tree": "worker/\n  fast_report.py\n"},
+    )
+
+    assert len(prompts) == 2
+    assert intent.question_type == "execution_flow"
+    assert "Re-plan the search" in prompts[1]
+
+
 def test_select_related_wiki_pages_supports_localized_tokens():
     from worker.fast_report import _select_related_wiki_pages
 
@@ -520,6 +609,80 @@ def test_select_related_wiki_pages_matches_partial_cjk_phrase_overlap():
     )
 
     assert [page.slug for page in selected] == ["执行流程"]
+
+
+def test_generation_prompt_includes_interpretive_block_with_no_cite_warning():
+    from worker.fast_report import (
+        CodeEvidenceLayer,
+        CuratedKnowledgeLayer,
+        FastReportQuestionIntent,
+        FastReportRetrievalLayers,
+        RepositoryStructureLayer,
+        _build_generation_prompt,
+    )
+    from worker.fast_report_interpretive import InterpretiveBundle
+
+    layers = FastReportRetrievalLayers(
+        repository_structure=RepositoryStructureLayer(
+            signals=["Directory tree:\nworker/\n  fast_report.py"]
+        ),
+        code_evidence=CodeEvidenceLayer(),
+        curated_knowledge=CuratedKnowledgeLayer(),
+        interpretive=InterpretiveBundle(
+            entries=[
+                {
+                    "source": "module_docstring",
+                    "file": "worker/fast_report.py",
+                    "name": None,
+                    "text": "Fast report domain service.",
+                },
+                {
+                    "source": "readme_section",
+                    "heading": "Architecture",
+                    "text": "AutoWiki uses a 6-stage pipeline.",
+                },
+            ]
+        ),
+    )
+
+    prompt = _build_generation_prompt(
+        "How does X work?",
+        "autowiki",
+        FastReportQuestionIntent(question_type="execution_flow"),
+        layers,
+    )
+
+    assert "Interpretive context layer:" in prompt
+    assert (
+        "Module docstring (worker/fast_report.py): Fast report domain service."
+        in prompt
+    )
+    assert 'README section "Architecture": AutoWiki uses a 6-stage pipeline.' in prompt
+    assert (
+        "Use this interpretive layer ONLY to explain or connect code evidence" in prompt
+    )
+    assert "Final claims must cite repository_structure or code_evidence ids" in prompt
+
+
+def test_arbitration_drops_claim_supported_only_by_interpretive_id():
+    from worker.fast_report import FastReportClaim, arbitrate_report_claims
+
+    interpretive_only = FastReportClaim(
+        text="Docstring-only claim",
+        citation_ids=["interp-1"],
+        supporting_layers=["interpretive"],
+    )
+    code_backed = FastReportClaim(
+        text="Code-backed claim",
+        citation_ids=["code-0-0"],
+        supporting_layers=["code_evidence"],
+    )
+
+    kept = arbitrate_report_claims(
+        [interpretive_only, code_backed], available_citation_ids={"code-0-0"}
+    )
+
+    assert kept == [code_backed]
 
 
 async def test_generate_fast_report_section_returns_structured_section(mock_llm):
@@ -744,11 +907,21 @@ async def test_run_fast_report_persists_completed_section(
     repo_root = tmp_path / "repos" / "r1" / "clone"
     repo_root.mkdir(parents=True)
     (repo_root / "README.md").write_text("# AutoWiki\n\nIndexing overview.")
+    (repo_root / "worker").mkdir()
+    (repo_root / "worker" / "jobs.py").write_text(
+        "def run_full_index(ctx, repo_id, job_id):\n"
+        "    return clone_or_fetch(repo_id)\n"
+    )
+    (repo_root / "worker" / "pipeline").mkdir()
+    (repo_root / "worker" / "pipeline" / "ingestion.py").write_text(
+        "def clone_or_fetch(repo_url):\n    return repo_url\n"
+    )
     ast_dir = tmp_path / "repos" / "r1" / "ast"
     ast_dir.mkdir(parents=True)
     (ast_dir / "fast_report_index.json").write_text(
         json.dumps(
             {
+                "index_version": 2,
                 "top_level_entries": ["README.md", "worker"],
                 "readme_headings": ["AutoWiki", "Indexing overview"],
                 "files": {
@@ -769,8 +942,8 @@ async def test_run_fast_report_persists_completed_section(
                             {
                                 "name": "run_full_index",
                                 "type": "function",
-                                "start_line": 539,
-                                "end_line": 566,
+                                "start_line": 1,
+                                "end_line": 2,
                                 "signature": "run_full_index(ctx, repo_id, job_id)",
                                 "docstring": "Coordinate the indexing pipeline.",
                                 "symbol_path": "worker.jobs.run_full_index",
@@ -796,8 +969,8 @@ async def test_run_fast_report_persists_completed_section(
                             {
                                 "name": "clone_or_fetch",
                                 "type": "function",
-                                "start_line": 10,
-                                "end_line": 40,
+                                "start_line": 1,
+                                "end_line": 2,
                                 "signature": "clone_or_fetch(repo_url)",
                                 "docstring": "Clone the repository snapshot.",
                                 "symbol_path": (
@@ -834,7 +1007,7 @@ async def test_run_fast_report_persists_completed_section(
                     "claims": [
                         {
                             "text": "Indexing starts in worker/jobs.py.",
-                            "citation_ids": ["code-1"],
+                            "citation_ids": ["code-1-0"],
                             "supporting_layers": ["code_evidence"],
                         }
                     ],
@@ -886,11 +1059,19 @@ async def test_run_fast_report_persists_completed_section(
                 assert section.summary == "The worker job orchestrates indexing."
                 assert section.markdown.startswith("# Indexing Flow")
                 citations = json.loads(section.citations_json)
-                assert citations[0]["id"] == "code-1"
+                assert citations[0]["id"] == "code-1-0"
                 assert citations[0]["file_path"] == "worker/jobs.py"
                 evidence_blocks = json.loads(section.evidence_blocks_json)
-                assert evidence_blocks[0]["citation_id"] == "code-1"
+                assert evidence_blocks[0]["citation_id"] == "code-1-0"
                 assert evidence_blocks[0]["symbol_path"] == "worker.jobs.run_full_index"
+                trace = json.loads(section.analysis_trace_json)
+                phases = [event["phase"] for event in trace["events"]]
+                assert "index_check" in phases
+                assert "search_plan" in phases
+                assert "slice_extraction" in phases
+                assert "interpretive_layer" in phases
+                assert "generation" in phases
+                assert "arbitration" in phases
                 assert "README.md" not in section.citations_json
                 assert json.loads(section.related_wiki_pages_json) == []
                 assert "diagram" not in section.related_diagrams_json.lower()
@@ -899,13 +1080,39 @@ async def test_run_fast_report_persists_completed_section(
             reset_config()
 
 
-async def test_build_default_fast_report_retrievers_tolerates_corrupt_index_file(
+def test_validate_fast_report_index_rejects_missing_version():
+    from worker.jobs import FastReportIndexOutdated, _validate_fast_report_index_version
+
+    with pytest.raises(FastReportIndexOutdated) as exc_info:
+        _validate_fast_report_index_version({})
+
+    assert "fast_report_index_outdated" in str(exc_info.value)
+
+
+def test_validate_fast_report_index_rejects_v1():
+    from worker.jobs import FastReportIndexOutdated, _validate_fast_report_index_version
+
+    with pytest.raises(FastReportIndexOutdated) as exc_info:
+        _validate_fast_report_index_version({"index_version": 1})
+
+    assert "fast_report_index_outdated" in str(exc_info.value)
+
+
+def test_validate_fast_report_index_accepts_v2():
+    from worker.jobs import _validate_fast_report_index_version
+
+    _validate_fast_report_index_version({"index_version": 2})
+
+
+async def test_build_default_fast_report_retrievers_rejects_corrupt_index_file(
     tmp_path, monkeypatch
 ):
     from shared.database import dispose_db, get_session, init_db
     from shared.models import Repository, WikiPage
-    from worker.fast_report import FastReportQuestionIntent
-    from worker.jobs import _build_default_fast_report_retrievers
+    from worker.jobs import (
+        FastReportIndexOutdated,
+        _build_default_fast_report_retrievers,
+    )
 
     db_path = str(tmp_path / "t.db")
     monkeypatch.setenv("DATABASE_PATH", db_path)
@@ -940,42 +1147,26 @@ async def test_build_default_fast_report_retrievers_tolerates_corrupt_index_file
     cfg = get_config()
 
     try:
-        retrievers = await _build_default_fast_report_retrievers(
-            repo_id="r1",
-            db_path=db_path,
-            cfg=cfg,
-        )
-        intent = FastReportQuestionIntent(
-            question_type="execution_flow",
-            language="en",
-            target="runtime",
-            answer_shape="report",
-            evidence_shape="entry-points",
-        )
-
-        structure = await retrievers["repository_structure_retriever"](
-            "How does runtime start?", intent
-        )
-        code = await retrievers["code_evidence_retriever"](
-            "How does runtime start?", intent
-        )
-
-        assert structure.signals[0] == "Top-level entries: README.md, worker"
-        assert structure.citations[0].file_path == "README.md"
-        assert code.citations == []
-        assert code.evidence_blocks == []
+        with pytest.raises(FastReportIndexOutdated):
+            await _build_default_fast_report_retrievers(
+                repo_id="r1",
+                db_path=db_path,
+                cfg=cfg,
+            )
     finally:
         await dispose_db(db_path)
         reset_config()
 
 
-async def test_build_default_fast_report_retrievers_tolerates_non_utf8_index_bytes(
+async def test_build_default_fast_report_retrievers_rejects_non_utf8_index_bytes(
     tmp_path, monkeypatch
 ):
     from shared.database import dispose_db, get_session, init_db
     from shared.models import Repository, WikiPage
-    from worker.fast_report import FastReportQuestionIntent
-    from worker.jobs import _build_default_fast_report_retrievers
+    from worker.jobs import (
+        FastReportIndexOutdated,
+        _build_default_fast_report_retrievers,
+    )
 
     db_path = str(tmp_path / "t.db")
     monkeypatch.setenv("DATABASE_PATH", db_path)
@@ -1010,30 +1201,12 @@ async def test_build_default_fast_report_retrievers_tolerates_non_utf8_index_byt
     cfg = get_config()
 
     try:
-        retrievers = await _build_default_fast_report_retrievers(
-            repo_id="r1",
-            db_path=db_path,
-            cfg=cfg,
-        )
-        intent = FastReportQuestionIntent(
-            question_type="execution_flow",
-            language="en",
-            target="runtime",
-            answer_shape="report",
-            evidence_shape="entry-points",
-        )
-
-        structure = await retrievers["repository_structure_retriever"](
-            "How does runtime start?", intent
-        )
-        code = await retrievers["code_evidence_retriever"](
-            "How does runtime start?", intent
-        )
-
-        assert structure.signals[0] == "Top-level entries: README.md, worker"
-        assert structure.citations[0].file_path == "README.md"
-        assert code.citations == []
-        assert code.evidence_blocks == []
+        with pytest.raises(FastReportIndexOutdated):
+            await _build_default_fast_report_retrievers(
+                repo_id="r1",
+                db_path=db_path,
+                cfg=cfg,
+            )
     finally:
         await dispose_db(db_path)
         reset_config()

@@ -321,6 +321,19 @@ async def _load_fast_report_index(repo_data_dir: Path) -> dict:
     return loaded
 
 
+class FastReportIndexOutdated(RuntimeError):
+    """Raised when fast_report_index.json is missing or below v2."""
+
+
+def _validate_fast_report_index_version(index: dict) -> None:
+    version = index.get("index_version")
+    if not isinstance(version, int) or version < 2:
+        raise FastReportIndexOutdated(
+            "fast_report_index_outdated: Repository index is outdated for fast "
+            "reports. Run `autowiki index <repo>` to upgrade."
+        )
+
+
 async def _build_default_fast_report_retrievers(
     *,
     repo_id: str,
@@ -332,31 +345,34 @@ async def _build_default_fast_report_retrievers(
     loop = asyncio.get_running_loop()
     readme = await loop.run_in_executor(None, extract_readme, clone_root)
     fast_report_index = await _load_fast_report_index(repo_data_dir)
+    _validate_fast_report_index_version(fast_report_index)
     wiki_pages = await _load_fast_report_wiki_pages(db_path, repo_id)
-    top_level_entries = list(fast_report_index.get("top_level_entries") or [])
-    if not top_level_entries and clone_root.exists():
-
-        def _read_top_level_entries() -> list[str]:
-            return sorted(p.name for p in clone_root.iterdir() if p.name != ".git")[:8]
-
-        top_level_entries = await loop.run_in_executor(
-            None,
-            _read_top_level_entries,
-        )
+    directory_tree = str(fast_report_index.get("directory_tree") or "").rstrip()
+    hub_modules = list(fast_report_index.get("hub_modules") or [])
     readme_headings = list(fast_report_index.get("readme_headings") or [])
+    readme_first_paragraph = _readme_first_paragraph(readme)
 
     async def _repository_structure(
         question: str, intent: FastReportQuestionIntent
     ) -> RepositoryStructureLayer:
-        signals = [
-            f"Top-level entries: {', '.join(top_level_entries)}"
-            if top_level_entries
-            else "Top-level entries unavailable."
-        ]
+        signals: list[str] = []
+        if directory_tree:
+            signals.append(f"Directory tree:\n{directory_tree}")
         if readme_headings:
-            signals.append(f"README headings: {', '.join(readme_headings[:6])}")
+            signals.append(f"README headings: {', '.join(readme_headings[:12])}")
+        if readme_first_paragraph:
+            signals.append(f"README first paragraph: {readme_first_paragraph}")
+        if hub_modules:
+            hub_lines = "\n".join(
+                f"  - {hub.get('path')} — {hub.get('purpose') or ''}".rstrip(" —")
+                for hub in hub_modules
+                if hub.get("path")
+            )
+            if hub_lines:
+                signals.append(f"Hub modules:\n{hub_lines}")
+        if not signals:
+            signals.append("Repository structure unavailable.")
         if readme:
-            signals.append(readme.splitlines()[0][:160])
             return RepositoryStructureLayer(
                 signals=signals,
                 citations=[
@@ -375,7 +391,9 @@ async def _build_default_fast_report_retrievers(
     async def _code_evidence(
         question: str, intent: FastReportQuestionIntent
     ) -> CodeEvidenceLayer:
-        return retrieve_code_evidence(fast_report_index, intent, question)
+        return retrieve_code_evidence(
+            fast_report_index, intent, question, clone_root=clone_root
+        )
 
     async def _curated(
         question: str, intent: FastReportQuestionIntent
@@ -390,7 +408,7 @@ async def _build_default_fast_report_retrievers(
             ),
         )[:3]
         return CuratedKnowledgeLayer(
-            summaries=[page[2][:200] for page in ranked_pages if page[2]],
+            summaries=[page[2][:400] for page in ranked_pages if page[2]],
             wiki_pages=[
                 FastReportWikiLink(
                     slug=slug,
@@ -406,7 +424,22 @@ async def _build_default_fast_report_retrievers(
         "repository_structure_retriever": _repository_structure,
         "code_evidence_retriever": _code_evidence,
         "curated_knowledge_retriever": _curated,
+        "fast_report_index": fast_report_index,
     }
+
+
+def _readme_first_paragraph(readme: str | None) -> str:
+    if not readme:
+        return ""
+    paragraph_lines: list[str] = []
+    for line in readme.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            if paragraph_lines:
+                break
+            continue
+        paragraph_lines.append(stripped)
+    return " ".join(paragraph_lines)[:400]
 
 
 def _make_faiss_store(repo_data_dir: Path, embedding) -> FAISSStore:
@@ -1982,20 +2015,10 @@ async def run_fast_report(
                 "curated_knowledge_retriever",
                 _missing_fast_report_retriever("fast_report_curated_knowledge"),
             ),
+            fast_report_index=retrievers.get("fast_report_index"),
         )
 
-        analysis_trace = {
-            "phase": "synthesizing",
-            "files": [
-                {
-                    "path": c.file_path,
-                    "role": c.kind,
-                    "reason": c.reason or "",
-                    "status": "retrieved",
-                }
-                for c in result.retrieval_citations
-            ],
-        }
+        analysis_trace = {"events": result.analysis_events}
         # Write the analysis trace first while keeping status="running" so that
         # the WebSocket handler can emit analysis_update events before section_complete.
         await _update_fast_report_section(

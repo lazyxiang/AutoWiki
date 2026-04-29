@@ -16,6 +16,11 @@ from api.queue import enqueue_fast_report as _enqueue_fast_report
 from shared.config import get_config
 from shared.database import get_session
 from shared.models import FastReport, FastReportSection, Job, Repository
+from worker.jobs import (
+    FastReportIndexOutdated,
+    _load_fast_report_index,
+    _validate_fast_report_index_version,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -69,6 +74,31 @@ def _expired_or_mismatched(report: FastReport, repo: Repository | None) -> bool:
     )
 
 
+def _outdated_index_detail() -> dict[str, str]:
+    return {
+        "error": "fast_report_index_outdated",
+        "message": (
+            "Repository index is outdated for fast reports. "
+            "Run `autowiki index <repo>` to upgrade."
+        ),
+        "actionable_command": "autowiki index <repo>",
+    }
+
+
+async def _ensure_fast_report_index_v2(repo_id: str) -> None:
+    cfg = get_config()
+    try:
+        fast_report_index = await _load_fast_report_index(
+            cfg.data_dir / "repos" / repo_id
+        )
+        _validate_fast_report_index_version(fast_report_index)
+    except FastReportIndexOutdated as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=_outdated_index_detail(),
+        ) from exc
+
+
 @router.post("/api/repos/{repo_id}/fast-reports", status_code=202)
 async def start_fast_report(repo_id: str, req: StartFastReportRequest) -> dict:
     if not req.question.strip():
@@ -95,9 +125,12 @@ async def start_fast_report(repo_id: str, req: StartFastReportRequest) -> dict:
                 raise HTTPException(status_code=404, detail="Report not found")
             if _is_expired(report):
                 raise HTTPException(status_code=410, detail="Report expired")
+            if _expired_or_mismatched(report, repo):
+                raise HTTPException(status_code=410, detail="Report expired")
             job = await s.get(Job, job_id)
             if job is None or job.repo_id != repo_id or job.type != "fast_report":
                 raise HTTPException(status_code=404, detail="Report job not found")
+            await _ensure_fast_report_index_v2(repo_id)
 
             job.status = "queued"
             job.progress = 0
@@ -109,6 +142,7 @@ async def start_fast_report(repo_id: str, req: StartFastReportRequest) -> dict:
         else:
             job_id = str(uuid.uuid4())
             report_id = job_id
+            await _ensure_fast_report_index_v2(repo_id)
             s.add(
                 Job(
                     id=job_id,
