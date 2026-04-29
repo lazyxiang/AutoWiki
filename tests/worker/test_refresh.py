@@ -5,6 +5,152 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
+def _make_single_file_analysis(path: str = "main.py"):
+    from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
+
+    return FileAnalysis(
+        files={
+            path: FileInfo(
+                rel_path=path,
+                entities=[],
+                class_count=0,
+                function_count=0,
+                summary="",
+            )
+        }
+    )
+
+
+async def _seed_refresh_repo(
+    tmp_path,
+    *,
+    repo_id: str,
+    job_id: str,
+    old_sha: str = "old123",
+    write_markdown: bool = False,
+):
+    from shared.database import get_session, init_db
+    from shared.models import Job, Repository, WikiPage
+
+    db_path = str(tmp_path / "test.db")
+    await init_db(db_path)
+    clone_root = tmp_path / "clone"
+    clone_root.mkdir()
+
+    async with get_session(db_path) as s:
+        s.add(
+            Repository(
+                id=repo_id, owner="o", name="r", status="ready", last_commit=old_sha
+            )
+        )
+        s.add(
+            Job(id=job_id, repo_id=repo_id, type="refresh", status="queued", progress=0)
+        )
+        s.add(
+            WikiPage(
+                id="overview-row",
+                repo_id=repo_id,
+                slug="overview",
+                title="Overview",
+                content="old overview",
+                page_order=0,
+            )
+        )
+        await s.commit()
+
+    repo_data = tmp_path / "repos" / repo_id
+    ast_dir = repo_data / "ast"
+    wiki_dir = repo_data / "wiki"
+    ast_dir.mkdir(parents=True)
+    if write_markdown:
+        wiki_dir.mkdir()
+        (wiki_dir / "overview.md").write_text("old overview file")
+
+    (ast_dir / "wiki_plan.json").write_text(
+        json.dumps(
+            {
+                "repo_notes": [{"content": ""}],
+                "all_repo_files": ["main.py"],
+                "pages": [
+                    {
+                        "title": "Overview",
+                        "purpose": "High-level overview.",
+                        "files": ["main.py"],
+                    }
+                ],
+            }
+        )
+    )
+    return db_path, clone_root, wiki_dir
+
+
+async def _run_refresh_with_mocks(
+    tmp_path,
+    *,
+    repo_id: str,
+    job_id: str,
+    clone_root,
+    mock_llm,
+    mock_fast_llm,
+    mock_embedding,
+    changed_files: list[str],
+    generate_wiki_plan,
+    generate_page_batch,
+    readme: str = "",
+):
+    from worker.jobs import run_refresh_index
+    from worker.pipeline.dependency_graph import DependencyGraph
+
+    file_analysis = _make_single_file_analysis()
+    mock_embedding.dimension = 1536
+    with (
+        patch("worker.index.refresh.get_config") as mock_cfg,
+        patch(
+            "worker.index.refresh.clone_or_fetch",
+            new_callable=AsyncMock,
+            return_value=("new456", "main"),
+        ),
+        patch(
+            "worker.index.refresh.get_changed_files",
+            new_callable=AsyncMock,
+            return_value=changed_files,
+        ),
+        patch(
+            "worker.index.refresh.filter_files", return_value=[clone_root / "main.py"]
+        ),
+        patch("worker.index.refresh.extract_readme", return_value=readme),
+        patch("worker.index.refresh.load_user_steering", return_value=None),
+        patch("worker.index.refresh.analyze_all_files", return_value=file_analysis),
+        patch(
+            "worker.index.refresh.build_dependency_graph",
+            return_value=DependencyGraph(edges={}, clusters=[["main.py"]]),
+        ),
+        patch("worker.index.refresh.build_fast_report_index", return_value={}),
+        patch("worker.index.refresh._make_faiss_store", return_value=MagicMock()),
+        patch("worker.index.refresh.build_rag_index", new_callable=AsyncMock),
+        patch("worker.index.refresh.make_llm_provider", return_value=mock_llm),
+        patch(
+            "worker.index.refresh.make_fast_llm_provider", return_value=mock_fast_llm
+        ),
+        patch(
+            "worker.index.refresh.make_embedding_provider", return_value=mock_embedding
+        ),
+        patch("worker.index.refresh.generate_wiki_plan", new=generate_wiki_plan),
+        patch("worker.index.refresh.generate_page_batch", new=generate_page_batch),
+    ):
+        cfg = mock_cfg.return_value
+        cfg.database_path = tmp_path / "test.db"
+        cfg.data_dir = tmp_path
+        await run_refresh_index(
+            {},
+            repo_id=repo_id,
+            job_id=job_id,
+            owner="o",
+            name="r",
+            clone_root=clone_root,
+        )
+
+
 async def test_run_refresh_index_no_changes(tmp_path, mock_llm, mock_embedding):
     """If HEAD SHA == stored last_commit, job completes with status done immediately."""
     from shared.database import dispose_db, get_session, init_db
@@ -169,72 +315,13 @@ async def test_run_refresh_index_replans_all_files_for_readme_only_change(
     tmp_path, mock_llm, mock_fast_llm, mock_embedding
 ):
     """README-only changes force a global replan with the full source analysis."""
-    from shared.database import dispose_db, get_session, init_db
-    from shared.models import Job, Repository, WikiPage
-    from worker.jobs import run_refresh_index
-    from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
-    from worker.pipeline.dependency_graph import DependencyGraph
     from worker.pipeline.page_generator import PageResult
     from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan
 
-    db_path = str(tmp_path / "test.db")
-    await init_db(db_path)
     repo_id = "readme_refresh_repo"
     job_id = str(uuid.uuid4())
-    old_sha = "old123"
-    new_sha = "new456"
-    clone_root = tmp_path / "clone"
-    clone_root.mkdir()
-
-    async with get_session(db_path) as s:
-        s.add(
-            Repository(
-                id=repo_id, owner="o", name="r", status="ready", last_commit=old_sha
-            )
-        )
-        s.add(
-            Job(id=job_id, repo_id=repo_id, type="refresh", status="queued", progress=0)
-        )
-        s.add(
-            WikiPage(
-                id="overview-row",
-                repo_id=repo_id,
-                slug="overview",
-                title="Overview",
-                content="old overview",
-                page_order=0,
-            )
-        )
-        await s.commit()
-
-    ast_dir = tmp_path / "repos" / repo_id / "ast"
-    ast_dir.mkdir(parents=True)
-    (ast_dir / "wiki_plan.json").write_text(
-        json.dumps(
-            {
-                "repo_notes": [{"content": ""}],
-                "all_repo_files": ["main.py"],
-                "pages": [
-                    {
-                        "title": "Overview",
-                        "purpose": "High-level overview.",
-                        "files": ["main.py"],
-                    }
-                ],
-            }
-        )
-    )
-
-    file_analysis = FileAnalysis(
-        files={
-            "main.py": FileInfo(
-                rel_path="main.py",
-                entities=[],
-                class_count=0,
-                function_count=0,
-                summary="",
-            )
-        }
+    db_path, clone_root, _wiki_dir = await _seed_refresh_repo(
+        tmp_path, repo_id=repo_id, job_id=job_id
     )
     captured: dict[str, object] = {}
 
@@ -253,68 +340,32 @@ async def test_run_refresh_index_replans_all_files_for_readme_only_change(
         )
 
     async def fake_generate_page_batch(specs_with_children, *args, on_result, **kwargs):
-        for spec, _children in specs_with_children:
-            await on_result(
-                PageResult(slug=spec.slug, title=spec.title, content="new content"),
-                spec,
-            )
+        spec = specs_with_children[0][0]
+        await on_result(
+            PageResult(slug=spec.slug, title=spec.title, content="new content"), spec
+        )
         return []
 
-    mock_embedding.dimension = 1536
-    with (
-        patch("worker.index.refresh.get_config") as mock_cfg,
-        patch(
-            "worker.index.refresh.clone_or_fetch",
-            new_callable=AsyncMock,
-            return_value=(new_sha, "main"),
-        ),
-        patch(
-            "worker.index.refresh.get_changed_files",
-            new_callable=AsyncMock,
-            return_value=["README.md"],
-        ),
-        patch(
-            "worker.index.refresh.filter_files", return_value=[clone_root / "main.py"]
-        ),
-        patch("worker.index.refresh.extract_readme", return_value="# New README"),
-        patch("worker.index.refresh.load_user_steering", return_value=None),
-        patch("worker.index.refresh.analyze_all_files", return_value=file_analysis),
-        patch(
-            "worker.index.refresh.build_dependency_graph",
-            return_value=DependencyGraph(edges={}, clusters=[["main.py"]]),
-        ),
-        patch("worker.index.refresh.build_fast_report_index", return_value={}),
-        patch("worker.index.refresh._make_faiss_store", return_value=MagicMock()),
-        patch("worker.index.refresh.build_rag_index", new_callable=AsyncMock),
-        patch("worker.index.refresh.make_llm_provider", return_value=mock_llm),
-        patch(
-            "worker.index.refresh.make_fast_llm_provider", return_value=mock_fast_llm
-        ),
-        patch(
-            "worker.index.refresh.make_embedding_provider", return_value=mock_embedding
-        ),
-        patch(
-            "worker.index.refresh.generate_wiki_plan",
-            new=fake_generate_wiki_plan,
-        ),
-        patch("worker.index.refresh.generate_page_batch", new=fake_generate_page_batch),
-    ):
-        cfg = mock_cfg.return_value
-        cfg.database_path = tmp_path / "test.db"
-        cfg.data_dir = tmp_path
-        await run_refresh_index(
-            {},
-            repo_id=repo_id,
-            job_id=job_id,
-            owner="o",
-            name="r",
-            clone_root=clone_root,
-        )
+    await _run_refresh_with_mocks(
+        tmp_path,
+        repo_id=repo_id,
+        job_id=job_id,
+        clone_root=clone_root,
+        mock_llm=mock_llm,
+        mock_fast_llm=mock_fast_llm,
+        mock_embedding=mock_embedding,
+        changed_files=["README.md"],
+        readme="# New README",
+        generate_wiki_plan=fake_generate_wiki_plan,
+        generate_page_batch=fake_generate_page_batch,
+    )
 
     try:
         assert captured["files"] == {"main.py"}
         assert captured["existing_titles"] == set()
     finally:
+        from shared.database import dispose_db
+
         await dispose_db(db_path)
 
 
@@ -324,76 +375,15 @@ async def test_run_refresh_index_keeps_existing_pages_if_generation_fails(
     """A refresh failure after a generated result must not delete live wiki rows."""
     from sqlalchemy import select as sa_select
 
-    from shared.database import dispose_db, get_session, init_db
-    from shared.models import Job, Repository, WikiPage
-    from worker.jobs import run_refresh_index
-    from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
-    from worker.pipeline.dependency_graph import DependencyGraph
+    from shared.database import dispose_db, get_session
+    from shared.models import WikiPage
     from worker.pipeline.page_generator import PageResult
     from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan
 
-    db_path = str(tmp_path / "test.db")
-    await init_db(db_path)
     repo_id = "failed_refresh_repo"
     job_id = str(uuid.uuid4())
-    old_sha = "old123"
-    new_sha = "new456"
-    clone_root = tmp_path / "clone"
-    clone_root.mkdir()
-
-    async with get_session(db_path) as s:
-        s.add(
-            Repository(
-                id=repo_id, owner="o", name="r", status="ready", last_commit=old_sha
-            )
-        )
-        s.add(
-            Job(id=job_id, repo_id=repo_id, type="refresh", status="queued", progress=0)
-        )
-        s.add(
-            WikiPage(
-                id="overview-row",
-                repo_id=repo_id,
-                slug="overview",
-                title="Overview",
-                content="old overview",
-                page_order=0,
-            )
-        )
-        await s.commit()
-
-    repo_data = tmp_path / "repos" / repo_id
-    ast_dir = repo_data / "ast"
-    wiki_dir = repo_data / "wiki"
-    ast_dir.mkdir(parents=True)
-    wiki_dir.mkdir()
-    (wiki_dir / "overview.md").write_text("old overview file")
-    (ast_dir / "wiki_plan.json").write_text(
-        json.dumps(
-            {
-                "repo_notes": [{"content": ""}],
-                "all_repo_files": ["main.py"],
-                "pages": [
-                    {
-                        "title": "Overview",
-                        "purpose": "High-level overview.",
-                        "files": ["main.py"],
-                    }
-                ],
-            }
-        )
-    )
-
-    file_analysis = FileAnalysis(
-        files={
-            "main.py": FileInfo(
-                rel_path="main.py",
-                entities=[],
-                class_count=0,
-                function_count=0,
-                summary="",
-            )
-        }
+    db_path, clone_root, wiki_dir = await _seed_refresh_repo(
+        tmp_path, repo_id=repo_id, job_id=job_id, write_markdown=True
     )
 
     async def fake_generate_wiki_plan(*args, **kwargs):
@@ -418,57 +408,19 @@ async def test_run_refresh_index_keeps_existing_pages_if_generation_fails(
         )
         raise RuntimeError("page generation failed")
 
-    mock_embedding.dimension = 1536
-    with (
-        patch("worker.index.refresh.get_config") as mock_cfg,
-        patch(
-            "worker.index.refresh.clone_or_fetch",
-            new_callable=AsyncMock,
-            return_value=(new_sha, "main"),
-        ),
-        patch(
-            "worker.index.refresh.get_changed_files",
-            new_callable=AsyncMock,
-            return_value=["main.py"],
-        ),
-        patch(
-            "worker.index.refresh.filter_files", return_value=[clone_root / "main.py"]
-        ),
-        patch("worker.index.refresh.extract_readme", return_value=""),
-        patch("worker.index.refresh.load_user_steering", return_value=None),
-        patch("worker.index.refresh.analyze_all_files", return_value=file_analysis),
-        patch(
-            "worker.index.refresh.build_dependency_graph",
-            return_value=DependencyGraph(edges={}, clusters=[["main.py"]]),
-        ),
-        patch("worker.index.refresh.build_fast_report_index", return_value={}),
-        patch("worker.index.refresh._make_faiss_store", return_value=MagicMock()),
-        patch("worker.index.refresh.build_rag_index", new_callable=AsyncMock),
-        patch("worker.index.refresh.make_llm_provider", return_value=mock_llm),
-        patch(
-            "worker.index.refresh.make_fast_llm_provider", return_value=mock_fast_llm
-        ),
-        patch(
-            "worker.index.refresh.make_embedding_provider", return_value=mock_embedding
-        ),
-        patch("worker.index.refresh.generate_wiki_plan", new=fake_generate_wiki_plan),
-        patch(
-            "worker.index.refresh.generate_page_batch",
-            new=failing_generate_page_batch,
-        ),
-    ):
-        cfg = mock_cfg.return_value
-        cfg.database_path = tmp_path / "test.db"
-        cfg.data_dir = tmp_path
-        with pytest.raises(RuntimeError, match="page generation failed"):
-            await run_refresh_index(
-                {},
-                repo_id=repo_id,
-                job_id=job_id,
-                owner="o",
-                name="r",
-                clone_root=clone_root,
-            )
+    with pytest.raises(RuntimeError, match="page generation failed"):
+        await _run_refresh_with_mocks(
+            tmp_path,
+            repo_id=repo_id,
+            job_id=job_id,
+            clone_root=clone_root,
+            mock_llm=mock_llm,
+            mock_fast_llm=mock_fast_llm,
+            mock_embedding=mock_embedding,
+            changed_files=["main.py"],
+            generate_wiki_plan=fake_generate_wiki_plan,
+            generate_page_batch=failing_generate_page_batch,
+        )
 
     try:
         async with get_session(db_path) as s:
