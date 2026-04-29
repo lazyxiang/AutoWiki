@@ -14,7 +14,7 @@ Implements the three-stage research flow:
     Synthesizer (LLM)       → final Markdown report
 
 Each helper is a pure async function — no DB, no WebSocket. The ARQ job
-in ``worker.jobs`` wires these together and streams events via the
+in ``worker.research.jobs`` wires these together and streams events via the
 ``on_event`` callback.
 """
 

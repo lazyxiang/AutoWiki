@@ -21,8 +21,8 @@ _FAKE_PLATFORM = MagicMock(
     authenticated_clone_url=MagicMock(return_value="https://github.com/o/r.git"),
 )
 _PLATFORM_PATCHES = [
-    ("worker.jobs.get_platform_token", dict(new=AsyncMock(return_value=None))),
-    ("worker.jobs.get_platform_by_name", dict(return_value=_FAKE_PLATFORM)),
+    ("worker.index.full.get_platform_token", dict(new=AsyncMock(return_value=None))),
+    ("worker.index.full.get_platform_by_name", dict(return_value=_FAKE_PLATFORM)),
 ]
 
 
@@ -54,6 +54,14 @@ def test_repo_metadata_updates_include_complete_falsy_metadata():
         "default_branch": "main",
         "is_private": False,
     }
+
+
+def test_worker_jobs_reexports_split_index_entrypoints():
+    from worker.index import jobs as index_jobs
+    from worker.jobs import run_full_index, run_refresh_index
+
+    assert run_full_index is index_jobs.run_full_index
+    assert run_refresh_index is index_jobs.run_refresh_index
 
 
 def _enter_platform_patches(stack: ExitStack) -> None:
@@ -100,17 +108,24 @@ async def test_full_index_job_updates_status(
 
     with ExitStack() as stack:
         stack.enter_context(
-            patch("worker.jobs.clone_or_fetch", return_value=("abc123def456", "main"))
+            patch(
+                "worker.index.full.clone_or_fetch",
+                return_value=("abc123def456", "main"),
+            )
         )
         _enter_platform_patches(stack)
         stack.enter_context(
-            patch("worker.jobs.make_llm_provider", return_value=mock_llm)
+            patch("worker.index.full.make_llm_provider", return_value=mock_llm)
         )
         stack.enter_context(
-            patch("worker.jobs.make_fast_llm_provider", return_value=mock_fast_llm)
+            patch(
+                "worker.index.full.make_fast_llm_provider", return_value=mock_fast_llm
+            )
         )
         stack.enter_context(
-            patch("worker.jobs.make_embedding_provider", return_value=mock_embedding)
+            patch(
+                "worker.index.full.make_embedding_provider", return_value=mock_embedding
+            )
         )
         from worker.jobs import run_full_index
 
@@ -145,23 +160,27 @@ async def test_run_full_index_persists_wiki_plan(
     mock_embedding.dimension = 1536
 
     with ExitStack() as stack:
-        mock_cfg = stack.enter_context(patch("worker.jobs.get_config"))
+        mock_cfg = stack.enter_context(patch("worker.index.full.get_config"))
         stack.enter_context(
             patch(
-                "worker.jobs.clone_or_fetch",
+                "worker.index.full.clone_or_fetch",
                 new_callable=AsyncMock,
                 return_value=("abc123", "main"),
             )
         )
         _enter_platform_patches(stack)
         stack.enter_context(
-            patch("worker.jobs.make_llm_provider", return_value=mock_llm)
+            patch("worker.index.full.make_llm_provider", return_value=mock_llm)
         )
         stack.enter_context(
-            patch("worker.jobs.make_fast_llm_provider", return_value=mock_fast_llm)
+            patch(
+                "worker.index.full.make_fast_llm_provider", return_value=mock_fast_llm
+            )
         )
         stack.enter_context(
-            patch("worker.jobs.make_embedding_provider", return_value=mock_embedding)
+            patch(
+                "worker.index.full.make_embedding_provider", return_value=mock_embedding
+            )
         )
         cfg = mock_cfg.return_value
         cfg.database_path = tmp_path / "test.db"
@@ -295,17 +314,21 @@ async def test_always_clears_existing_artifacts(
 
     with ExitStack() as stack:
         stack.enter_context(
-            patch("worker.jobs.clone_or_fetch", return_value=("newsha", "main"))
+            patch("worker.index.full.clone_or_fetch", return_value=("newsha", "main"))
         )
         _enter_platform_patches(stack)
         stack.enter_context(
-            patch("worker.jobs.make_llm_provider", return_value=mock_llm)
+            patch("worker.index.full.make_llm_provider", return_value=mock_llm)
         )
         stack.enter_context(
-            patch("worker.jobs.make_fast_llm_provider", return_value=mock_fast_llm)
+            patch(
+                "worker.index.full.make_fast_llm_provider", return_value=mock_fast_llm
+            )
         )
         stack.enter_context(
-            patch("worker.jobs.make_embedding_provider", return_value=mock_embedding)
+            patch(
+                "worker.index.full.make_embedding_provider", return_value=mock_embedding
+            )
         )
         from worker.jobs import run_full_index
 
@@ -368,7 +391,7 @@ async def test_full_index_first_time_failure_deletes_repository_metadata(tmp_pat
     with ExitStack() as stack:
         stack.enter_context(
             patch(
-                "worker.jobs.clone_or_fetch",
+                "worker.index.full.clone_or_fetch",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("clone failed"),
             )
@@ -452,30 +475,34 @@ async def test_full_index_restore_failure_preserves_original_error(
     with ExitStack() as stack:
         stack.enter_context(
             patch(
-                "worker.jobs.clone_or_fetch",
+                "worker.index.full.clone_or_fetch",
                 new_callable=AsyncMock,
                 return_value=("newsha", "main"),
             )
         )
         _enter_platform_patches(stack)
         stack.enter_context(
-            patch("worker.jobs.make_embedding_provider", return_value=mock_embedding)
+            patch(
+                "worker.index.full.make_embedding_provider", return_value=mock_embedding
+            )
         )
         stack.enter_context(
             patch(
-                "worker.jobs.analyze_all_files",
+                "worker.index.full.analyze_all_files",
                 side_effect=RuntimeError("analysis failed"),
             )
         )
         restore = stack.enter_context(
             patch(
-                "worker.jobs._restore_full_index_state",
+                "worker.index.full._restore_full_index_state",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("restore failed"),
             )
         )
         discard = stack.enter_context(
-            patch("worker.jobs._discard_full_index_backup", new_callable=AsyncMock)
+            patch(
+                "worker.index.full._discard_full_index_backup", new_callable=AsyncMock
+            )
         )
 
         from worker.jobs import run_full_index
@@ -504,7 +531,7 @@ async def test_full_index_restore_failure_preserves_original_error(
 async def test_snapshot_full_index_state_removes_partial_backup_on_failure(tmp_path):
     """Snapshot setup cleans up copied files when DB snapshot collection fails."""
     from shared.database import dispose_db
-    from worker.jobs import _snapshot_full_index_state
+    from worker.index.full import _snapshot_full_index_state
 
     db_path = await _setup_db(tmp_path)
     repo_data = tmp_path / "repos" / "missing-repo"
@@ -595,18 +622,20 @@ async def test_full_index_previously_indexed_failure_restores_db_and_files(
     with ExitStack() as stack:
         stack.enter_context(
             patch(
-                "worker.jobs.clone_or_fetch",
+                "worker.index.full.clone_or_fetch",
                 new_callable=AsyncMock,
                 return_value=("newsha", "main"),
             )
         )
         _enter_platform_patches(stack)
         stack.enter_context(
-            patch("worker.jobs.make_embedding_provider", return_value=mock_embedding)
+            patch(
+                "worker.index.full.make_embedding_provider", return_value=mock_embedding
+            )
         )
         stack.enter_context(
             patch(
-                "worker.jobs.analyze_all_files",
+                "worker.index.full.analyze_all_files",
                 side_effect=RuntimeError("analysis failed"),
             )
         )

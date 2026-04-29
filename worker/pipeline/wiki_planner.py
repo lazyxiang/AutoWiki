@@ -731,48 +731,8 @@ async def _generate_outline(
 
 
 def _tokenize(text: str) -> set[str]:
-    """Lowercase word tokens with length ≥ 3.  Used for page↔directory matching."""
+    """Lowercase word tokens with length ≥ 3 for heuristic scoring."""
     return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if len(w) >= 3}
-
-
-def _directory_key(rel_path: str) -> str:
-    """Return the first directory segment of ``rel_path``.
-
-    Files at the repo root return ``""``.
-    """
-    parts = rel_path.split("/", 1)
-    return parts[0] if len(parts) > 1 else ""
-
-
-def _best_matching_page(
-    dir_key: str,
-    page_tokens: dict[str, set[str]],
-    sample_files: list[str],
-) -> str | None:
-    """Return the title of the page whose tokens best match *dir_key*.
-
-    Scoring:
-    * +3 per overlapping token between dir_key and page tokens.
-    * +1 per overlapping token between any word in sample file basenames
-      and the page tokens.
-    * Ties broken by page order (first listed wins).
-    """
-    candidate_tokens: set[str] = _tokenize(dir_key)
-    for f in sample_files[:5]:
-        candidate_tokens |= _tokenize(f.replace("/", " "))
-
-    best_title: str | None = None
-    best_score = 0
-    for title, tokens in page_tokens.items():
-        overlap = candidate_tokens & tokens
-        if not overlap:
-            continue
-        dir_overlap = _tokenize(dir_key) & tokens
-        score = len(dir_overlap) * 3 + (len(overlap) - len(dir_overlap))
-        if score > best_score:
-            best_score = score
-            best_title = title
-    return best_title
 
 
 def _score_file_for_page(
@@ -826,88 +786,6 @@ def _prefilter_candidates(
     scored = [(f, s) for f, s in scored if s > 0]
     scored.sort(key=lambda x: x[1], reverse=True)
     return [f for f, _ in scored[:max_candidates]]
-
-
-def _directory_cluster_assign(
-    outline: list[dict],
-    all_files: list[str],
-) -> dict[str, list[str]]:
-    """Locality-preserving file assignment fallback.
-
-    Groups files by their top-level directory, then assigns each directory
-    group to the page whose title + purpose tokens best match the directory
-    name and sample file basenames.  Unmatched files go to the "Overview"
-    page if one exists, else to the first outline page.
-
-    When a single page would receive more than :const:`MAX_FILES_PER_PAGE`
-    files, the group is split across all pages whose tokens matched the
-    directory at all using remaining-capacity filling.
-
-    Args:
-        outline: The wiki outline (list of page dicts).
-        all_files: List of all files to assign.
-
-    Returns:
-        Mapping from page title to list of assigned files.
-    """
-    page_titles = [p["title"] for p in outline]
-    page_tokens: dict[str, set[str]] = {
-        p["title"]: _tokenize(p["title"] + " " + p.get("purpose", ""))
-        | {tok for kw in (p.get("en_keywords") or []) for tok in _tokenize(kw)}
-        for p in outline
-    }
-
-    # Bucket files by first directory segment
-    buckets: dict[str, list[str]] = {}
-    for f in all_files:
-        buckets.setdefault(_directory_key(f), []).append(f)
-
-    result: dict[str, list[str]] = {t: [] for t in page_titles}
-
-    # Overview fallback target
-    overview_title = next(
-        (t for t in page_titles if "overview" in t.lower()),
-        page_titles[0] if page_titles else None,
-    )
-
-    for dir_key, files in buckets.items():
-        if not dir_key:
-            # Files at repo root go to overview
-            if overview_title:
-                result[overview_title].extend(files)
-            continue
-
-        target = _best_matching_page(dir_key, page_tokens, files)
-        if target is None:
-            if overview_title:
-                result[overview_title].extend(files)
-            continue
-
-        # If the target would exceed the cap, try to split across all pages
-        # whose tokens overlap this directory using remaining-capacity filling.
-        if len(result[target]) + len(files) > MAX_FILES_PER_PAGE:
-            matching_pages = [
-                t for t in page_titles if _tokenize(dir_key) & page_tokens[t]
-            ]
-            remaining_capacity = {
-                title: max(0, MAX_FILES_PER_PAGE - len(result[title]))
-                for title in matching_pages
-            }
-            if len(matching_pages) > 1 and sum(remaining_capacity.values()) >= len(
-                files
-            ):
-                file_iter = iter(files)
-                try:
-                    for title in matching_pages:
-                        for _ in range(remaining_capacity[title]):
-                            result[title].append(next(file_iter))
-                except StopIteration:
-                    pass
-                continue
-
-        result[target].extend(files)
-
-    return result
 
 
 def _heuristic_select_files(

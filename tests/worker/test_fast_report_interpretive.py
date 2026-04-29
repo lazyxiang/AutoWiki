@@ -1,4 +1,4 @@
-from worker.fast_report_interpretive import (
+from worker.fast_report.interpretive import (
     InterpretiveBundle,
     build_interpretive_bundle,
 )

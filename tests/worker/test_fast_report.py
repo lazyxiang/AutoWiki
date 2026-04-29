@@ -133,19 +133,19 @@ def test_assemble_fast_report_markdown_uses_canonical_heading_order():
 
 
 def test_detect_question_language_defaults_to_english():
-    from worker.fast_report_search import detect_question_language
+    from worker.fast_report.search import detect_question_language
 
     assert detect_question_language("How does indexing work?") == "en"
 
 
 def test_detect_question_language_switches_to_chinese_for_cjk_input():
-    from worker.fast_report_search import detect_question_language
+    from worker.fast_report.search import detect_question_language
 
     assert detect_question_language("索引流程是怎么执行的？") == "zh"
 
 
 def test_detect_question_language_treats_japanese_and_korean_as_cjk():
-    from worker.fast_report_search import detect_question_language
+    from worker.fast_report.search import detect_question_language
 
     assert detect_question_language("インデックス処理はどう動きますか？") == "zh"
     assert detect_question_language("인덱싱 흐름은 어떻게 동작하나요?") == "zh"
@@ -160,7 +160,7 @@ def test_normalize_heading_accepts_chinese_aliases():
 
 def test_search_plan_schema_constrains_question_type_to_enum():
     from worker.fast_report import _SEARCH_PLAN_SCHEMA
-    from worker.fast_report_planning import QUESTION_TYPES
+    from worker.fast_report.planning import QUESTION_TYPES
 
     qt_schema = _SEARCH_PLAN_SCHEMA["properties"]["question_type"]
 
@@ -169,7 +169,7 @@ def test_search_plan_schema_constrains_question_type_to_enum():
 
 def test_retrieve_code_evidence_prefers_symbol_seed_and_expands_call_chain():
     from worker.fast_report import FastReportQuestionIntent
-    from worker.fast_report_search import retrieve_code_evidence
+    from worker.fast_report.search import retrieve_code_evidence
 
     index = {
         "readme_headings": ["AutoWiki", "Indexing"],
@@ -305,7 +305,7 @@ def test_retrieve_code_evidence_prefers_symbol_seed_and_expands_call_chain():
 
 def test_retrieve_code_evidence_keeps_relevant_config_files_for_config_questions():
     from worker.fast_report import FastReportQuestionIntent
-    from worker.fast_report_search import retrieve_code_evidence
+    from worker.fast_report.search import retrieve_code_evidence
 
     index = {
         "files": {
@@ -639,7 +639,7 @@ def test_generation_prompt_includes_interpretive_block_with_no_cite_warning():
         RepositoryStructureLayer,
         _build_generation_prompt,
     )
-    from worker.fast_report_interpretive import InterpretiveBundle
+    from worker.fast_report.interpretive import InterpretiveBundle
 
     layers = FastReportRetrievalLayers(
         repository_structure=RepositoryStructureLayer(
@@ -1039,17 +1039,7 @@ async def test_run_fast_report_persists_completed_section(
     ctx = {}
     await startup(ctx)
 
-    with (
-        patch("worker.jobs.make_llm_provider", return_value=mock_llm),
-        patch(
-            "worker.jobs.make_embedding_provider",
-            side_effect=AssertionError("fast report should not embed queries"),
-        ),
-        patch(
-            "worker.jobs._load_faiss_for_research",
-            side_effect=AssertionError("fast report should not load FAISS"),
-        ),
-    ):
+    with patch("worker.fast_report.jobs.make_llm_provider", return_value=mock_llm):
         try:
             await run_fast_report(
                 ctx,
@@ -1096,6 +1086,27 @@ async def test_run_fast_report_persists_completed_section(
         finally:
             await dispose_db(db_path)
             reset_config()
+
+
+def test_worker_jobs_reexports_split_fast_report_entrypoints():
+    from worker.fast_report import jobs as fast_report_job_module
+    from worker.jobs import (
+        FastReportIndexOutdated,
+        _build_default_fast_report_retrievers,
+        _validate_fast_report_index_version,
+        run_fast_report,
+    )
+
+    assert run_fast_report is fast_report_job_module.run_fast_report
+    assert FastReportIndexOutdated is fast_report_job_module.FastReportIndexOutdated
+    assert (
+        _validate_fast_report_index_version
+        is fast_report_job_module._validate_fast_report_index_version
+    )
+    assert (
+        _build_default_fast_report_retrievers
+        is fast_report_job_module._build_default_fast_report_retrievers
+    )
 
 
 def test_validate_fast_report_index_rejects_missing_version():

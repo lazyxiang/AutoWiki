@@ -142,13 +142,17 @@ AutoWiki/
 │   ├── routers/            # REST 接口 (仓库、任务、维基)
 │   └── ws/                 # WebSocket 任务进度
 ├── worker/                 # ARQ 后台 worker
+│   ├── jobs.py             # ARQ 任务入口兼容 facade
+│   ├── index/              # 完整索引与增量刷新任务编排
+│   ├── fast_report/        # Fast Report 服务、检索与任务编排
+│   ├── research/           # Deep Research 服务与任务编排
 │   ├── pipeline/           # 6 阶段生成流水线
 │   ├── llm/                # LLM 提供商适配器
 │   └── embedding/          # 嵌入提供商适配器
 ├── shared/                 # 配置、SQLAlchemy 模型、数据库
 ├── cli/                    # Typer CLI (索引、列表、启动、配置)
 ├── web/                    # Next.js 16 前端
-└── tests/                  # pytest 测试套件 (205 个测试, 80% 覆盖率)
+└── tests/                  # pytest 测试套件 (591 个后端测试, 80% 覆盖率)
 ```
 
 ---
@@ -192,7 +196,7 @@ AutoWiki/
 └─────────────────────────────────┘
 ```
 
-API 网关是无状态的 —— 它接受请求、读取 SQLite 并将任务推送到 Redis 队列。Worker 运行流水线并将结果写回 SQLite 和磁盘。Next.js 前端仅与 API 通信；它从不直接访问 Worker 或存储。
+API 网关是无状态的 —— 它接受请求、读取 SQLite 并将任务推送到 Redis 队列。Worker 运行流水线并将结果写回 SQLite 和磁盘。Next.js 前端仅与 API 通信；它从不直接访问 Worker 或存储。`worker/jobs.py` 保留为 ARQ 任务门面，完整索引编排位于 `worker/index/full.py`，增量刷新编排位于 `worker/index/refresh.py`，Fast Report 编排位于 `worker/fast_report/jobs.py`，Deep Research 编排位于 `worker/research/jobs.py`。
 
 ### 流水线 (6 阶段)
 
@@ -230,7 +234,7 @@ POST /api/repos {"url": "github.com/owner/repo"}
   → 在 Redis 上入队 run_full_index 任务
   → 返回 {repo_id, job_id}           [202 Accepted]
 
-Worker 领取任务:
+Worker 领取任务 (`worker.index.full.run_full_index`):
   第 1 阶段  clone/fetch → files[]            进度 5→20
   第 2 阶段  AST parse  → FileAnalysis        进度   →35
   第 3 阶段  dep graph  → DependencyGraph     进度   →45  (内部使用; 无 API)
@@ -256,9 +260,10 @@ WS /ws/jobs/{job_id}                 → 每秒流式传输 {progress, status}
 - **Phase 2.5** ✅ — 维基质量提升：两阶段规划器、4 阶段页面生成、提示词缓存、快速模型支持、RAG 微调、图表后处理
 - **Phase 3** ✅ — 深度研究模式：带有 LLM 规划器的多步 RAG 调查、单步 AST 上下文、综合 Markdown 报告；REST + WebSocket API；`autowiki research` CLI 命令 (PR #20)
 - **Phase 4** ✅ — 通过 `.autowiki/wiki.json` 进行用户引导：覆盖页面层次结构、将模块分配给页面、在生成中注入仓库/页面注释 (PR #20)
-- **Phase 4.5** ✅ — 规划器健壮性增强 (PR #22)：第 1 阶段大纲提示词中的架构锚点 (Layer C1)、`autowiki validate-plan` 离线诊断 CLI、`_assign_files` 中的反馈重试循环、各种错误修复（Gemini JSON、Mermaid、Docker）
+- **Phase 4.5** ✅ — 规划器健壮性增强 (PR #22)：第 1 阶段大纲提示词中的架构锚点 (Layer C1)、`autowiki validate-plan` 离线诊断 CLI、`_select_files` 中的反馈重试循环、各种错误修复（Gemini JSON、Mermaid、Docker）
 - **Phase 4.6** ✅ — 以页面为中心的文件选择 (PR #23)：第 2 阶段从以文件为中心的分配改为以页面为中心的选择（每页 5–8 个文件）；基于评分的预过滤 + 回退 (`_score_file_for_page`, `_heuristic_select_files`)；`WikiPlan.all_repo_files` 用于正确的刷新覆盖；移除孤立文件强制分配
-- **Phase 5** — GitLab/Bitbucket 支持、混合搜索、MCP 服务器
+- **Phase 5** ✅ — GitLab/Bitbucket 支持（公开和私有仓库、完整 API 元数据）+ 首页项目搜索 (PR #30)
+- **Phase 6** — 混合搜索（关键词 + 语义 BM25/FAISS 融合）
 
 ---
 

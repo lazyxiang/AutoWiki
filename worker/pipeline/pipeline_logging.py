@@ -66,8 +66,7 @@ def log_final_failure(
 
     Always emits ``ERROR`` with ``exc_info=True`` so the full traceback is
     captured.  Use this when the pipeline is about to hand off to a
-    heuristic fallback (e.g. directory-clustering assignment) or return a
-    degraded result.
+    deterministic heuristic fallback or return a degraded result.
     """
     ctx = _format_context(context)
     suffix = f" | {ctx}" if ctx else ""

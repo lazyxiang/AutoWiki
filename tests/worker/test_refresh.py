@@ -25,9 +25,9 @@ async def test_run_refresh_index_no_changes(tmp_path, mock_llm, mock_embedding):
         await s.commit()
 
     with (
-        patch("worker.jobs.get_config") as mock_cfg,
+        patch("worker.index.refresh.get_config") as mock_cfg,
         patch(
-            "worker.jobs.clone_or_fetch",
+            "worker.index.refresh.clone_or_fetch",
             new_callable=AsyncMock,
             return_value=("abc123", "main"),
         ),
@@ -110,20 +110,24 @@ async def test_run_refresh_index_with_changes(
     )
 
     with (
-        patch("worker.jobs.get_config") as mock_cfg,
+        patch("worker.index.refresh.get_config") as mock_cfg,
         patch(
-            "worker.jobs.clone_or_fetch",
+            "worker.index.refresh.clone_or_fetch",
             new_callable=AsyncMock,
             return_value=(new_sha, "main"),
         ),
         patch(
-            "worker.jobs.get_changed_files",
+            "worker.index.refresh.get_changed_files",
             new_callable=AsyncMock,
             return_value=["main.py"],
         ),
-        patch("worker.jobs.make_llm_provider", return_value=mock_llm),
-        patch("worker.jobs.make_fast_llm_provider", return_value=mock_fast_llm),
-        patch("worker.jobs.make_embedding_provider", return_value=mock_embedding),
+        patch("worker.index.refresh.make_llm_provider", return_value=mock_llm),
+        patch(
+            "worker.index.refresh.make_fast_llm_provider", return_value=mock_fast_llm
+        ),
+        patch(
+            "worker.index.refresh.make_embedding_provider", return_value=mock_embedding
+        ),
     ):
         cfg = mock_cfg.return_value
         cfg.database_path = tmp_path / "test.db"

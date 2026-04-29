@@ -6,13 +6,12 @@ configures logging, wires up Redis settings from the ``REDIS_URL`` environment
 variable, and hands control to ARQ's ``run_worker``.
 """
 
-from worker.jobs import (
+from worker.fast_report.jobs import (
     _build_default_fast_report_retrievers,
-    run_deep_research,
     run_fast_report,
-    run_full_index,
-    run_refresh_index,
 )
+from worker.index.jobs import run_full_index, run_refresh_index
+from worker.research.jobs import run_deep_research
 
 
 async def startup(ctx):
@@ -53,6 +52,9 @@ class WorkerSettings:
           repository (clone → AST → deps → RAG → plan → pages).
         - ``run_refresh_index``: Incremental refresh that re-runs the pipeline
           only for pages whose source files have changed since the last index.
+        - ``run_fast_report``: Generate one Fast Report section using the
+          repository fast-report index.
+        - ``run_deep_research``: Multi-step RAG investigation and report.
 
     Attributes:
         functions (list): Job callables registered with the ARQ broker.

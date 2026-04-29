@@ -142,13 +142,17 @@ AutoWiki/
 │   ├── routers/            # REST endpoints (repos, jobs, wiki)
 │   └── ws/                 # WebSocket job progress
 ├── worker/                 # ARQ background worker
+│   ├── jobs.py             # Compatibility facade for ARQ job entrypoints
+│   ├── index/              # Full-index and refresh job orchestration
+│   ├── fast_report/        # Fast Report service, retrieval, and job orchestration
+│   ├── research/           # Deep Research service and job orchestration
 │   ├── pipeline/           # 6-stage generation pipeline
 │   ├── llm/                # LLM provider adapters
 │   └── embedding/          # Embedding provider adapters
 ├── shared/                 # Config, SQLAlchemy models, database
 ├── cli/                    # Typer CLI (index, list, serve, config)
 ├── web/                    # Next.js 16 frontend
-└── tests/                  # pytest suite (205 tests, 80% coverage)
+└── tests/                  # pytest suite (591 backend tests, 80% coverage)
 ```
 
 ---
@@ -192,7 +196,7 @@ Browser / CLI
 └─────────────────────────────────┘
 ```
 
-The API gateway is stateless — it accepts requests, reads from SQLite, and pushes jobs onto a Redis queue. The worker runs the pipeline and writes results back to SQLite and disk. The Next.js frontend talks only to the API; it never touches the worker or storage directly.
+The API gateway is stateless — it accepts requests, reads from SQLite, and pushes jobs onto a Redis queue. The worker runs the pipeline and writes results back to SQLite and disk. The Next.js frontend talks only to the API; it never touches the worker or storage directly. `worker/jobs.py` remains the ARQ job facade, while full-index orchestration lives in `worker/index/full.py`, refresh orchestration lives in `worker/index/refresh.py`, Fast Report orchestration lives in `worker/fast_report/jobs.py`, and Deep Research orchestration lives in `worker/research/jobs.py`.
 
 ### Pipeline (6 stages)
 
@@ -230,7 +234,7 @@ POST /api/repos {"url": "github.com/owner/repo"}
   → enqueue run_full_index on Redis
   → return {repo_id, job_id}           [202 Accepted]
 
-Worker picks up job:
+Worker picks up job (`worker.index.full.run_full_index`):
   Stage 1  clone/fetch → files[]            progress 5→20
   Stage 2  AST parse  → FileAnalysis        progress   →35
   Stage 3  dep graph  → DependencyGraph     progress   →45  (internal; no API surface)
