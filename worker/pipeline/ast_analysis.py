@@ -22,6 +22,7 @@ Typical usage::
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -87,6 +88,11 @@ _DOCSTRING_CONTAINERS = {
     "expression_statement",  # Python: docstring as first expr in body
 }
 
+_PYTHON_ENV_GET_RE = re.compile(
+    r"os\.(?:getenv|environ\.get)\(\s*([\"'])(?P<key>[^\"']+)\1"
+)
+_PYTHON_ENV_INDEX_RE = re.compile(r"os\.environ\[\s*([\"'])(?P<key>[^\"']+)\1\s*\]")
+
 
 def analyze_file(path: Path) -> dict[str, Any] | None:
     """Parse a single source file with Tree-Sitter and extract named entities.
@@ -146,7 +152,258 @@ def analyze_file(path: Path) -> dict[str, Any] | None:
     parser = Parser(lang)
     tree = parser.parse(source)
     entities = _extract_entities(tree.root_node, source)
-    return {"path": str(path), "entities": entities}
+    _attach_leading_comments(entities, source)
+    return {
+        "path": str(path),
+        "entities": entities,
+        "module_docstring": _get_module_docstring(path, tree.root_node, source),
+        "extras": _extract_file_extras(path, tree.root_node, source, entities),
+    }
+
+
+def _get_module_docstring(path: Path, root_node: Any, source: bytes) -> str | None:
+    """Return the file-level docstring/comment using the existing parse tree."""
+    if path.suffix.lower() == ".py":
+        return _python_module_docstring(root_node)
+
+    text = source.decode("utf-8", errors="replace")
+    stripped = text.lstrip()
+    if path.suffix.lower() in {".js", ".jsx", ".ts", ".tsx"} and stripped.startswith(
+        "/**"
+    ):
+        end = stripped.find("*/")
+        if end != -1:
+            return _clean_comment_text(stripped[: end + 2])[:300]
+
+    if path.suffix.lower() == ".go":
+        comments: list[str] = []
+        for line in text.splitlines():
+            stripped_line = line.strip()
+            if stripped_line.startswith("//"):
+                comments.append(stripped_line)
+                continue
+            if stripped_line.startswith("package "):
+                break
+            if stripped_line:
+                comments = []
+                break
+        cleaned = _clean_comment_text("\n".join(comments))
+        return cleaned[:300] if cleaned else None
+
+    return None
+
+
+def _python_module_docstring(root_node: Any) -> str | None:
+    for child in root_node.children:
+        if child.type == "expression_statement":
+            for sub in child.children:
+                if sub.type == "string":
+                    raw = sub.text.decode("utf-8", errors="replace")
+                    for quote in ('"""', "'''"):
+                        if raw.startswith(quote) and raw.endswith(quote):
+                            raw = raw[3:-3]
+                            break
+                        if raw.startswith(quote[0]) and raw.endswith(quote[0]):
+                            raw = raw[1:-1]
+                            break
+                    return raw.strip()[:300] or None
+            return None
+        if child.type == "comment":
+            continue
+        return None
+    return None
+
+
+def _attach_leading_comments(entities: list[dict[str, Any]], source: bytes) -> None:
+    lines = source.decode("utf-8", errors="replace").splitlines()
+    for entity in entities:
+        start_line = entity.get("start_line")
+        if not isinstance(start_line, int) or start_line <= 1:
+            continue
+        comment = _leading_comment_before(lines, start_line)
+        if comment:
+            entity["leading_comment"] = comment[:300]
+
+
+def _leading_comment_before(lines: list[str], start_line: int) -> str | None:
+    idx = start_line - 2
+    if idx < 0 or not _is_comment_line(lines[idx]):
+        return None
+
+    block: list[str] = []
+    while idx >= 0 and _is_comment_line(lines[idx]):
+        block.append(lines[idx])
+        idx -= 1
+    cleaned = _clean_comment_text("\n".join(reversed(block)))
+    return cleaned or None
+
+
+def _is_comment_line(line: str) -> bool:
+    stripped = line.strip()
+    return (
+        stripped.startswith("#")
+        or stripped.startswith("//")
+        or stripped.startswith("/*")
+        or stripped.startswith("*")
+        or stripped.endswith("*/")
+    )
+
+
+def _clean_comment_text(raw: str) -> str:
+    cleaned_lines: list[str] = []
+    for line in raw.splitlines():
+        stripped = line.strip()
+        for marker in ("/**", "*/", "/*", "//", "#"):
+            stripped = stripped.removeprefix(marker).strip()
+        stripped = stripped.removeprefix("*").strip()
+        if stripped:
+            cleaned_lines.append(stripped)
+    return " ".join(cleaned_lines).strip()
+
+
+def _extract_file_extras(
+    path: Path,
+    root_node: Any,
+    source: bytes,
+    entities: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    if path.suffix.lower() != ".py":
+        return {
+            "call_sites": [],
+            "exception_touchpoints": [],
+            "config_touchpoints": [],
+        }
+
+    call_sites: list[dict[str, Any]] = []
+    exception_touchpoints: list[dict[str, Any]] = []
+    config_touchpoints: list[dict[str, Any]] = []
+
+    def enclosing_entity(line: int) -> dict[str, Any] | None:
+        matches = [
+            entity
+            for entity in entities
+            if isinstance(entity.get("start_line"), int)
+            and isinstance(entity.get("end_line"), int)
+            and entity["start_line"] <= line <= entity["end_line"]
+        ]
+        if not matches:
+            return None
+        return max(matches, key=lambda entity: entity["start_line"])
+
+    def symbol_for(line: int) -> str:
+        entity = enclosing_entity(line)
+        return entity.get("name", "module") if entity else "module"
+
+    def scope_for(line: int) -> str:
+        return "function" if enclosing_entity(line) else "module"
+
+    def visit(node: Any) -> None:
+        line = node.start_point[0] + 1
+        if node.type == "call":
+            callee = _callee_name(node)
+            if callee:
+                call_sites.append(
+                    {
+                        "caller_symbol_path": symbol_for(line),
+                        "callee_name": callee,
+                        "line": line,
+                    }
+                )
+            key = _config_key_from_call(node)
+            if key:
+                config_touchpoints.append(
+                    {
+                        "kind": "read",
+                        "config_key": key,
+                        "line": line,
+                        "scope": scope_for(line),
+                    }
+                )
+        elif node.type == "subscript":
+            key = _config_key_from_subscript(node)
+            if key:
+                config_touchpoints.append(
+                    {
+                        "kind": "read",
+                        "config_key": key,
+                        "line": line,
+                        "scope": scope_for(line),
+                    }
+                )
+        elif node.type == "try_statement":
+            exception_touchpoints.append(
+                {
+                    "kind": "try",
+                    "symbol_path": symbol_for(line),
+                    "line": line,
+                    "message": None,
+                }
+            )
+        elif node.type == "except_clause":
+            exception_touchpoints.append(
+                {
+                    "kind": "except",
+                    "symbol_path": symbol_for(line),
+                    "line": line,
+                    "message": None,
+                }
+            )
+        elif node.type == "raise_statement":
+            exception_touchpoints.append(
+                {
+                    "kind": "raise",
+                    "symbol_path": symbol_for(line),
+                    "line": line,
+                    "message": _literal_string_in_text(
+                        node.text.decode("utf-8", errors="replace")
+                    ),
+                }
+            )
+
+        for child in node.children:
+            visit(child)
+
+    visit(root_node)
+    return {
+        "call_sites": call_sites,
+        "exception_touchpoints": exception_touchpoints,
+        "config_touchpoints": config_touchpoints,
+    }
+
+
+def _callee_name(node: Any) -> str | None:
+    function_node = node.child_by_field_name("function")
+    if function_node is None:
+        return None
+    text = function_node.text.decode("utf-8", errors="replace")
+    parts = re.findall(r"[A-Za-z_][A-Za-z0-9_]*", text)
+    return parts[-1] if parts else None
+
+
+def _config_key_from_call(node: Any) -> str | None:
+    text = node.text.decode("utf-8", errors="replace")
+    if not (
+        text.startswith("os.getenv")
+        or text.startswith("os.environ.get")
+        or text.startswith("os.environ[")
+    ):
+        return None
+    for pattern in (_PYTHON_ENV_GET_RE, _PYTHON_ENV_INDEX_RE):
+        match = pattern.search(text)
+        if match:
+            return match.group("key")
+    return None
+
+
+def _config_key_from_subscript(node: Any) -> str | None:
+    text = node.text.decode("utf-8", errors="replace")
+    match = _PYTHON_ENV_INDEX_RE.search(text)
+    return match.group("key") if match else None
+
+
+def _literal_string_in_text(text: str) -> str | None:
+    match = re.search(r"([\"'])(?P<message>[^\"']+)\1", text)
+    return match.group("message") if match else None
 
 
 def _get_signature(node: Any, source: bytes) -> str | None:
@@ -369,6 +626,8 @@ class FileInfo:
 
     rel_path: str
     entities: list[dict] = field(default_factory=list)
+    module_docstring: str | None = None
+    extras: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     class_count: int = 0
     function_count: int = 0
     summary: str = ""  # comma-joined top-20 entity names
@@ -582,6 +841,8 @@ def analyze_all_files(root: Path, files: list[Path]) -> FileAnalysis:
 
         analysis = analyze_file(f)
         entities: list[dict] = analysis["entities"] if analysis else []
+        module_docstring = analysis.get("module_docstring") if analysis else None
+        extras = analysis.get("extras", {}) if analysis else {}
 
         class_count = sum(1 for e in entities if e["type"] == "class")
         function_count = sum(1 for e in entities if e["type"] == "function")
@@ -590,6 +851,8 @@ def analyze_all_files(root: Path, files: list[Path]) -> FileAnalysis:
         result[rel_path] = FileInfo(
             rel_path=rel_path,
             entities=entities,
+            module_docstring=module_docstring,
+            extras=extras,
             class_count=class_count,
             function_count=function_count,
             summary=summary,

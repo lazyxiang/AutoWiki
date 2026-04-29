@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -25,6 +26,15 @@ async def _prep_repo(db_path: str):
             )
         )
         await s.commit()
+    _write_fast_report_index(db_path, "r1", {"index_version": 2, "files": {}})
+
+
+def _write_fast_report_index(db_path: str, repo_id: str, payload: dict) -> None:
+    index_path = (
+        Path(db_path).parent / "repos" / repo_id / "ast" / "fast_report_index.json"
+    )
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    index_path.write_text(json.dumps(payload))
 
 
 @pytest.fixture
@@ -103,6 +113,54 @@ async def test_start_fast_report_returns_ids_and_persists_queued_rows(
                 "question": "How does indexing work?",
             }
         ]
+    finally:
+        await dispose_db(db_path)
+
+
+async def test_start_fast_report_returns_409_when_index_missing_or_v1(
+    fast_report_env, monkeypatch
+):
+    """POST rejects repositories whose deterministic fast-report index is stale."""
+    from api.main import app
+    from shared.database import dispose_db
+
+    db_path = fast_report_env
+    await _prep_repo(db_path)
+
+    enqueue_calls: list[dict] = []
+
+    async def _fake_enqueue(*args, **kwargs):
+        enqueue_calls.append(kwargs)
+
+    monkeypatch.setattr("api.routers.fast_report._enqueue_fast_report", _fake_enqueue)
+    index_path = (
+        Path(db_path).parent / "repos" / "r1" / "ast" / "fast_report_index.json"
+    )
+    index_path.unlink()
+
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/api/repos/r1/fast-reports",
+                json={"question": "How does indexing work?"},
+            )
+            assert response.status_code == 409
+            assert response.json()["detail"]["error"] == "fast_report_index_outdated"
+
+            _write_fast_report_index(db_path, "r1", {"index_version": 1, "files": {}})
+            response = await client.post(
+                "/api/repos/r1/fast-reports",
+                json={"question": "How does indexing work?"},
+            )
+            assert response.status_code == 409
+            assert (
+                response.json()["detail"]["actionable_command"]
+                == "autowiki index <repo>"
+            )
+
+        assert enqueue_calls == []
     finally:
         await dispose_db(db_path)
 
@@ -376,6 +434,7 @@ async def test_start_fast_report_appends_section_to_existing_unexpired_report(
 
     db_path = fast_report_env
     await init_db(db_path)
+    _write_fast_report_index(db_path, "r1", {"index_version": 2, "files": {}})
     calls: list[dict] = []
 
     async def _fake_enqueue(*args, **kwargs):
@@ -399,7 +458,7 @@ async def test_start_fast_report_appends_section_to_existing_unexpired_report(
                 FastReport(
                     id="fr1",
                     repo_id="r1",
-                    commit_sha="old-sha",
+                    commit_sha="new-sha",
                     status="done",
                     expires_at=datetime.now(UTC) + timedelta(days=3),
                 )
@@ -456,7 +515,7 @@ async def test_start_fast_report_appends_section_to_existing_unexpired_report(
 
             assert report is not None
             assert report.status == "queued"
-            assert report.commit_sha == "old-sha"
+            assert report.commit_sha == "new-sha"
             assert report.active_section_id == "sec-old"
             now_naive = datetime.now(UTC).replace(tzinfo=None)
             assert report.expires_at > now_naive + timedelta(days=6)
@@ -555,6 +614,51 @@ async def test_get_fast_report_returns_410_for_expired_report(fast_report_env):
         await dispose_db(db_path)
 
 
+async def test_get_fast_report_returns_410_when_commit_sha_mismatches(
+    fast_report_env,
+):
+    """Reports are invalid once the repository has been reindexed at a new SHA."""
+    from api.main import app
+    from shared.database import dispose_db, get_session, init_db
+    from shared.models import FastReport, Job, Repository
+
+    db_path = fast_report_env
+    await init_db(db_path)
+
+    try:
+        async with get_session(db_path) as s:
+            s.add(
+                Repository(
+                    id="r1",
+                    owner="o",
+                    name="n",
+                    status="ready",
+                    last_commit="new-sha",
+                )
+            )
+            s.add(Job(id="fr-old", repo_id="r1", type="fast_report", status="done"))
+            s.add(
+                FastReport(
+                    id="fr-old",
+                    repo_id="r1",
+                    commit_sha="old-sha",
+                    status="done",
+                    expires_at=datetime.now(UTC) + timedelta(days=6),
+                )
+            )
+            await s.commit()
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get("/api/repos/r1/fast-reports/fr-old")
+
+        assert response.status_code == 410
+        assert response.json()["detail"] == "Report expired"
+    finally:
+        await dispose_db(db_path)
+
+
 async def test_ws_fast_report_streams_section_and_report_completion(fast_report_env):
     """Completed reports stream section_complete followed by report_complete."""
     from starlette.testclient import TestClient
@@ -609,6 +713,48 @@ async def test_ws_fast_report_streams_section_and_report_completion(fast_report_
         "active_section_id": "sec1",
         "status": "done",
     }
+
+
+async def test_ws_fast_report_closes_with_4008_on_sha_mismatch(fast_report_env):
+    """WebSocket reloads use the same stale-SHA invalidation as REST reloads."""
+    from starlette.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
+
+    from api.main import app
+    from shared.database import get_session, init_db
+    from shared.models import FastReport, Job, Repository
+
+    db_path = fast_report_env
+    await init_db(db_path)
+
+    async with get_session(db_path) as s:
+        s.add(
+            Repository(
+                id="r1",
+                owner="o",
+                name="n",
+                status="ready",
+                last_commit="new-sha",
+            )
+        )
+        s.add(Job(id="fr-old", repo_id="r1", type="fast_report", status="done"))
+        s.add(
+            FastReport(
+                id="fr-old",
+                repo_id="r1",
+                commit_sha="old-sha",
+                status="done",
+                expires_at=datetime.now(UTC) + timedelta(days=6),
+            )
+        )
+        await s.commit()
+
+    with TestClient(app) as client:
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            with client.websocket_connect("/ws/repos/r1/fast-reports/fr-old") as ws:
+                ws.receive_json()
+
+    assert exc_info.value.code == 4008
 
 
 async def test_ws_fast_report_emits_persisted_failure_detail(fast_report_env):
@@ -666,6 +812,64 @@ async def test_ws_fast_report_emits_persisted_failure_detail(fast_report_env):
         "type": "error",
         "content": "Fast report retriever factory was not configured",
     }
+
+
+async def test_ws_fast_report_emits_structured_outdated_index_error(
+    fast_report_env,
+):
+    """Worker-side outdated-index failures use the same actionable payload as REST."""
+    from starlette.testclient import TestClient
+
+    from api.main import app
+    from shared.database import get_session, init_db
+    from shared.models import FastReport, FastReportSection, Job, Repository
+
+    db_path = fast_report_env
+    await init_db(db_path)
+    async with get_session(db_path) as s:
+        s.add(Repository(id="r1", owner="o", name="n", status="ready"))
+        s.add(
+            Job(
+                id="fr-old-index",
+                repo_id="r1",
+                type="fast_report",
+                status="failed",
+                error="fast_report_index_outdated: Repository index is outdated",
+            )
+        )
+        s.add(
+            FastReport(
+                id="fr-old-index",
+                repo_id="r1",
+                commit_sha="deadbeef",
+                status="failed",
+                expires_at=datetime.now(UTC) + timedelta(days=7),
+            )
+        )
+        s.add(
+            FastReportSection(
+                id="sec-old-index",
+                report_id="fr-old-index",
+                query="Why did it fail?",
+                title="Pending",
+                summary=None,
+                markdown="",
+                citations_json="[]",
+                evidence_blocks_json="[]",
+                related_wiki_pages_json="[]",
+                related_diagrams_json="[]",
+                status="failed",
+            )
+        )
+        await s.commit()
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/repos/r1/fast-reports/fr-old-index") as ws:
+            msg = ws.receive_json()
+
+    assert msg["type"] == "error"
+    assert msg["content"]["error"] == "fast_report_index_outdated"
+    assert msg["content"]["actionable_command"] == "autowiki index <repo>"
 
 
 async def test_ws_fast_report_404_closes_with_4004(fast_report_env):

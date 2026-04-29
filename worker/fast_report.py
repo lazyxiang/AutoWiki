@@ -11,6 +11,7 @@ retrieval layers:
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -23,6 +24,18 @@ from shared.fast_report_types import (
     FastReportWikiLink,
 )
 from worker.deep_research import format_retrieved_chunks_for_prompt
+from worker.fast_report_interpretive import (
+    InterpretiveBundle,
+    build_interpretive_bundle,
+)
+from worker.fast_report_planning import (
+    QUESTION_TYPES,
+    build_plan_prompt_context,
+    expansion_graph_for,
+)
+from worker.fast_report_search import (
+    _tokenize as _tokenize_intent,
+)
 from worker.fast_report_search import (
     detect_question_language,
     normalize_fast_report_language,
@@ -30,6 +43,9 @@ from worker.fast_report_search import (
 )
 from worker.llm.base import LLMProvider
 from worker.pipeline.language import get_fast_report_language_instruction
+from worker.pipeline.pipeline_logging import log_final_failure, log_validation_retry
+
+logger = logging.getLogger(__name__)
 
 CANONICAL_HEADINGS = [
     "Overview",
@@ -104,6 +120,7 @@ class FastReportQuestionIntent:
     evidence_shape: str = ""
     search_terms: list[str] = field(default_factory=list)
     retrieval_focus: list[str] = field(default_factory=list)
+    plan_retried: bool = False
 
 
 @dataclass(slots=True)
@@ -117,6 +134,7 @@ class CodeEvidenceLayer:
     snippets: list[dict[str, Any]] = field(default_factory=list)
     citations: list[FastReportCitation] = field(default_factory=list)
     evidence_blocks: list[FastReportEvidenceBlock] = field(default_factory=list)
+    retrieval_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -131,6 +149,7 @@ class FastReportRetrievalLayers:
     repository_structure: RepositoryStructureLayer
     code_evidence: CodeEvidenceLayer
     curated_knowledge: CuratedKnowledgeLayer
+    interpretive: InterpretiveBundle = field(default_factory=InterpretiveBundle)
 
 
 @dataclass(slots=True)
@@ -156,6 +175,8 @@ class FastReportSectionResult:
     evidence_blocks: list[FastReportEvidenceBlock] = field(default_factory=list)
     related_wiki_pages: list[FastReportWikiLink] = field(default_factory=list)
     related_diagrams: list[FastReportDiagram] = field(default_factory=list)
+    interpretive_sources: list[dict[str, Any]] = field(default_factory=list)
+    analysis_events: list[dict[str, Any]] = field(default_factory=list)
 
 
 RepositoryStructureRetriever = Callable[
@@ -172,7 +193,7 @@ _SEARCH_PLAN_SCHEMA = {
     "type": "object",
     "properties": {
         "language": {"type": "string"},
-        "question_type": {"type": "string"},
+        "question_type": {"type": "string", "enum": list(QUESTION_TYPES)},
         "target": {"type": "string"},
         "answer_shape": {"type": "string"},
         "evidence_shape": {"type": "string"},
@@ -231,33 +252,89 @@ _SECTION_SCHEMA = {
 
 
 async def plan_fast_report_search(
-    question: str, repo_name: str, llm: LLMProvider
+    question: str,
+    repo_name: str,
+    llm: LLMProvider,
+    *,
+    index: dict[str, Any] | None = None,
 ) -> FastReportQuestionIntent:
     """Plan fast-report retrieval with a structured, language-aware intent."""
     detected_language = normalize_fast_report_language(
         detect_question_language(question)
     )
     search_language = detected_language
+    repo_shape = build_plan_prompt_context(index or {}) if index is not None else ""
     prompt = (
         "Plan the repository search strategy for fast report generation.\n"
         f"Repository: {repo_name}\n"
         f"Question: {question}\n\n"
+        f"{repo_shape}\n\n"
         "Return JSON with language, question_type, target, answer_shape, "
         "evidence_shape, search_terms, and retrieval_focus.\n"
         f"Use '{search_language}' for language unless the question clearly "
         "requires a different answer language."
         f"{get_fast_report_language_instruction(search_language)}"
     )
-    raw = await llm.generate_structured(prompt, _SEARCH_PLAN_SCHEMA)
+    intent = _parse_plan_response(
+        await llm.generate_structured(prompt, _SEARCH_PLAN_SCHEMA),
+        fallback_language=search_language,
+    )
+    if not _is_degenerate_plan(intent):
+        return intent
+
+    log_validation_retry(
+        logger,
+        stage="fast_report.plan",
+        attempt=1,
+        max_retries=2,
+        exc=ValueError("degenerate plan"),
+        context={"repo": repo_name, "question": question},
+    )
+    retry_prompt = (
+        f"{prompt}\n\n"
+        "Your previous plan returned no question_type and no retrieval hints. "
+        "Re-plan the search. Choose one of the enumerated question_type values "
+        "and return at least one retrieval_focus hint pointing at a real path "
+        "or symbol."
+    )
+    retry_intent = _parse_plan_response(
+        await llm.generate_structured(retry_prompt, _SEARCH_PLAN_SCHEMA),
+        fallback_language=search_language,
+    )
+    retry_intent.plan_retried = True
+    if _is_degenerate_plan(retry_intent):
+        log_final_failure(
+            logger,
+            stage="fast_report.plan",
+            exc=ValueError("plan still degenerate after retry"),
+            context={"repo": repo_name, "question": question},
+        )
+    return retry_intent
+
+
+def _is_degenerate_plan(intent: FastReportQuestionIntent) -> bool:
+    return (
+        intent.question_type == "unknown"
+        and not intent.search_terms
+        and not intent.retrieval_focus
+    )
+
+
+def _parse_plan_response(
+    raw: dict[str, Any], *, fallback_language: str
+) -> FastReportQuestionIntent:
     raw_language = raw.get("language")
     planned_language = (
         normalize_fast_report_language(raw_language)
         if raw_language
-        else search_language
+        else fallback_language
     )
+    question_type = str(raw.get("question_type", "unknown") or "unknown").strip()
+    if question_type not in QUESTION_TYPES:
+        question_type = "unknown"
     return FastReportQuestionIntent(
         language=planned_language,
-        question_type=raw.get("question_type", "unknown"),
+        question_type=question_type,
         target=str(raw.get("target", "") or "").strip(),
         answer_shape=str(raw.get("answer_shape", "") or "").strip(),
         evidence_shape=str(raw.get("evidence_shape", "") or "").strip(),
@@ -296,8 +373,10 @@ async def retrieve_fast_report_layers(
     repository_structure_retriever: RepositoryStructureRetriever,
     code_evidence_retriever: CodeEvidenceRetriever,
     curated_knowledge_retriever: CuratedKnowledgeRetriever,
+    *,
+    index: dict[str, Any] | None = None,
 ) -> FastReportRetrievalLayers:
-    """Fetch the three context layers in parallel."""
+    """Fetch context layers in parallel and attach interpretive context."""
     structure, code, curated = await asyncio.gather(
         retrieve_repository_structure_layer(
             question, intent, repository_structure_retriever
@@ -305,11 +384,69 @@ async def retrieve_fast_report_layers(
         retrieve_code_evidence_layer(question, intent, code_evidence_retriever),
         retrieve_curated_knowledge_layer(question, intent, curated_knowledge_retriever),
     )
+    selected_entities = _selected_interpretive_entities(index or {}, code)
+    intent_tokens = _interpretive_intent_tokens(question, intent)
+    interpretive = build_interpretive_bundle(
+        selected_entities=selected_entities,
+        index=index or {},
+        intent_tokens=intent_tokens,
+    )
     return FastReportRetrievalLayers(
         repository_structure=structure,
         code_evidence=code,
         curated_knowledge=curated,
+        interpretive=interpretive,
     )
+
+
+def _selected_interpretive_entities(
+    index: dict[str, Any], code: CodeEvidenceLayer
+) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    files = index.get("files") or {}
+    citations_by_id = {citation.id: citation for citation in code.citations}
+    seen: set[tuple[str, str]] = set()
+    for block in code.evidence_blocks:
+        citation = citations_by_id.get(block.citation_id)
+        if citation is None or not block.symbol_path:
+            continue
+        dedupe_key = (citation.file_path, block.symbol_path)
+        if dedupe_key in seen:
+            continue
+        file_entry = files.get(citation.file_path)
+        if not isinstance(file_entry, dict):
+            continue
+        for entity in file_entry.get("entities") or []:
+            if entity.get("symbol_path") != block.symbol_path:
+                continue
+            seen.add(dedupe_key)
+            selected.append(
+                {
+                    "file": citation.file_path,
+                    "name": entity.get("name"),
+                    "score": citation.score or 0.0,
+                    "docstring": entity.get("docstring"),
+                    "leading_comment": entity.get("leading_comment"),
+                    "module_docstring": file_entry.get("module_docstring"),
+                }
+            )
+            break
+    return selected
+
+
+def _interpretive_intent_tokens(
+    question: str, intent: FastReportQuestionIntent
+) -> set[str]:
+    tokens = _tokenize_intent(question)
+    intent_fields = [
+        intent.question_type,
+        intent.target,
+        intent.answer_shape,
+        intent.evidence_shape,
+    ]
+    for item in intent_fields + intent.search_terms + intent.retrieval_focus:
+        tokens |= _tokenize_intent(item)
+    return tokens
 
 
 def arbitrate_report_claims(
@@ -528,6 +665,7 @@ def _build_generation_prompt(
             for page in layers.curated_knowledge.wiki_pages
         ]
     )
+    interpretive_block = _format_interpretive_context(layers.interpretive)
     search_terms = "\n".join(f"- {term}" for term in intent.search_terms)
     retrieval_focus = "\n".join(f"- {item}" for item in intent.retrieval_focus)
     return (
@@ -547,12 +685,40 @@ def _build_generation_prompt(
         f"{structure_summary or '- None'}\n\n"
         "Code evidence layer:\n"
         f"{code_context}\n\n"
+        "Interpretive context layer:\n"
+        f"{interpretive_block}\n\n"
+        "Use this interpretive layer ONLY to explain or connect code evidence. "
+        "Never cite it as primary support. Final claims must cite "
+        "repository_structure or code_evidence ids.\n\n"
         "Curated knowledge layer:\n"
         f"{curated_summary or '- None'}\n\n"
         "Use the canonical headings where relevant. Final claims must cite code "
         "or repository structure evidence."
         f"{get_fast_report_language_instruction(intent.language)}"
     )
+
+
+def _format_interpretive_context(bundle: InterpretiveBundle) -> str:
+    lines: list[str] = []
+    for entry in bundle.entries:
+        source = entry.get("source")
+        if source == "module_docstring":
+            lines.append(
+                f"- Module docstring ({entry.get('file')}): {entry.get('text')}"
+            )
+        elif source == "entity_docstring":
+            lines.append(
+                f"- Entity docstring ({entry.get('name')}): {entry.get('text')}"
+            )
+        elif source == "entity_leading_comment":
+            lines.append(
+                f"- Entity leading comment ({entry.get('name')}): {entry.get('text')}"
+            )
+        elif source == "readme_section":
+            lines.append(
+                f'- README section "{entry.get("heading")}": {entry.get("text")}'
+            )
+    return "\n".join(lines) or "- (no interpretive context available)"
 
 
 def _parse_draft_sections(
@@ -590,18 +756,25 @@ async def generate_fast_report_section(
     repository_structure_retriever: RepositoryStructureRetriever,
     code_evidence_retriever: CodeEvidenceRetriever,
     curated_knowledge_retriever: CuratedKnowledgeRetriever,
+    fast_report_index: dict[str, Any] | None = None,
 ) -> FastReportSectionResult:
     """Generate one fast report section from layered retrieval context."""
-    intent = await plan_fast_report_search(question, repo_name, llm)
+    intent = await plan_fast_report_search(
+        question, repo_name, llm, index=fast_report_index
+    )
     layers = await retrieve_fast_report_layers(
         question=question,
         intent=intent,
         repository_structure_retriever=repository_structure_retriever,
         code_evidence_retriever=code_evidence_retriever,
         curated_knowledge_retriever=curated_knowledge_retriever,
+        index=fast_report_index,
     )
     prompt = _build_generation_prompt(question, repo_name, intent, layers)
     raw = await llm.generate_structured(prompt, _SECTION_SCHEMA)
+    raw_claim_count = sum(
+        len(section.get("claims", [])) for section in raw.get("sections", [])
+    )
     available_citation_ids = {
         c.id
         for c in (
@@ -612,6 +785,7 @@ async def generate_fast_report_section(
         raw.get("sections", []),
         available_citation_ids=available_citation_ids,
     )
+    kept_claim_count = sum(len(claims) for claims in section_claims.values())
     notes = list(raw.get("notes", []))
     evidence_citations = _dedupe_citations(
         layers.repository_structure.citations + layers.code_evidence.citations
@@ -646,6 +820,16 @@ async def generate_fast_report_section(
         layers.code_evidence.evidence_blocks,
         [citation.id for citation in citations],
     )
+    graph = expansion_graph_for(intent.question_type)
+    analysis_events = _build_analysis_events(
+        fast_report_index=fast_report_index,
+        intent=intent,
+        layers=layers,
+        prompt=prompt,
+        graph_name=graph.primary,
+        claims_kept=kept_claim_count,
+        claims_dropped=max(0, raw_claim_count - kept_claim_count),
+    )
     return FastReportSectionResult(
         title=raw.get("title", "Fast Report"),
         summary=raw.get("summary", ""),
@@ -655,4 +839,99 @@ async def generate_fast_report_section(
         evidence_blocks=evidence_blocks,
         related_wiki_pages=related_wiki_pages,
         related_diagrams=list(layers.curated_knowledge.diagrams),
+        interpretive_sources=list(layers.interpretive.entries),
+        analysis_events=analysis_events,
     )
+
+
+def _build_analysis_events(
+    *,
+    fast_report_index: dict[str, Any] | None,
+    intent: FastReportQuestionIntent,
+    layers: FastReportRetrievalLayers,
+    prompt: str,
+    graph_name: str,
+    claims_kept: int,
+    claims_dropped: int,
+) -> list[dict[str, Any]]:
+    code_files = [
+        {"path": citation.file_path, "score": citation.score}
+        for citation in layers.code_evidence.citations
+    ]
+    slice_files: dict[str, list[dict[str, Any]]] = {}
+    citation_paths = {
+        citation.id: citation.file_path for citation in layers.code_evidence.citations
+    }
+    for block in layers.code_evidence.evidence_blocks:
+        path = citation_paths.get(block.citation_id, "")
+        slice_files.setdefault(path, []).append(
+            {
+                "symbol_path": block.symbol_path,
+                "lines": [block.snippet_start, block.snippet_end],
+                "truncated_lines": _truncated_lines_from_code(block.code),
+            }
+        )
+    interpretive_counts = {
+        "entity_docs": sum(
+            1
+            for entry in layers.interpretive.entries
+            if entry.get("source") == "entity_docstring"
+        ),
+        "module_docs": sum(
+            1
+            for entry in layers.interpretive.entries
+            if entry.get("source") == "module_docstring"
+        ),
+        "readme_sections": sum(
+            1
+            for entry in layers.interpretive.entries
+            if entry.get("source") == "readme_section"
+        ),
+    }
+    return [
+        {
+            "phase": "index_check",
+            "index_version": (fast_report_index or {}).get("index_version"),
+        },
+        {
+            "phase": "search_plan",
+            "question_type": intent.question_type,
+            "search_terms": list(intent.search_terms),
+            "retrieval_focus": list(intent.retrieval_focus),
+            "plan_retried": intent.plan_retried,
+        },
+        {"phase": "code_evidence_seed", "files": code_files[:5]},
+        {
+            "phase": "code_evidence_expansion",
+            "files": [
+                {"path": item["path"], "role": "selected"} for item in code_files
+            ],
+            "graph": graph_name,
+        },
+        {
+            "phase": "slice_extraction",
+            "files": [
+                {"path": path, "slices": slices}
+                for path, slices in slice_files.items()
+                if path
+            ],
+            "dropped_due_to_budget": layers.code_evidence.retrieval_metadata.get(
+                "dropped_due_to_budget", 0
+            ),
+        },
+        {"phase": "interpretive_layer", **interpretive_counts},
+        {
+            "phase": "generation",
+            "prompt_token_estimate": max(0, len(prompt) // 4),
+        },
+        {
+            "phase": "arbitration",
+            "claims_kept": claims_kept,
+            "claims_dropped": claims_dropped,
+        },
+    ]
+
+
+def _truncated_lines_from_code(code: str) -> int:
+    match = re.search(r"\.\.\. (\d+) more lines truncated", code)
+    return int(match.group(1)) if match else 0

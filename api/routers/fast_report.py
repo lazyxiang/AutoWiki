@@ -16,6 +16,11 @@ from api.queue import enqueue_fast_report as _enqueue_fast_report
 from shared.config import get_config
 from shared.database import get_session
 from shared.models import FastReport, FastReportSection, Job, Repository
+from worker.jobs import (
+    FastReportIndexOutdated,
+    _load_fast_report_index,
+    _validate_fast_report_index_version,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -58,6 +63,42 @@ def _is_expired(report: FastReport) -> bool:
     return expires_at <= datetime.now(UTC)
 
 
+def _expired_or_mismatched(report: FastReport, repo: Repository | None) -> bool:
+    if _is_expired(report):
+        return True
+    return bool(
+        repo is not None
+        and repo.last_commit
+        and report.commit_sha
+        and report.commit_sha != repo.last_commit
+    )
+
+
+def _outdated_index_detail() -> dict[str, str]:
+    return {
+        "error": "fast_report_index_outdated",
+        "message": (
+            "Repository index is outdated for fast reports. "
+            "Run `autowiki index <repo>` to upgrade."
+        ),
+        "actionable_command": "autowiki index <repo>",
+    }
+
+
+async def _ensure_fast_report_index_v2(repo_id: str) -> None:
+    cfg = get_config()
+    try:
+        fast_report_index = await _load_fast_report_index(
+            cfg.data_dir / "repos" / repo_id
+        )
+        _validate_fast_report_index_version(fast_report_index)
+    except FastReportIndexOutdated as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=_outdated_index_detail(),
+        ) from exc
+
+
 @router.post("/api/repos/{repo_id}/fast-reports", status_code=202)
 async def start_fast_report(repo_id: str, req: StartFastReportRequest) -> dict:
     if not req.question.strip():
@@ -82,11 +123,12 @@ async def start_fast_report(repo_id: str, req: StartFastReportRequest) -> dict:
             report = await s.get(FastReport, report_id)
             if report is None or report.repo_id != repo_id:
                 raise HTTPException(status_code=404, detail="Report not found")
-            if _is_expired(report):
+            if _expired_or_mismatched(report, repo):
                 raise HTTPException(status_code=410, detail="Report expired")
             job = await s.get(Job, job_id)
             if job is None or job.repo_id != repo_id or job.type != "fast_report":
                 raise HTTPException(status_code=404, detail="Report job not found")
+            await _ensure_fast_report_index_v2(repo_id)
 
             job.status = "queued"
             job.progress = 0
@@ -98,6 +140,7 @@ async def start_fast_report(repo_id: str, req: StartFastReportRequest) -> dict:
         else:
             job_id = str(uuid.uuid4())
             report_id = job_id
+            await _ensure_fast_report_index_v2(repo_id)
             s.add(
                 Job(
                     id=job_id,
@@ -175,7 +218,8 @@ async def get_fast_report(repo_id: str, report_id: str) -> dict:
         report = await s.get(FastReport, report_id)
         if report is None or report.repo_id != repo_id:
             raise HTTPException(status_code=404, detail="Report not found")
-        if _is_expired(report):
+        repo = await s.get(Repository, report.repo_id)
+        if _expired_or_mismatched(report, repo):
             raise HTTPException(status_code=410, detail="Report expired")
         job = await _get_fast_report_job(s, repo_id, report_id)
 
@@ -213,7 +257,8 @@ async def ws_fast_report(websocket: WebSocket, repo_id: str, report_id: str):
         if report is None or report.repo_id != repo_id:
             await websocket.close(code=4004)
             return
-        if _is_expired(report):
+        repo = await s.get(Repository, report.repo_id)
+        if _expired_or_mismatched(report, repo):
             await websocket.close(code=4008)
             return
 
@@ -263,14 +308,17 @@ async def ws_fast_report(websocket: WebSocket, repo_id: str, report_id: str):
                     sent_sections.add(section.id)
 
             if report.status == "failed":
+                error_content = (
+                    job.error if job is not None and job.error else "Fast report failed"
+                )
+                if isinstance(error_content, str) and (
+                    "fast_report_index_outdated" in error_content
+                ):
+                    error_content = _outdated_index_detail()
                 await websocket.send_json(
                     {
                         "type": "error",
-                        "content": (
-                            job.error
-                            if job is not None and job.error
-                            else "Fast report failed"
-                        ),
+                        "content": error_content,
                     }
                 )
                 break
