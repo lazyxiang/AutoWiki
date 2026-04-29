@@ -58,6 +58,17 @@ def _is_expired(report: FastReport) -> bool:
     return expires_at <= datetime.now(UTC)
 
 
+def _expired_or_mismatched(report: FastReport, repo: Repository | None) -> bool:
+    if _is_expired(report):
+        return True
+    return bool(
+        repo is not None
+        and repo.last_commit
+        and report.commit_sha
+        and report.commit_sha != repo.last_commit
+    )
+
+
 @router.post("/api/repos/{repo_id}/fast-reports", status_code=202)
 async def start_fast_report(repo_id: str, req: StartFastReportRequest) -> dict:
     if not req.question.strip():
@@ -175,7 +186,8 @@ async def get_fast_report(repo_id: str, report_id: str) -> dict:
         report = await s.get(FastReport, report_id)
         if report is None or report.repo_id != repo_id:
             raise HTTPException(status_code=404, detail="Report not found")
-        if _is_expired(report):
+        repo = await s.get(Repository, report.repo_id)
+        if _expired_or_mismatched(report, repo):
             raise HTTPException(status_code=410, detail="Report expired")
         job = await _get_fast_report_job(s, repo_id, report_id)
 
@@ -213,7 +225,8 @@ async def ws_fast_report(websocket: WebSocket, repo_id: str, report_id: str):
         if report is None or report.repo_id != repo_id:
             await websocket.close(code=4004)
             return
-        if _is_expired(report):
+        repo = await s.get(Repository, report.repo_id)
+        if _expired_or_mismatched(report, repo):
             await websocket.close(code=4008)
             return
 

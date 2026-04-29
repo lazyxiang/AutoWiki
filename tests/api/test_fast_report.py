@@ -555,6 +555,51 @@ async def test_get_fast_report_returns_410_for_expired_report(fast_report_env):
         await dispose_db(db_path)
 
 
+async def test_get_fast_report_returns_410_when_commit_sha_mismatches(
+    fast_report_env,
+):
+    """Reports are invalid once the repository has been reindexed at a new SHA."""
+    from api.main import app
+    from shared.database import dispose_db, get_session, init_db
+    from shared.models import FastReport, Job, Repository
+
+    db_path = fast_report_env
+    await init_db(db_path)
+
+    try:
+        async with get_session(db_path) as s:
+            s.add(
+                Repository(
+                    id="r1",
+                    owner="o",
+                    name="n",
+                    status="ready",
+                    last_commit="new-sha",
+                )
+            )
+            s.add(Job(id="fr-old", repo_id="r1", type="fast_report", status="done"))
+            s.add(
+                FastReport(
+                    id="fr-old",
+                    repo_id="r1",
+                    commit_sha="old-sha",
+                    status="done",
+                    expires_at=datetime.now(UTC) + timedelta(days=6),
+                )
+            )
+            await s.commit()
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get("/api/repos/r1/fast-reports/fr-old")
+
+        assert response.status_code == 410
+        assert response.json()["detail"] == "Report expired"
+    finally:
+        await dispose_db(db_path)
+
+
 async def test_ws_fast_report_streams_section_and_report_completion(fast_report_env):
     """Completed reports stream section_complete followed by report_complete."""
     from starlette.testclient import TestClient
@@ -609,6 +654,48 @@ async def test_ws_fast_report_streams_section_and_report_completion(fast_report_
         "active_section_id": "sec1",
         "status": "done",
     }
+
+
+async def test_ws_fast_report_closes_with_4008_on_sha_mismatch(fast_report_env):
+    """WebSocket reloads use the same stale-SHA invalidation as REST reloads."""
+    from starlette.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
+
+    from api.main import app
+    from shared.database import get_session, init_db
+    from shared.models import FastReport, Job, Repository
+
+    db_path = fast_report_env
+    await init_db(db_path)
+
+    async with get_session(db_path) as s:
+        s.add(
+            Repository(
+                id="r1",
+                owner="o",
+                name="n",
+                status="ready",
+                last_commit="new-sha",
+            )
+        )
+        s.add(Job(id="fr-old", repo_id="r1", type="fast_report", status="done"))
+        s.add(
+            FastReport(
+                id="fr-old",
+                repo_id="r1",
+                commit_sha="old-sha",
+                status="done",
+                expires_at=datetime.now(UTC) + timedelta(days=6),
+            )
+        )
+        await s.commit()
+
+    with TestClient(app) as client:
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            with client.websocket_connect("/ws/repos/r1/fast-reports/fr-old") as ws:
+                ws.receive_json()
+
+    assert exc_info.value.code == 4008
 
 
 async def test_ws_fast_report_emits_persisted_failure_detail(fast_report_env):
