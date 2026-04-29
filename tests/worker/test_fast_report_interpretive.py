@@ -101,6 +101,25 @@ def test_readme_section_ranking_top_5_with_overlap_score_and_body_cap():
     assert len(pipeline_details["text"]) == 800
 
 
+def test_readme_section_ranking_supports_cjk_tokens():
+    sections = [
+        {"heading": "执行流程", "body": "本节描述执行流程的核心步骤。"},
+        {"heading": "Random", "body": "Unrelated text."},
+    ]
+
+    bundle = build_interpretive_bundle(
+        selected_entities=[],
+        index={"readme_sections": sections},
+        intent_tokens={"执行流程"},
+    )
+
+    readme_entries = [
+        entry for entry in bundle.entries if entry["source"] == "readme_section"
+    ]
+    assert readme_entries
+    assert readme_entries[0]["heading"] == "执行流程"
+
+
 def test_interpretive_bundle_has_no_citations():
     bundle = build_interpretive_bundle(
         selected_entities=[

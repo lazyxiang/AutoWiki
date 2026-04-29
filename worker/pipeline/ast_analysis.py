@@ -22,7 +22,6 @@ Typical usage::
 
 from __future__ import annotations
 
-import ast
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -163,16 +162,11 @@ def analyze_file(path: Path) -> dict[str, Any] | None:
 
 
 def _get_module_docstring(path: Path, root_node: Any, source: bytes) -> str | None:
-    """Return the file-level docstring/comment when cheaply available."""
-    text = source.decode("utf-8", errors="replace")
+    """Return the file-level docstring/comment using the existing parse tree."""
     if path.suffix.lower() == ".py":
-        try:
-            module = ast.parse(text)
-        except SyntaxError:
-            return None
-        doc = ast.get_docstring(module)
-        return doc[:300] if doc else None
+        return _python_module_docstring(root_node)
 
+    text = source.decode("utf-8", errors="replace")
     stripped = text.lstrip()
     if path.suffix.lower() in {".js", ".jsx", ".ts", ".tsx"} and stripped.startswith(
         "/**"
@@ -196,6 +190,27 @@ def _get_module_docstring(path: Path, root_node: Any, source: bytes) -> str | No
         cleaned = _clean_comment_text("\n".join(comments))
         return cleaned[:300] if cleaned else None
 
+    return None
+
+
+def _python_module_docstring(root_node: Any) -> str | None:
+    for child in root_node.children:
+        if child.type == "expression_statement":
+            for sub in child.children:
+                if sub.type == "string":
+                    raw = sub.text.decode("utf-8", errors="replace")
+                    for quote in ('"""', "'''"):
+                        if raw.startswith(quote) and raw.endswith(quote):
+                            raw = raw[3:-3]
+                            break
+                        if raw.startswith(quote[0]) and raw.endswith(quote[0]):
+                            raw = raw[1:-1]
+                            break
+                    return raw.strip()[:300] or None
+            return None
+        if child.type == "comment":
+            continue
+        return None
     return None
 
 

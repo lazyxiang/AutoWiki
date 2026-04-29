@@ -8,6 +8,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from worker.fast_report_planning import QuestionTypeProfile
+from worker.fast_report_planning import (
+    expansion_graph_for as _planning_expansion_graph_for,
+)
+from worker.fast_report_planning import (
+    profile_for_question_type as _planning_profile_for_question_type,
+)
+
 _CJK_RE = re.compile(
     r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]"
 )
@@ -31,6 +39,8 @@ _CONFIG_QUERY_TOKENS = {
 
 @dataclass(frozen=True, slots=True)
 class _RetrievalProfile:
+    """Adapter around :class:`QuestionTypeProfile` with retrieval-side names."""
+
     seed_limit: int
     depth: int
     result_limit: int
@@ -39,35 +49,18 @@ class _RetrievalProfile:
     slices_per_file: int
 
 
-_DEFAULT_PROFILE = _RetrievalProfile(
-    seed_limit=2,
-    depth=2,
-    result_limit=6,
-    token_budget=40_000,
-    line_cap=50,
-    slices_per_file=1,
-)
-_RETRIEVAL_PROFILES = {
-    "architecture": _RetrievalProfile(4, 3, 12, 50_000, 40, 3),
-    "execution_flow": _RetrievalProfile(3, 3, 10, 50_000, 50, 2),
-    "dependency": _RetrievalProfile(3, 2, 10, 40_000, 30, 1),
-    "error_handling": _RetrievalProfile(2, 2, 8, 35_000, 40, 2),
-    "configuration": _RetrievalProfile(3, 2, 8, 35_000, 30, 2),
-    "testing": _RetrievalProfile(2, 1, 6, 40_000, 60, 2),
-    "implementation_location": _RetrievalProfile(2, 1, 4, 25_000, 200, 1),
-    "unknown": _DEFAULT_PROFILE,
-}
+def _to_retrieval_profile(profile: QuestionTypeProfile) -> _RetrievalProfile:
+    return _RetrievalProfile(
+        seed_limit=profile.seed,
+        depth=profile.depth,
+        result_limit=profile.result_limit,
+        token_budget=profile.code_evidence_token_budget,
+        line_cap=profile.per_slice_line_cap,
+        slices_per_file=profile.slices_per_file,
+    )
 
-_EXPANSION_GRAPHS: dict[str, tuple[str, str | None]] = {
-    "architecture": ("imports_and_imported_by", "sibling_directory"),
-    "execution_flow": ("call_sites", "imports"),
-    "error_handling": ("exception_touchpoints", "imports"),
-    "configuration": ("config_touchpoints", "is_config_files"),
-    "dependency": ("imports_and_imported_by", "external_deps_overlap"),
-    "testing": ("sibling_token_overlap", "imports"),
-    "implementation_location": ("imports", None),
-    "unknown": ("imports_and_imported_by", None),
-}
+
+_DEFAULT_PROFILE = _to_retrieval_profile(_planning_profile_for_question_type("unknown"))
 
 
 class _FastReportPlanLike(Protocol):
@@ -125,15 +118,14 @@ class _SliceCandidate:
 
 
 def profile_for_question_type(question_type: str | None) -> _RetrievalProfile:
-    return _RETRIEVAL_PROFILES.get(
-        (question_type or "").strip().lower(), _DEFAULT_PROFILE
+    return _to_retrieval_profile(
+        _planning_profile_for_question_type((question_type or "").strip().lower())
     )
 
 
 def expansion_graph_for(question_type: str | None) -> tuple[str, str | None]:
-    return _EXPANSION_GRAPHS.get(
-        (question_type or "").strip().lower(), _EXPANSION_GRAPHS["unknown"]
-    )
+    graph = _planning_expansion_graph_for((question_type or "").strip().lower())
+    return graph.primary, graph.secondary
 
 
 def detect_question_language(question: str) -> str:
@@ -330,17 +322,6 @@ def _query_tokens(plan: _NormalizedSearchPlan, question: str) -> set[str]:
     for item in plan.search_terms + plan.retrieval_focus:
         tokens |= _tokenize(item)
     return tokens
-
-
-def _score_file(
-    path: str,
-    entry: dict[str, Any],
-    query_tokens: set[str],
-    focus_hints: list[str],
-) -> _RankedFile:
-    return _score_file_multi_slice(
-        path, entry, query_tokens, focus_hints, _DEFAULT_PROFILE
-    )
 
 
 def _score_file_multi_slice(

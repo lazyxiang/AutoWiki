@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Any
+
+from worker.fast_report_search import _tokenize as _shared_tokenize
 
 _AUTO_ATTACH_TOKEN_CAP = 8_000
 _README_BODY_CAP = 800
 _README_TOP_K = 5
 _README_TOTAL_TOKEN_CAP = 10_000
-_TOKEN_SPLIT_RE = re.compile(r"[^A-Za-z0-9]+")
-_CAMEL_CASE_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 
 @dataclass(slots=True)
@@ -126,12 +125,4 @@ def _approx_tokens(text: str) -> int:
 
 
 def _tokenize(text: str) -> set[str]:
-    tokens: set[str] = set()
-    for part in _TOKEN_SPLIT_RE.split(text):
-        if not part:
-            continue
-        for camel_part in _CAMEL_CASE_RE.split(part):
-            token = camel_part.strip().lower()
-            if token:
-                tokens.add(token)
-    return tokens
+    return _shared_tokenize(text)

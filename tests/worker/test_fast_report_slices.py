@@ -33,6 +33,24 @@ def test_happy_path_returns_real_source_with_five_line_context(tmp_path):
     )
 
 
+def test_path_traversal_outside_clone_root_returns_none(tmp_path):
+    outside = tmp_path / "outside.py"
+    outside.write_text("secret\n")
+    clone_root = tmp_path / "clone"
+    clone_root.mkdir()
+
+    assert (
+        extract_source_slice(
+            clone_root=clone_root,
+            rel_path="../outside.py",
+            anchor_start=1,
+            anchor_end=1,
+            line_cap=10,
+        )
+        is None
+    )
+
+
 def test_missing_file_returns_none(tmp_path):
     assert (
         extract_source_slice(

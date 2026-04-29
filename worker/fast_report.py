@@ -404,8 +404,14 @@ def _selected_interpretive_entities(
 ) -> list[dict[str, Any]]:
     selected: list[dict[str, Any]] = []
     files = index.get("files") or {}
-    for citation, block in zip(code.citations, code.evidence_blocks, strict=False):
-        if not block.symbol_path:
+    citations_by_id = {citation.id: citation for citation in code.citations}
+    seen: set[tuple[str, str]] = set()
+    for block in code.evidence_blocks:
+        citation = citations_by_id.get(block.citation_id)
+        if citation is None or not block.symbol_path:
+            continue
+        dedupe_key = (citation.file_path, block.symbol_path)
+        if dedupe_key in seen:
             continue
         file_entry = files.get(citation.file_path)
         if not isinstance(file_entry, dict):
@@ -413,6 +419,7 @@ def _selected_interpretive_entities(
         for entity in file_entry.get("entities") or []:
             if entity.get("symbol_path") != block.symbol_path:
                 continue
+            seen.add(dedupe_key)
             selected.append(
                 {
                     "file": citation.file_path,

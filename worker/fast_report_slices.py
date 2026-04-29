@@ -27,7 +27,12 @@ def extract_source_slice(
     line_cap: int,
     context_lines: int = 5,
 ) -> SliceResult | None:
-    file_path = clone_root / rel_path
+    clone_root_resolved = clone_root.resolve()
+    file_path = (clone_root / rel_path).resolve(strict=False)
+    try:
+        file_path.relative_to(clone_root_resolved)
+    except ValueError:
+        return None
     try:
         text = file_path.read_text(encoding="utf-8", errors="replace")
     except (FileNotFoundError, IsADirectoryError, OSError):

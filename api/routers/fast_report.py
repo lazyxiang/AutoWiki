@@ -123,8 +123,6 @@ async def start_fast_report(repo_id: str, req: StartFastReportRequest) -> dict:
             report = await s.get(FastReport, report_id)
             if report is None or report.repo_id != repo_id:
                 raise HTTPException(status_code=404, detail="Report not found")
-            if _is_expired(report):
-                raise HTTPException(status_code=410, detail="Report expired")
             if _expired_or_mismatched(report, repo):
                 raise HTTPException(status_code=410, detail="Report expired")
             job = await s.get(Job, job_id)

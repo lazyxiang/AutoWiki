@@ -172,7 +172,6 @@ def test_retrieve_code_evidence_prefers_symbol_seed_and_expands_call_chain():
     from worker.fast_report_search import retrieve_code_evidence
 
     index = {
-        "top_level_entries": ["worker", "tests"],
         "readme_headings": ["AutoWiki", "Indexing"],
         "files": {
             "worker/jobs.py": {
@@ -942,7 +941,6 @@ async def test_run_fast_report_persists_completed_section(
         json.dumps(
             {
                 "index_version": 2,
-                "top_level_entries": ["README.md", "worker"],
                 "readme_headings": ["AutoWiki", "Indexing overview"],
                 "files": {
                     "worker/jobs.py": {

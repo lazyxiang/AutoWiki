@@ -138,14 +138,6 @@ def _build_imported_by(dep_graph: DependencyGraph) -> dict[str, list[str]]:
     return {path: sorted(sources) for path, sources in reverse.items()}
 
 
-def _top_level_entries(root: Path, rel_paths: list[str]) -> list[str]:
-    if root.exists():
-        entries = sorted(p.name for p in root.iterdir() if p.name != ".git")
-        if entries:
-            return entries
-    return sorted({rel_path.split("/", 1)[0] for rel_path in rel_paths if rel_path})
-
-
 def _is_directory_tree_excluded(rel_path: str) -> bool:
     parts = _normalize_rel_path(rel_path).split("/")
     if any(part in _DIRECTORY_EXCLUDED_DIRS for part in parts[:-1]):
@@ -207,7 +199,11 @@ def _build_directory_tree_with_degradation(
     by_top: dict[str, list[str]] = {}
     for path in kept:
         by_top.setdefault(path.split("/", 1)[0], []).append(path)
-    sorted_tops = sorted(by_top.items(), key=lambda kv: len(kv[1]), reverse=True)
+    hub_tops = {path.split("/", 1)[0] for path in hub_paths if path}
+    sorted_tops = sorted(
+        by_top.items(),
+        key=lambda kv: (kv[0] not in hub_tops, -len(kv[1])),
+    )
     trimmed: list[str] = []
     for _top, members in sorted_tops:
         previous = list(trimmed)
