@@ -278,18 +278,23 @@ async def run_full_index(
 
         # Stage 3: Dependency Graph — file-level import graph; used for clustering
         logger.info("Stage 3: Dependency Graph starting")
-        dep_graph = build_dependency_graph(files, clone_root)
+        dep_graph = await loop.run_in_executor(
+            None, build_dependency_graph, files, clone_root
+        )
         logger.info(
             "Dependency graph built: %d nodes, %d edges",
             sum(len(c) for c in dep_graph.clusters),
             sum(len(e) for e in dep_graph.edges.values()),
         )
-        fast_report_index = build_fast_report_index(
-            root=clone_root,
-            files=files,
-            file_analysis=file_analysis,
-            dep_graph=dep_graph,
-            readme=readme,
+        fast_report_index = await loop.run_in_executor(
+            None,
+            lambda: build_fast_report_index(
+                root=clone_root,
+                files=files,
+                file_analysis=file_analysis,
+                dep_graph=dep_graph,
+                readme=readme,
+            ),
         )
         await _write_text_async(
             ast_dir / "fast_report_index.json",
@@ -346,9 +351,7 @@ async def run_full_index(
         # Stage 5: Wiki Planner — LLM generates logical page tree (WikiPlan)
         logger.info("Stage 5: Wiki Planner starting")
         wiki_plan_path = ast_dir / "wiki_plan.json"
-        reused_existing_plan = False
         if reuse_plan and wiki_plan_path.exists():
-            reused_existing_plan = True
             logger.info(
                 "Reusing existing wiki plan at %s (skipping LLM planning)",
                 wiki_plan_path,
@@ -402,11 +405,13 @@ async def run_full_index(
             "Wiki plan generated: %d pages planned for %s", len(plan.pages), name
         )
         wiki_dir.mkdir(exist_ok=True)
-        if not reused_existing_plan:
-            await _write_text_async(
-                ast_dir / "wiki_plan.json",
-                json.dumps(plan.to_internal_json(), indent=2, ensure_ascii=False),
-            )
+        # Always persist the plan: even when reusing an existing plan,
+        # all_repo_files is rebuilt from the current analysis and must be
+        # written so incremental refresh sees added/removed files.
+        await _write_text_async(
+            ast_dir / "wiki_plan.json",
+            json.dumps(plan.to_internal_json(), indent=2, ensure_ascii=False),
+        )
         await _write_text_async(
             wiki_dir / "wiki.json",
             json.dumps(plan.to_wiki_json(), indent=2, ensure_ascii=False),
@@ -543,6 +548,9 @@ async def run_full_index(
                     owner,
                     name,
                 )
+                # Restore failed — clear the "indexing" status set at start
+                # of the job so the repo isn't stranded as non-refreshable.
+                await _update_repo(db_path, repo_id, status="error")
             try:
                 await _discard_full_index_backup(full_index_backup)
             except Exception:

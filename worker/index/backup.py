@@ -69,6 +69,10 @@ async def _repo_has_previous_success(
     db_path: str, repo_id: str, repo_data_dir: Path
 ) -> bool:
     """Return whether a repo has a prior successful wiki state to protect."""
+    loop = asyncio.get_running_loop()
+    has_wiki_dir = await loop.run_in_executor(
+        None, _wiki_dir_has_content, repo_data_dir
+    )
     async with get_session(db_path) as s:
         repo = await s.get(Repository, repo_id)
         if repo is None:
@@ -82,7 +86,7 @@ async def _repo_has_previous_success(
             or repo.wiki_path
             or repo.wiki_structure
             or has_page_rows
-            or _wiki_dir_has_content(repo_data_dir)
+            or has_wiki_dir
         )
 
 
