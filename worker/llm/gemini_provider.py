@@ -68,7 +68,7 @@ class GeminiProvider(LLMProvider):
         config = types.GenerateContentConfig(
             system_instruction=system_text if system_text else None,
             response_mime_type="application/json",
-            max_output_tokens=16000,
+            max_output_tokens=32000,
         )
         try:
             response = await asyncio.to_thread(

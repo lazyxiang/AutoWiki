@@ -172,17 +172,16 @@ def test_compute_clusters_connected_chain(tmp_path):
     assert len(graph.clusters[0]) == 20
 
 
-def test_format_for_llm_prompt_default_500_cap():
-    """Default max_edges is 500, not 150."""
-    # Build a graph with ~200 edges — exceeds old 150 default, stays under new 500 cap.
-    files = [f"mod{i}.py" for i in range(20)]
-    # Create ~200 edges: each file imports the next ~10 files (circular-ish)
+def test_format_for_llm_prompt_default_1500_cap():
+    """Default max_edges is 1500 — graphs with ~600 edges render in full."""
+    files = [f"mod{i}.py" for i in range(40)]
+    # Create ~600 edges: each of 40 files imports 15 others (circular-ish)
     edges = {}
     for i, src in enumerate(files):
-        edges[src] = [files[(i + j + 1) % len(files)] for j in range(10)]
+        edges[src] = [files[(i + j + 1) % len(files)] for j in range(15)]
     graph = DependencyGraph(edges=edges, clusters=[], external_deps={})
     result = format_for_llm_prompt(graph)
     total_edges = sum(len(v) for v in edges.values())
-    assert total_edges > 150, f"Test setup: expected >150 edges, got {total_edges}"
-    assert total_edges <= 500, f"Test setup: expected <=500 edges, got {total_edges}"
+    assert total_edges > 500, f"Test setup: expected >500 edges, got {total_edges}"
+    assert total_edges <= 1500, f"Test setup: expected <=1500 edges, got {total_edges}"
     assert "more edges not shown" not in result

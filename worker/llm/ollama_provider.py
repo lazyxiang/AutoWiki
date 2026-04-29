@@ -18,7 +18,12 @@ class OllamaProvider(LLMProvider):
     async def generate(self, prompt: PromptInput, system: PromptInput = "") -> str:
         prompt_text = segments_to_text(normalize_prompt(prompt))
         system_text = segments_to_text(normalize_prompt(system))
-        payload = {"model": self._model, "prompt": prompt_text, "stream": False}
+        payload = {
+            "model": self._model,
+            "prompt": prompt_text,
+            "stream": False,
+            "options": {"num_predict": 32000},
+        }
         if system_text:
             payload["system"] = system_text
         async with httpx.AsyncClient(timeout=120) as client:
@@ -43,7 +48,12 @@ class OllamaProvider(LLMProvider):
     ) -> AsyncIterator[str]:
         prompt_text = segments_to_text(normalize_prompt(prompt))
         system_text = segments_to_text(normalize_prompt(system))
-        payload = {"model": self._model, "prompt": prompt_text, "stream": True}
+        payload = {
+            "model": self._model,
+            "prompt": prompt_text,
+            "stream": True,
+            "options": {"num_predict": 32000},
+        }
         if system_text:
             payload["system"] = system_text
         async with httpx.AsyncClient(timeout=120) as client:

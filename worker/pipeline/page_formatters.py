@@ -6,17 +6,22 @@ from __future__ import annotations
 from typing import Any
 
 
-def _format_entity_details(entities: list[dict[str, Any]]) -> str:
+def _format_entity_details(
+    entities: list[dict[str, Any]], max_entities: int = 25
+) -> str:
     """Format a list of AST entity dicts into a Markdown bullet list for the prompt.
 
-    Renders up to 25 entities (to avoid excessive prompt length), showing
-    each entity's type, name, signature, docstring excerpt, and source
-    location.
+    Renders up to *max_entities* entities (to avoid excessive prompt length),
+    showing each entity's type, name, signature, docstring excerpt, and
+    source location.
 
     Args:
         entities: List of entity dicts as produced by the AST analysis stage.
             Recognised keys: ``"type"``, ``"name"``, ``"signature"``,
             ``"docstring"``, ``"file"``, ``"start_line"``, ``"end_line"``.
+        max_entities: Maximum number of entities to render. Callers with
+            multi-file pages typically scale this with the file count, e.g.
+            ``max(25, 8 * len(spec.files))``.
 
     Returns:
         str: A multi-line Markdown bullet list where each entity occupies one
@@ -38,7 +43,7 @@ def _format_entity_details(entities: list[dict[str, Any]]) -> str:
     if not entities:
         return "No entity details available."
     lines = []
-    for e in entities[:25]:  # Cap to avoid prompt bloat
+    for e in entities[:max_entities]:  # Cap to avoid prompt bloat
         parts = [f"- **{e.get('type', 'unknown')}** `{e.get('name', '?')}`"]
         if e.get("signature"):
             parts.append(f"  Signature: `{e['signature']}`")

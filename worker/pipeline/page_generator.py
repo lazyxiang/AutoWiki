@@ -194,7 +194,7 @@ async def generate_page(
     fast_llm: LLMProvider,
     embedding: EmbeddingProvider,
     repo_name: str,
-    top_k: int = 12,
+    top_k: int = 30,
     dep_info: dict[str, Any] | None = None,
     entity_details: list[dict[str, Any]] | None = None,
     on_retry: OnRetryCallback | None = None,
@@ -249,7 +249,8 @@ async def generate_page(
         context_chunks = store.search(query_vecs[0], k=top_k, doc_k=1)
 
     # ── Build reusable context strings ──
-    entity_summaries = _format_entity_details(entity_details or [])
+    entity_cap = max(25, 8 * len(spec.files or []))
+    entity_summaries = _format_entity_details(entity_details or [], entity_cap)
     dep_info_str = None
     if dep_info:
         dep_lines = []
