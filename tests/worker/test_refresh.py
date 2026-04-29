@@ -1,6 +1,8 @@
 import json
 import uuid
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 
 async def test_run_refresh_index_no_changes(tmp_path, mock_llm, mock_embedding):
@@ -161,3 +163,346 @@ async def test_run_refresh_index_with_changes(
             "page content should have been regenerated"
         )
     await dispose_db(db_path)
+
+
+async def test_run_refresh_index_replans_all_files_for_readme_only_change(
+    tmp_path, mock_llm, mock_fast_llm, mock_embedding
+):
+    """README-only changes force a global replan with the full source analysis."""
+    from shared.database import dispose_db, get_session, init_db
+    from shared.models import Job, Repository, WikiPage
+    from worker.jobs import run_refresh_index
+    from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
+    from worker.pipeline.dependency_graph import DependencyGraph
+    from worker.pipeline.page_generator import PageResult
+    from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan
+
+    db_path = str(tmp_path / "test.db")
+    await init_db(db_path)
+    repo_id = "readme_refresh_repo"
+    job_id = str(uuid.uuid4())
+    old_sha = "old123"
+    new_sha = "new456"
+    clone_root = tmp_path / "clone"
+    clone_root.mkdir()
+
+    async with get_session(db_path) as s:
+        s.add(
+            Repository(
+                id=repo_id, owner="o", name="r", status="ready", last_commit=old_sha
+            )
+        )
+        s.add(
+            Job(id=job_id, repo_id=repo_id, type="refresh", status="queued", progress=0)
+        )
+        s.add(
+            WikiPage(
+                id="overview-row",
+                repo_id=repo_id,
+                slug="overview",
+                title="Overview",
+                content="old overview",
+                page_order=0,
+            )
+        )
+        await s.commit()
+
+    ast_dir = tmp_path / "repos" / repo_id / "ast"
+    ast_dir.mkdir(parents=True)
+    (ast_dir / "wiki_plan.json").write_text(
+        json.dumps(
+            {
+                "repo_notes": [{"content": ""}],
+                "all_repo_files": ["main.py"],
+                "pages": [
+                    {
+                        "title": "Overview",
+                        "purpose": "High-level overview.",
+                        "files": ["main.py"],
+                    }
+                ],
+            }
+        )
+    )
+
+    file_analysis = FileAnalysis(
+        files={
+            "main.py": FileInfo(
+                rel_path="main.py",
+                entities=[],
+                class_count=0,
+                function_count=0,
+                summary="",
+            )
+        }
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_generate_wiki_plan(affected_file_analysis, **kwargs):
+        captured["files"] = set(affected_file_analysis.files)
+        captured["existing_titles"] = kwargs["existing_titles"]
+        return WikiPlan(
+            pages=[
+                WikiPageSpec(
+                    title="Overview",
+                    purpose="Updated from README.",
+                    files=["main.py"],
+                )
+            ],
+            all_repo_files=["main.py"],
+        )
+
+    async def fake_generate_page_batch(specs_with_children, *args, on_result, **kwargs):
+        for spec, _children in specs_with_children:
+            await on_result(
+                PageResult(slug=spec.slug, title=spec.title, content="new content"),
+                spec,
+            )
+        return []
+
+    mock_embedding.dimension = 1536
+    with (
+        patch("worker.index.refresh.get_config") as mock_cfg,
+        patch(
+            "worker.index.refresh.clone_or_fetch",
+            new_callable=AsyncMock,
+            return_value=(new_sha, "main"),
+        ),
+        patch(
+            "worker.index.refresh.get_changed_files",
+            new_callable=AsyncMock,
+            return_value=["README.md"],
+        ),
+        patch(
+            "worker.index.refresh.filter_files", return_value=[clone_root / "main.py"]
+        ),
+        patch("worker.index.refresh.extract_readme", return_value="# New README"),
+        patch("worker.index.refresh.load_user_steering", return_value=None),
+        patch("worker.index.refresh.analyze_all_files", return_value=file_analysis),
+        patch(
+            "worker.index.refresh.build_dependency_graph",
+            return_value=DependencyGraph(edges={}, clusters=[["main.py"]]),
+        ),
+        patch("worker.index.refresh.build_fast_report_index", return_value={}),
+        patch("worker.index.refresh._make_faiss_store", return_value=MagicMock()),
+        patch("worker.index.refresh.build_rag_index", new_callable=AsyncMock),
+        patch("worker.index.refresh.make_llm_provider", return_value=mock_llm),
+        patch(
+            "worker.index.refresh.make_fast_llm_provider", return_value=mock_fast_llm
+        ),
+        patch(
+            "worker.index.refresh.make_embedding_provider", return_value=mock_embedding
+        ),
+        patch(
+            "worker.index.refresh.generate_wiki_plan",
+            new=fake_generate_wiki_plan,
+        ),
+        patch("worker.index.refresh.generate_page_batch", new=fake_generate_page_batch),
+    ):
+        cfg = mock_cfg.return_value
+        cfg.database_path = tmp_path / "test.db"
+        cfg.data_dir = tmp_path
+        await run_refresh_index(
+            {},
+            repo_id=repo_id,
+            job_id=job_id,
+            owner="o",
+            name="r",
+            clone_root=clone_root,
+        )
+
+    try:
+        assert captured["files"] == {"main.py"}
+        assert captured["existing_titles"] == set()
+    finally:
+        await dispose_db(db_path)
+
+
+async def test_run_refresh_index_keeps_existing_pages_if_generation_fails(
+    tmp_path, mock_llm, mock_fast_llm, mock_embedding
+):
+    """A refresh failure after a generated result must not delete live wiki rows."""
+    from sqlalchemy import select as sa_select
+
+    from shared.database import dispose_db, get_session, init_db
+    from shared.models import Job, Repository, WikiPage
+    from worker.jobs import run_refresh_index
+    from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
+    from worker.pipeline.dependency_graph import DependencyGraph
+    from worker.pipeline.page_generator import PageResult
+    from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan
+
+    db_path = str(tmp_path / "test.db")
+    await init_db(db_path)
+    repo_id = "failed_refresh_repo"
+    job_id = str(uuid.uuid4())
+    old_sha = "old123"
+    new_sha = "new456"
+    clone_root = tmp_path / "clone"
+    clone_root.mkdir()
+
+    async with get_session(db_path) as s:
+        s.add(
+            Repository(
+                id=repo_id, owner="o", name="r", status="ready", last_commit=old_sha
+            )
+        )
+        s.add(
+            Job(id=job_id, repo_id=repo_id, type="refresh", status="queued", progress=0)
+        )
+        s.add(
+            WikiPage(
+                id="overview-row",
+                repo_id=repo_id,
+                slug="overview",
+                title="Overview",
+                content="old overview",
+                page_order=0,
+            )
+        )
+        await s.commit()
+
+    repo_data = tmp_path / "repos" / repo_id
+    ast_dir = repo_data / "ast"
+    wiki_dir = repo_data / "wiki"
+    ast_dir.mkdir(parents=True)
+    wiki_dir.mkdir()
+    (wiki_dir / "overview.md").write_text("old overview file")
+    (ast_dir / "wiki_plan.json").write_text(
+        json.dumps(
+            {
+                "repo_notes": [{"content": ""}],
+                "all_repo_files": ["main.py"],
+                "pages": [
+                    {
+                        "title": "Overview",
+                        "purpose": "High-level overview.",
+                        "files": ["main.py"],
+                    }
+                ],
+            }
+        )
+    )
+
+    file_analysis = FileAnalysis(
+        files={
+            "main.py": FileInfo(
+                rel_path="main.py",
+                entities=[],
+                class_count=0,
+                function_count=0,
+                summary="",
+            )
+        }
+    )
+
+    async def fake_generate_wiki_plan(*args, **kwargs):
+        return WikiPlan(
+            pages=[
+                WikiPageSpec(
+                    title="Overview",
+                    purpose="Updated source page.",
+                    files=["main.py"],
+                )
+            ],
+            all_repo_files=["main.py"],
+        )
+
+    async def failing_generate_page_batch(
+        specs_with_children, *args, on_result, **kwargs
+    ):
+        spec = specs_with_children[0][0]
+        await on_result(
+            PageResult(slug=spec.slug, title=spec.title, content="new content"),
+            spec,
+        )
+        raise RuntimeError("page generation failed")
+
+    mock_embedding.dimension = 1536
+    with (
+        patch("worker.index.refresh.get_config") as mock_cfg,
+        patch(
+            "worker.index.refresh.clone_or_fetch",
+            new_callable=AsyncMock,
+            return_value=(new_sha, "main"),
+        ),
+        patch(
+            "worker.index.refresh.get_changed_files",
+            new_callable=AsyncMock,
+            return_value=["main.py"],
+        ),
+        patch(
+            "worker.index.refresh.filter_files", return_value=[clone_root / "main.py"]
+        ),
+        patch("worker.index.refresh.extract_readme", return_value=""),
+        patch("worker.index.refresh.load_user_steering", return_value=None),
+        patch("worker.index.refresh.analyze_all_files", return_value=file_analysis),
+        patch(
+            "worker.index.refresh.build_dependency_graph",
+            return_value=DependencyGraph(edges={}, clusters=[["main.py"]]),
+        ),
+        patch("worker.index.refresh.build_fast_report_index", return_value={}),
+        patch("worker.index.refresh._make_faiss_store", return_value=MagicMock()),
+        patch("worker.index.refresh.build_rag_index", new_callable=AsyncMock),
+        patch("worker.index.refresh.make_llm_provider", return_value=mock_llm),
+        patch(
+            "worker.index.refresh.make_fast_llm_provider", return_value=mock_fast_llm
+        ),
+        patch(
+            "worker.index.refresh.make_embedding_provider", return_value=mock_embedding
+        ),
+        patch("worker.index.refresh.generate_wiki_plan", new=fake_generate_wiki_plan),
+        patch(
+            "worker.index.refresh.generate_page_batch",
+            new=failing_generate_page_batch,
+        ),
+    ):
+        cfg = mock_cfg.return_value
+        cfg.database_path = tmp_path / "test.db"
+        cfg.data_dir = tmp_path
+        with pytest.raises(RuntimeError, match="page generation failed"):
+            await run_refresh_index(
+                {},
+                repo_id=repo_id,
+                job_id=job_id,
+                owner="o",
+                name="r",
+                clone_root=clone_root,
+            )
+
+    try:
+        async with get_session(db_path) as s:
+            result = await s.execute(
+                sa_select(WikiPage).where(
+                    WikiPage.repo_id == repo_id, WikiPage.slug == "overview"
+                )
+            )
+            page = result.scalar_one()
+            assert page.content == "old overview"
+        assert (wiki_dir / "overview.md").read_text() == "old overview file"
+    finally:
+        await dispose_db(db_path)
+
+
+def test_merge_refresh_plan_pages_preserves_old_order_and_appends_new_pages():
+    from worker.index.refresh import _merge_refresh_plan_pages
+    from worker.pipeline.wiki_planner import WikiPageSpec
+
+    old_pages = [
+        WikiPageSpec(title="Overview", purpose="old", files=["main.py"]),
+        WikiPageSpec(title="API", purpose="old", files=["api.py"]),
+        WikiPageSpec(title="CLI", purpose="old", files=["cli.py"]),
+    ]
+    replacement_pages = [
+        WikiPageSpec(title="API", purpose="new", files=["api.py"]),
+        WikiPageSpec(title="Configuration", purpose="new", files=["config.py"]),
+    ]
+
+    merged = _merge_refresh_plan_pages(
+        old_pages=old_pages,
+        replacement_pages=replacement_pages,
+        affected_titles={"API"},
+    )
+
+    assert [p.title for p in merged] == ["Overview", "API", "CLI", "Configuration"]
+    assert merged[1].purpose == "new"

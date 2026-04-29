@@ -70,6 +70,52 @@ def _repo_metadata_updates(meta, active_branch: str) -> dict:
     return updates
 
 
+def _is_global_planner_input(path: str) -> bool:
+    normalized = path.replace("\\", "/").lower()
+    name = normalized.rsplit("/", 1)[-1]
+    return (
+        name.startswith("readme.")
+        or normalized == ".autowiki/wiki.json"
+        or normalized.endswith("/.autowiki/wiki.json")
+    )
+
+
+def _merge_refresh_plan_pages(
+    old_pages: list[WikiPageSpec],
+    replacement_pages: list[WikiPageSpec],
+    affected_titles: set[str],
+) -> list[WikiPageSpec]:
+    """Replace affected pages in their old positions and append new pages."""
+    replacements_by_title = {p.title: p for p in replacement_pages}
+    used_replacement_ids: set[int] = set()
+    merged: list[WikiPageSpec] = []
+
+    def _next_unused_replacement() -> WikiPageSpec | None:
+        for replacement in replacement_pages:
+            if id(replacement) not in used_replacement_ids:
+                return replacement
+        return None
+
+    for old_page in old_pages:
+        if old_page.title not in affected_titles:
+            merged.append(old_page)
+            continue
+
+        replacement = replacements_by_title.get(old_page.title)
+        if replacement is None or id(replacement) in used_replacement_ids:
+            replacement = _next_unused_replacement()
+        if replacement is not None:
+            merged.append(replacement)
+            used_replacement_ids.add(id(replacement))
+
+    for replacement in replacement_pages:
+        if id(replacement) not in used_replacement_ids:
+            merged.append(replacement)
+            used_replacement_ids.add(id(replacement))
+
+    return merged
+
+
 # ---------------------------------------------------------------------------
 # Job entry points
 # ---------------------------------------------------------------------------
@@ -295,8 +341,15 @@ async def run_refresh_index(
             else {f for p in old_plan.pages for f in (p.files or [])}
         )
         potentially_added = set(changed_files) - old_all_files_early
+        global_planner_input_changed = any(
+            _is_global_planner_input(path) for path in changed_files
+        )
 
-        if not affected_page_titles and not potentially_added:
+        if (
+            not affected_page_titles
+            and not potentially_added
+            and not global_planner_input_changed
+        ):
             logger.info("No affected pages found for changed files.")
             now = datetime.now(UTC)
             await _update_repo(db_path, repo_id, last_commit=new_sha, status="ready")
@@ -385,6 +438,11 @@ async def run_refresh_index(
             if overview_page is not None:
                 # Mark the overview page as affected so new files are surfaced there
                 affected_page_titles = affected_page_titles | {overview_page.title}
+        if global_planner_input_changed:
+            logger.info(
+                "Global planner inputs changed; replanning all wiki pages for refresh."
+            )
+            affected_page_titles = {p.title for p in old_plan.pages}
 
         await _update_job(
             db_path,
@@ -463,6 +521,8 @@ async def run_refresh_index(
             for f in (p.files or [])
         }
         affected_files_set |= added_files
+        if global_planner_input_changed:
+            affected_files_set = set(file_analysis.files)
         affected_file_analysis = FileAnalysis(
             files={
                 rel: info
@@ -503,26 +563,6 @@ async def run_refresh_index(
             p.slug for p in old_plan.pages if p.title in affected_page_titles
         }
 
-        # Capture existing page_orders before deletion to preserve stable ordering
-        old_page_orders: dict[str, int] = {}
-        max_existing_order = 0
-        async with get_session(db_path) as s:
-            result = await s.execute(
-                sa_select(WikiPage).where(WikiPage.repo_id == repo_id)
-            )
-            for p in result.scalars().all():
-                if p.slug in affected_old_slugs:
-                    old_page_orders[p.slug] = p.page_order
-                max_existing_order = max(max_existing_order, p.page_order)
-
-        async with get_session(db_path) as s:
-            await s.execute(
-                sa_delete(WikiPage).where(
-                    WikiPage.repo_id == repo_id, WikiPage.slug.in_(affected_old_slugs)
-                )
-            )
-            await s.commit()
-
         # Stage 6: Bottom-up regeneration
         logger.info("Stage 6: Page Generator starting (bottom-up)")
 
@@ -544,7 +584,7 @@ async def run_refresh_index(
 
         levels = compute_generation_order(plan)
         generated: dict[str, PageResult] = {}
-        refresh_order_counter = 0
+        staged_pages: dict[str, tuple[PageResult, WikiPageSpec]] = {}
         pages_done = 0
         total_pages = len(plan.pages)
         on_page_progress = _make_page_progress_callback(db_path, job_id, "Regenerating")
@@ -567,44 +607,18 @@ async def run_refresh_index(
                             children.append(preserved_content[p.slug])
                 specs_with_children.append((page_spec, children or None))
 
-            page_order_by_slug: dict[str, int] = {}
-            for page_spec, _ in specs_with_children:
-                if page_spec.slug in old_page_orders:
-                    page_order_by_slug[page_spec.slug] = old_page_orders[page_spec.slug]
-                else:
-                    page_order_by_slug[page_spec.slug] = (
-                        max_existing_order + 1 + refresh_order_counter
-                    )
-                    refresh_order_counter += 1
-
             async def _save_regenerated_page(
                 result: PageResult, page_spec: WikiPageSpec
             ) -> None:
                 nonlocal pages_done
                 async with save_lock:
                     generated[result.slug] = result
+                    staged_pages[result.slug] = (result, page_spec)
                     logger.info(
-                        "Page regenerated and persisted: %s (%s), %d chars",
+                        "Page regenerated and staged: %s (%s), %d chars",
                         result.title,
                         result.slug,
                         len(result.content),
-                    )
-                    async with get_session(db_path) as s:
-                        s.add(
-                            WikiPage(
-                                id=str(uuid.uuid4()),
-                                repo_id=repo_id,
-                                slug=result.slug,
-                                title=result.title,
-                                content=result.content,
-                                page_order=page_order_by_slug[result.slug],
-                                parent_slug=page_spec.parent_slug,
-                                description=page_spec.purpose,
-                            )
-                        )
-                        await s.commit()
-                    await _write_text_async(
-                        wiki_dir / f"{result.slug}.md", result.content
                     )
                     pages_done += 1
                     progress = (
@@ -641,15 +655,59 @@ async def run_refresh_index(
         # Build a merged plan reflecting the full updated wiki structure.
         # Unchanged pages are identified by title, not slug, so a retitled page
         # in the new plan doesn't accidentally preserve the stale old entry.
-        preserved_pages = [
-            p for p in old_plan.pages if p.title not in affected_page_titles
-        ]
-        merged_pages = list(plan.pages) + preserved_pages
+        merged_pages = _merge_refresh_plan_pages(
+            old_pages=old_plan.pages,
+            replacement_pages=plan.pages,
+            affected_titles=affected_page_titles,
+        )
         merged_plan = WikiPlan(
             repo_notes=old_plan.repo_notes,
             pages=merged_pages,
             all_repo_files=sorted(new_all_files),
         )
+        page_order_by_slug = {
+            page_spec.slug: order for order, page_spec in enumerate(merged_pages)
+        }
+
+        async with get_session(db_path) as s:
+            existing_result = await s.execute(
+                sa_select(WikiPage).where(WikiPage.repo_id == repo_id)
+            )
+            for existing_page in existing_result.scalars().all():
+                if existing_page.slug in page_order_by_slug:
+                    existing_page.page_order = page_order_by_slug[existing_page.slug]
+
+            await s.execute(
+                sa_delete(WikiPage).where(
+                    WikiPage.repo_id == repo_id, WikiPage.slug.in_(affected_old_slugs)
+                )
+            )
+            for result, page_spec in staged_pages.values():
+                s.add(
+                    WikiPage(
+                        id=str(uuid.uuid4()),
+                        repo_id=repo_id,
+                        slug=result.slug,
+                        title=result.title,
+                        content=result.content,
+                        page_order=page_order_by_slug[result.slug],
+                        parent_slug=page_spec.parent_slug,
+                        description=page_spec.purpose,
+                    )
+                )
+            await s.commit()
+
+        def _remove_replaced_markdown() -> None:
+            for slug in affected_old_slugs:
+                path = wiki_dir / f"{slug}.md"
+                if path.exists():
+                    path.unlink()
+
+        await asyncio.get_running_loop().run_in_executor(
+            None, _remove_replaced_markdown
+        )
+        for result, _page_spec in staged_pages.values():
+            await _write_text_async(wiki_dir / f"{result.slug}.md", result.content)
 
         # Persist the merged plan so future refreshes have an accurate baseline
         wiki_dir.mkdir(parents=True, exist_ok=True)

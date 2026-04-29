@@ -731,8 +731,13 @@ async def _generate_outline(
 
 
 def _tokenize(text: str) -> set[str]:
-    """Lowercase word tokens with length ≥ 3 for heuristic scoring."""
-    return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if len(w) >= 3}
+    """Unicode-aware lowercase word tokens for heuristic scoring."""
+    tokens = re.findall(r"\w+", text.lower(), flags=re.UNICODE)
+    return {
+        token
+        for token in tokens
+        if len(token) >= 3 or any(ord(ch) > 127 for ch in token)
+    }
 
 
 def _score_file_for_page(

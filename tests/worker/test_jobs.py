@@ -360,8 +360,8 @@ async def test_always_clears_existing_artifacts(
         await dispose_db(db_path)
 
 
-async def test_full_index_first_time_failure_deletes_repository_metadata(tmp_path):
-    """Failed first-time index removes repo/job rows so no dangling metadata remains."""
+async def test_full_index_first_time_failure_preserves_failure_metadata(tmp_path):
+    """Failed first-time index removes wiki rows but keeps failure metadata."""
     from shared.database import dispose_db, get_session
     from shared.models import Job, Repository, WikiPage
 
@@ -384,6 +384,15 @@ async def test_full_index_first_time_failure_deletes_repository_metadata(tmp_pat
                 type="full_index",
                 status="queued",
                 progress=0,
+            )
+        )
+        s.add(
+            Job(
+                id="stale-job",
+                repo_id="first-fail",
+                type="refresh",
+                status="running",
+                progress=50,
             )
         )
         await s.commit()
@@ -412,8 +421,14 @@ async def test_full_index_first_time_failure_deletes_repository_metadata(tmp_pat
 
     try:
         async with get_session(db_path) as s:
-            assert await s.get(Repository, "first-fail") is None
-            assert await s.get(Job, "first-job") is None
+            repo = await s.get(Repository, "first-fail")
+            assert repo is not None
+            assert repo.status == "error"
+            job = await s.get(Job, "first-job")
+            assert job is not None
+            assert job.status == "failed"
+            assert job.error == "clone failed"
+            assert await s.get(Job, "stale-job") is None
 
             from sqlalchemy import select
 

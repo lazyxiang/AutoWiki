@@ -558,6 +558,7 @@ async def run_full_index(
                 db_path,
                 repo_id,
                 repo_data_dir,
+                current_job_id=job_id,
                 reuse_index=reuse_index,
                 reuse_plan=reuse_plan,
             )

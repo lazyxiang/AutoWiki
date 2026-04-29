@@ -261,7 +261,7 @@ WS /ws/jobs/{job_id}                 → 每秒流式传输 {progress, status}
 - **Phase 3** ✅ — 深度研究模式：带有 LLM 规划器的多步 RAG 调查、单步 AST 上下文、综合 Markdown 报告；REST + WebSocket API；`autowiki research` CLI 命令 (PR #20)
 - **Phase 4** ✅ — 通过 `.autowiki/wiki.json` 进行用户引导：覆盖页面层次结构、将模块分配给页面、在生成中注入仓库/页面注释 (PR #20)
 - **Phase 4.5** ✅ — 规划器健壮性增强 (PR #22)：第 1 阶段大纲提示词中的架构锚点 (Layer C1)、`autowiki validate-plan` 离线诊断 CLI、`_select_files` 中的反馈重试循环、各种错误修复（Gemini JSON、Mermaid、Docker）
-- **Phase 4.6** ✅ — 以页面为中心的文件选择 (PR #23)：第 2 阶段从以文件为中心的分配改为以页面为中心的选择（每页 5–8 个文件）；基于评分的预过滤 + 回退 (`_score_file_for_page`, `_heuristic_select_files`)；`WikiPlan.all_repo_files` 用于正确的刷新覆盖；移除孤立文件强制分配
+- **Phase 4.6** ✅ — 以页面为中心的文件选择 (PR #23)：第 2 阶段从以文件为中心的分配改为以页面为中心的选择（每页 5–8 个文件）；基于评分的预过滤 + 回退 (`_score_file_for_page`, `_heuristic_select_files`)；`WikiPlan.all_repo_files` 用于正确刷新覆盖；移除孤立文件强制分配
 - **Phase 5** ✅ — GitLab/Bitbucket 支持（公开和私有仓库、完整 API 元数据）+ 首页项目搜索 (PR #30)
 - **Phase 6** — 混合搜索（关键词 + 语义 BM25/FAISS 融合）
 

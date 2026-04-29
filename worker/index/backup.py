@@ -223,6 +223,7 @@ async def _cleanup_first_time_index_failure(
     repo_id: str,
     repo_data_dir: Path,
     *,
+    current_job_id: str | None = None,
     reuse_index: bool,
     reuse_plan: bool,
 ) -> None:
@@ -240,8 +241,16 @@ async def _cleanup_first_time_index_failure(
     await asyncio.get_running_loop().run_in_executor(None, _cleanup_files)
     async with get_session(db_path) as s:
         await s.execute(sa_delete(WikiPage).where(WikiPage.repo_id == repo_id))
-        await s.execute(sa_delete(Job).where(Job.repo_id == repo_id))
-        await s.execute(sa_delete(Repository).where(Repository.id == repo_id))
+        job_delete = sa_delete(Job).where(Job.repo_id == repo_id)
+        if current_job_id is not None:
+            job_delete = job_delete.where(Job.id != current_job_id)
+        await s.execute(job_delete)
+        if current_job_id is None:
+            await s.execute(sa_delete(Repository).where(Repository.id == repo_id))
+        else:
+            repo = await s.get(Repository, repo_id)
+            if repo is not None:
+                repo.status = "error"
         await s.commit()
 
 

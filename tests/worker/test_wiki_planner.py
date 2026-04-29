@@ -917,6 +917,15 @@ def test_score_semantic_alignment():
     ) > _score_file_for_page("util/helper.py", page, infos, None)
 
 
+def test_score_semantic_alignment_uses_unicode_tokens():
+    page = {"title": "认证 服务", "purpose": "处理 用户 登录"}
+    infos = _fake_infos(("services/认证/登录.py", []), ("services/misc.py", []))
+
+    assert _score_file_for_page(
+        "services/认证/登录.py", page, infos, None
+    ) > _score_file_for_page("services/misc.py", page, infos, None)
+
+
 def test_prefilter_returns_at_most_max_candidates():
     page = {"title": "Worker", "purpose": "Background jobs."}
     all_files = [f"worker/file{i}.py" for i in range(50)]
