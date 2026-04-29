@@ -391,8 +391,11 @@ async def _build_default_fast_report_retrievers(
     async def _code_evidence(
         question: str, intent: FastReportQuestionIntent
     ) -> CodeEvidenceLayer:
-        return retrieve_code_evidence(
-            fast_report_index, intent, question, clone_root=clone_root
+        return await loop.run_in_executor(
+            None,
+            lambda: retrieve_code_evidence(
+                fast_report_index, intent, question, clone_root=clone_root
+            ),
         )
 
     async def _curated(

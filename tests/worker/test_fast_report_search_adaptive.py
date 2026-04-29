@@ -46,7 +46,7 @@ def _install_fake_slice_extractor(monkeypatch, *, fail_paths: set[str] | None = 
         snippet_end = min(anchor_end, anchor_start + line_cap - 1, len(lines))
         full_start = max(1, anchor_start - context_lines)
         full_end = min(len(lines), snippet_end + context_lines)
-        code = "\n".join(lines[anchor_start - 1 : snippet_end])
+        code = "\n".join(lines[full_start - 1 : full_end])
         return _FakeSliceResult(
             snippet_start=anchor_start,
             snippet_end=snippet_end,

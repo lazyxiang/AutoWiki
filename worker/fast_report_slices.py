@@ -51,21 +51,25 @@ def extract_source_slice(
 
     snippet_end = min(anchor_end, anchor_start + line_cap - 1)
     truncated_lines = max(0, anchor_end - snippet_end)
-    code = "\n".join(lines[anchor_start - 1 : snippet_end])
-    if truncated_lines:
-        code = (
-            f"{code}\n{_comment_token(rel_path)} ... "
-            f"{truncated_lines} more lines truncated"
-        )
-
     full_start = max(1, anchor_start - context_lines)
     full_end = min(file_len, snippet_end + context_lines)
+    body_lines = lines[full_start - 1 : full_end]
+    if truncated_lines:
+        marker = (
+            f"{_comment_token(rel_path)} ... {truncated_lines} more lines truncated"
+        )
+        marker_index = snippet_end + 1 - full_start
+        if 0 <= marker_index < len(body_lines):
+            body_lines[marker_index] = marker
+        else:
+            body_lines.append(marker)
+            full_end += 1
     return SliceResult(
         snippet_start=anchor_start,
         snippet_end=snippet_end,
         full_start=full_start,
         full_end=full_end,
-        code=code,
+        code="\n".join(body_lines),
         truncated_lines=truncated_lines,
     )
 

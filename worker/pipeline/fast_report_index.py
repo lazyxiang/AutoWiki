@@ -217,7 +217,7 @@ def _build_directory_tree_with_degradation(
             > _DIRECTORY_TREE_HARD_CAP_TOKENS
         ):
             trimmed = previous
-            break
+            continue
     return _build_directory_tree(trimmed)
 
 

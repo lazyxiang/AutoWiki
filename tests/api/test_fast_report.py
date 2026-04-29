@@ -814,6 +814,64 @@ async def test_ws_fast_report_emits_persisted_failure_detail(fast_report_env):
     }
 
 
+async def test_ws_fast_report_emits_structured_outdated_index_error(
+    fast_report_env,
+):
+    """Worker-side outdated-index failures use the same actionable payload as REST."""
+    from starlette.testclient import TestClient
+
+    from api.main import app
+    from shared.database import get_session, init_db
+    from shared.models import FastReport, FastReportSection, Job, Repository
+
+    db_path = fast_report_env
+    await init_db(db_path)
+    async with get_session(db_path) as s:
+        s.add(Repository(id="r1", owner="o", name="n", status="ready"))
+        s.add(
+            Job(
+                id="fr-old-index",
+                repo_id="r1",
+                type="fast_report",
+                status="failed",
+                error="fast_report_index_outdated: Repository index is outdated",
+            )
+        )
+        s.add(
+            FastReport(
+                id="fr-old-index",
+                repo_id="r1",
+                commit_sha="deadbeef",
+                status="failed",
+                expires_at=datetime.now(UTC) + timedelta(days=7),
+            )
+        )
+        s.add(
+            FastReportSection(
+                id="sec-old-index",
+                report_id="fr-old-index",
+                query="Why did it fail?",
+                title="Pending",
+                summary=None,
+                markdown="",
+                citations_json="[]",
+                evidence_blocks_json="[]",
+                related_wiki_pages_json="[]",
+                related_diagrams_json="[]",
+                status="failed",
+            )
+        )
+        await s.commit()
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/repos/r1/fast-reports/fr-old-index") as ws:
+            msg = ws.receive_json()
+
+    assert msg["type"] == "error"
+    assert msg["content"]["error"] == "fast_report_index_outdated"
+    assert msg["content"]["actionable_command"] == "autowiki index <repo>"
+
+
 async def test_ws_fast_report_404_closes_with_4004(fast_report_env):
     """Missing reports are rejected before websocket upgrade with code 4004."""
     from starlette.testclient import TestClient

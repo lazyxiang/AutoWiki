@@ -543,6 +543,26 @@ async def test_plan_fast_report_search_retries_degenerate_output_once(mock_llm):
     assert "Re-plan the search" in prompts[1]
 
 
+async def test_plan_fast_report_search_coerces_invalid_question_type_to_unknown(
+    mock_llm,
+):
+    from worker.fast_report import plan_fast_report_search
+
+    async def _structured(prompt, schema):
+        return {
+            "language": "en",
+            "question_type": "how_x_works",
+            "search_terms": ["x"],
+            "retrieval_focus": ["worker.fast_report"],
+        }
+
+    mock_llm.generate_structured.side_effect = _structured
+
+    intent = await plan_fast_report_search("How does X work?", "autowiki", mock_llm)
+
+    assert intent.question_type == "unknown"
+
+
 def test_select_related_wiki_pages_supports_localized_tokens():
     from worker.fast_report import _select_related_wiki_pages
 

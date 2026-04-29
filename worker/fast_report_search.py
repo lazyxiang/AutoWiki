@@ -121,6 +121,7 @@ class _SliceCandidate:
     reason: str
     full_start: int
     full_end: int
+    truncated_lines: int = 0
 
 
 def profile_for_question_type(question_type: str | None) -> _RetrievalProfile:
@@ -202,7 +203,9 @@ def retrieve_code_evidence(
         profile,
         clone_root=clone_root,
     )
+    slice_count_before_budget = len(slice_candidates)
     slice_candidates = _apply_token_budget(slice_candidates, effective_budget)
+    dropped_due_to_budget = slice_count_before_budget - len(slice_candidates)
 
     snippets: list[dict[str, Any]] = []
     citations = []
@@ -245,6 +248,7 @@ def retrieve_code_evidence(
         snippets=snippets,
         citations=citations,
         evidence_blocks=evidence_blocks,
+        retrieval_metadata={"dropped_due_to_budget": dropped_due_to_budget},
     )
 
 
@@ -759,7 +763,14 @@ def _build_slice_candidates(
             start_line, end_line = _line_span(entity)
             if entity is None:
                 start_line, end_line = _touchpoint_span(entry)
-            text, full_start, full_end = _slice_text(
+            (
+                text,
+                actual_start,
+                actual_end,
+                full_start,
+                full_end,
+                truncated_lines,
+            ) = _slice_text(
                 candidate.path,
                 entry,
                 entity,
@@ -780,8 +791,8 @@ def _build_slice_candidates(
                 _SliceCandidate(
                     citation_id=f"code-{file_idx}-{entity_idx}",
                     file_path=candidate.path,
-                    start_line=start_line,
-                    end_line=end_line,
+                    start_line=actual_start,
+                    end_line=actual_end,
                     code=text,
                     symbol_path=symbol_path,
                     label=label,
@@ -789,6 +800,7 @@ def _build_slice_candidates(
                     reason=reason,
                     full_start=full_start,
                     full_end=full_end,
+                    truncated_lines=truncated_lines,
                 )
             )
     return slice_candidates
@@ -812,16 +824,19 @@ def _slice_text(
     profile: _RetrievalProfile,
     *,
     clone_root: Path | None,
-) -> tuple[str | None, int, int]:
+) -> tuple[str | None, int, int, int, int, int]:
     if clone_root is None:
         return (
             _build_snippet_text(path, entry, entity),
+            start_line,
+            end_line,
             max(1, start_line - 5),
             end_line + 5,
+            0,
         )
     extractor = _load_slice_extractor()
     if extractor is None:
-        return None, start_line, end_line
+        return None, start_line, end_line, start_line, end_line, 0
     result = extractor(
         clone_root=clone_root,
         rel_path=path,
@@ -831,8 +846,15 @@ def _slice_text(
         context_lines=5,
     )
     if result is None:
-        return None, start_line, end_line
-    return result.code, int(result.full_start), int(result.full_end)
+        return None, start_line, end_line, start_line, end_line, 0
+    return (
+        result.code,
+        int(result.snippet_start),
+        int(result.snippet_end),
+        int(result.full_start),
+        int(result.full_end),
+        int(result.truncated_lines),
+    )
 
 
 def _load_slice_extractor():

@@ -310,14 +310,17 @@ async def ws_fast_report(websocket: WebSocket, repo_id: str, report_id: str):
                     sent_sections.add(section.id)
 
             if report.status == "failed":
+                error_content = (
+                    job.error if job is not None and job.error else "Fast report failed"
+                )
+                if isinstance(error_content, str) and (
+                    "fast_report_index_outdated" in error_content
+                ):
+                    error_content = _outdated_index_detail()
                 await websocket.send_json(
                     {
                         "type": "error",
-                        "content": (
-                            job.error
-                            if job is not None and job.error
-                            else "Fast report failed"
-                        ),
+                        "content": error_content,
                     }
                 )
                 break

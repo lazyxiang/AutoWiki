@@ -120,6 +120,7 @@ class FastReportQuestionIntent:
     evidence_shape: str = ""
     search_terms: list[str] = field(default_factory=list)
     retrieval_focus: list[str] = field(default_factory=list)
+    plan_retried: bool = False
 
 
 @dataclass(slots=True)
@@ -133,6 +134,7 @@ class CodeEvidenceLayer:
     snippets: list[dict[str, Any]] = field(default_factory=list)
     citations: list[FastReportCitation] = field(default_factory=list)
     evidence_blocks: list[FastReportEvidenceBlock] = field(default_factory=list)
+    retrieval_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -299,6 +301,7 @@ async def plan_fast_report_search(
         await llm.generate_structured(retry_prompt, _SEARCH_PLAN_SCHEMA),
         fallback_language=search_language,
     )
+    retry_intent.plan_retried = True
     if _is_degenerate_plan(retry_intent):
         log_final_failure(
             logger,
@@ -326,9 +329,12 @@ def _parse_plan_response(
         if raw_language
         else fallback_language
     )
+    question_type = str(raw.get("question_type", "unknown") or "unknown").strip()
+    if question_type not in QUESTION_TYPES:
+        question_type = "unknown"
     return FastReportQuestionIntent(
         language=planned_language,
-        question_type=raw.get("question_type", "unknown"),
+        question_type=question_type,
         target=str(raw.get("target", "") or "").strip(),
         answer_shape=str(raw.get("answer_shape", "") or "").strip(),
         evidence_shape=str(raw.get("evidence_shape", "") or "").strip(),
@@ -846,21 +852,16 @@ def _build_analysis_events(
         for citation in layers.code_evidence.citations
     ]
     slice_files: dict[str, list[dict[str, Any]]] = {}
+    citation_paths = {
+        citation.id: citation.file_path for citation in layers.code_evidence.citations
+    }
     for block in layers.code_evidence.evidence_blocks:
-        slice_files.setdefault(block.citation_id, [])
-        path = next(
-            (
-                citation.file_path
-                for citation in layers.code_evidence.citations
-                if citation.id == block.citation_id
-            ),
-            "",
-        )
+        path = citation_paths.get(block.citation_id, "")
         slice_files.setdefault(path, []).append(
             {
                 "symbol_path": block.symbol_path,
                 "lines": [block.snippet_start, block.snippet_end],
-                "truncated_lines": 0,
+                "truncated_lines": _truncated_lines_from_code(block.code),
             }
         )
     interpretive_counts = {
@@ -890,7 +891,7 @@ def _build_analysis_events(
             "question_type": intent.question_type,
             "search_terms": list(intent.search_terms),
             "retrieval_focus": list(intent.retrieval_focus),
-            "plan_retried": False,
+            "plan_retried": intent.plan_retried,
         },
         {"phase": "code_evidence_seed", "files": code_files[:5]},
         {
@@ -907,7 +908,9 @@ def _build_analysis_events(
                 for path, slices in slice_files.items()
                 if path
             ],
-            "dropped_due_to_budget": 0,
+            "dropped_due_to_budget": layers.code_evidence.retrieval_metadata.get(
+                "dropped_due_to_budget", 0
+            ),
         },
         {"phase": "interpretive_layer", **interpretive_counts},
         {
@@ -920,3 +923,8 @@ def _build_analysis_events(
             "claims_dropped": claims_dropped,
         },
     ]
+
+
+def _truncated_lines_from_code(code: str) -> int:
+    match = re.search(r"\.\.\. (\d+) more lines truncated", code)
+    return int(match.group(1)) if match else 0
