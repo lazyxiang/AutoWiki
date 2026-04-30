@@ -54,7 +54,7 @@ async def test_research_report_model_persists_roundtrip(tmp_path):
 
 async def test_plan_research_returns_investigation_steps(mock_llm):
     """The planner extracts structured investigation steps from an LLM response."""
-    from worker.deep_research import ResearchStep, plan_research
+    from worker.research.service import ResearchStep, plan_research
 
     async def _structured(*args, **kwargs):
         return {
@@ -93,7 +93,7 @@ async def test_investigate_step_returns_finding_with_sources(mock_llm, mock_embe
     """Each investigation step embeds its query, searches FAISS, and calls the LLM."""
     from unittest.mock import MagicMock
 
-    from worker.deep_research import ResearchStep, investigate_step
+    from worker.research.service import ResearchStep, investigate_step
 
     store = MagicMock()
     store.search.return_value = [
@@ -133,7 +133,7 @@ async def test_investigate_step_returns_finding_with_sources(mock_llm, mock_embe
 
 
 def test_format_retrieved_chunks_for_prompt_formats_context():
-    from worker.deep_research import format_retrieved_chunks_for_prompt
+    from worker.research.service import format_retrieved_chunks_for_prompt
 
     context = format_retrieved_chunks_for_prompt(
         [
@@ -159,7 +159,7 @@ def test_format_retrieved_chunks_for_prompt_formats_context():
 
 async def test_synthesize_report_joins_findings(mock_llm):
     """Synthesizer builds a single Markdown report from plan + findings."""
-    from worker.deep_research import (
+    from worker.research.service import (
         ResearchFinding,
         ResearchStep,
         synthesize_report,
@@ -195,7 +195,7 @@ async def test_run_deep_research_flow_emits_events(mock_llm, mock_embedding):
     """The orchestrator emits plan/step_start/step_finding/report events in order."""
     from unittest.mock import MagicMock
 
-    from worker.deep_research import run_deep_research_flow
+    from worker.research.service import run_deep_research_flow
 
     async def _structured(prompt, schema, system=""):
         return {
@@ -252,7 +252,7 @@ async def test_run_deep_research_persists_report(
 
     from shared.database import dispose_db, get_session, init_db
     from shared.models import Job, Repository, ResearchReport
-    from worker.jobs import run_deep_research
+    from worker.research.jobs import run_deep_research
 
     db_path = str(tmp_path / "t.db")
     monkeypatch.setenv("DATABASE_PATH", db_path)
@@ -296,10 +296,12 @@ async def test_run_deep_research_persists_report(
     mock_llm.generate = _generate
 
     with (
-        patch("worker.jobs.make_llm_provider", return_value=mock_llm),
-        patch("worker.jobs.make_embedding_provider", return_value=mock_embedding),
-        patch("worker.jobs.FAISSStore", return_value=fake_store),
-        patch("worker.jobs._load_faiss_for_research", return_value=fake_store),
+        patch("worker.research.jobs.make_llm_provider", return_value=mock_llm),
+        patch(
+            "worker.research.jobs.make_embedding_provider", return_value=mock_embedding
+        ),
+        patch("worker.research.jobs.FAISSStore", return_value=fake_store),
+        patch("worker.research.jobs._load_faiss_for_research", return_value=fake_store),
     ):
         try:
             await run_deep_research(

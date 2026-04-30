@@ -8,11 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from worker.fast_report_planning import QuestionTypeProfile
-from worker.fast_report_planning import (
+from worker.fast_report.planning import QuestionTypeProfile
+from worker.fast_report.planning import (
     expansion_graph_for as _planning_expansion_graph_for,
 )
-from worker.fast_report_planning import (
+from worker.fast_report.planning import (
     profile_for_question_type as _planning_profile_for_question_type,
 )
 
@@ -840,7 +840,7 @@ def _slice_text(
 
 def _load_slice_extractor():
     try:
-        from worker.fast_report_slices import extract_source_slice
+        from worker.fast_report.slices import extract_source_slice
     except ImportError:
         return None
     return extract_source_slice

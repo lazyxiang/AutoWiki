@@ -680,7 +680,7 @@ async def test_assign_files_logs_each_validation_failure_and_feedback(caplog):
 
 async def test_generate_wiki_plan_phase2_recovery(mock_llm):
     """When Phase 2 (assignment) fails, generate_wiki_plan must recover
-    using directory-clustering while maintaining the LLM outline."""
+    using score-based heuristic selection while maintaining the LLM outline."""
     from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
     from worker.pipeline.wiki_planner import generate_wiki_plan
 
@@ -733,7 +733,7 @@ async def test_generate_wiki_plan_phase2_recovery(mock_llm):
     assert "Worker Pipeline" in titles
     assert "API Layer" in titles
 
-    # But files are assigned via heuristic (directory clustering)
+    # But files are assigned via the score-based heuristic fallback.
     pipeline_page = next(p for p in plan.pages if p.title == "Worker Pipeline")
     api_page = next(p for p in plan.pages if p.title == "API Layer")
 
@@ -915,6 +915,15 @@ def test_score_semantic_alignment():
     assert _score_file_for_page(
         "api/gateway.py", page, infos, None
     ) > _score_file_for_page("util/helper.py", page, infos, None)
+
+
+def test_score_semantic_alignment_uses_unicode_tokens():
+    page = {"title": "认证 服务", "purpose": "处理 用户 登录"}
+    infos = _fake_infos(("services/认证/登录.py", []), ("services/misc.py", []))
+
+    assert _score_file_for_page(
+        "services/认证/登录.py", page, infos, None
+    ) > _score_file_for_page("services/misc.py", page, infos, None)
 
 
 def test_prefilter_returns_at_most_max_candidates():

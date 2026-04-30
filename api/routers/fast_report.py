@@ -16,7 +16,7 @@ from api.queue import enqueue_fast_report as _enqueue_fast_report
 from shared.config import get_config
 from shared.database import get_session
 from shared.models import FastReport, FastReportSection, Job, Repository
-from worker.jobs import (
+from worker.fast_report.jobs import (
     FastReportIndexOutdated,
     _load_fast_report_index,
     _validate_fast_report_index_version,

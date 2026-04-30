@@ -28,7 +28,7 @@ class _FakeSliceResult:
 
 def _install_fake_slice_extractor(monkeypatch, *, fail_paths: set[str] | None = None):
     fail_paths = fail_paths or set()
-    module = types.ModuleType("worker.fast_report_slices")
+    module = types.ModuleType("worker.fast_report.slices")
 
     def extract_source_slice(
         *,
@@ -57,11 +57,11 @@ def _install_fake_slice_extractor(monkeypatch, *, fail_paths: set[str] | None = 
         )
 
     module.extract_source_slice = extract_source_slice
-    monkeypatch.setitem(sys.modules, "worker.fast_report_slices", module)
+    monkeypatch.setitem(sys.modules, "worker.fast_report.slices", module)
 
 
 def test_profile_for_question_type_uses_adaptive_budgets():
-    from worker.fast_report_search import profile_for_question_type
+    from worker.fast_report.search import profile_for_question_type
 
     assert profile_for_question_type("architecture").seed_limit == 4
     assert profile_for_question_type("architecture").slices_per_file == 3
@@ -72,7 +72,7 @@ def test_profile_for_question_type_uses_adaptive_budgets():
 
 
 def test_expansion_graph_for_maps_question_types():
-    from worker.fast_report_search import expansion_graph_for
+    from worker.fast_report.search import expansion_graph_for
 
     assert expansion_graph_for("architecture") == (
         "imports_and_imported_by",
@@ -99,7 +99,7 @@ def test_expansion_graph_for_maps_question_types():
 def test_architecture_retrieval_emits_top_k_multi_slice_source_citations(
     tmp_path, monkeypatch
 ):
-    from worker.fast_report_search import retrieve_code_evidence
+    from worker.fast_report.search import retrieve_code_evidence
 
     _install_fake_slice_extractor(monkeypatch)
     clone_root = tmp_path
@@ -188,7 +188,7 @@ def test_architecture_retrieval_emits_top_k_multi_slice_source_citations(
 
 
 def test_execution_flow_expands_call_sites_without_imported_by(tmp_path, monkeypatch):
-    from worker.fast_report_search import retrieve_code_evidence
+    from worker.fast_report.search import retrieve_code_evidence
 
     _install_fake_slice_extractor(monkeypatch)
     (tmp_path / "app").mkdir()
@@ -267,7 +267,7 @@ def test_execution_flow_expands_call_sites_without_imported_by(tmp_path, monkeyp
 
 
 def test_configuration_expands_matching_config_touchpoints(tmp_path, monkeypatch):
-    from worker.fast_report_search import retrieve_code_evidence
+    from worker.fast_report.search import retrieve_code_evidence
 
     _install_fake_slice_extractor(monkeypatch)
     (tmp_path / "app").mkdir()
@@ -345,7 +345,7 @@ def test_configuration_expands_matching_config_touchpoints(tmp_path, monkeypatch
 
 
 def test_clone_root_drops_failed_slice_without_metadata_fallback(tmp_path, monkeypatch):
-    from worker.fast_report_search import retrieve_code_evidence
+    from worker.fast_report.search import retrieve_code_evidence
 
     _install_fake_slice_extractor(monkeypatch, fail_paths={"app/missing.py"})
     (tmp_path / "app").mkdir()
@@ -384,7 +384,7 @@ def test_clone_root_drops_failed_slice_without_metadata_fallback(tmp_path, monke
 
 
 def test_token_budget_eviction_drops_lowest_scored_slices(tmp_path, monkeypatch):
-    from worker.fast_report_search import retrieve_code_evidence
+    from worker.fast_report.search import retrieve_code_evidence
 
     _install_fake_slice_extractor(monkeypatch)
     (tmp_path / "app").mkdir()

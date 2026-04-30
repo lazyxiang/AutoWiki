@@ -127,15 +127,15 @@ async def test_full_index_reads_autowiki_wiki_json(tmp_path, monkeypatch):
 
     with (
         patch(
-            "worker.jobs.clone_or_fetch",
+            "worker.index.full.clone_or_fetch",
             new=AsyncMock(return_value=("abc", "main")),
         ),
         patch(
-            "worker.jobs.get_platform_token",
+            "worker.index.full.get_platform_token",
             new=AsyncMock(return_value=None),
         ),
         patch(
-            "worker.jobs.get_platform_by_name",
+            "worker.index.full.get_platform_by_name",
             return_value=MagicMock(
                 fetch_metadata=AsyncMock(
                     return_value=MagicMock(
@@ -151,25 +151,25 @@ async def test_full_index_reads_autowiki_wiki_json(tmp_path, monkeypatch):
                 ),
             ),
         ),
-        patch("worker.jobs.filter_files", return_value=[]),
-        patch("worker.jobs.extract_readme", return_value=""),
+        patch("worker.index.full.filter_files", return_value=[]),
+        patch("worker.index.full.extract_readme", return_value=""),
         patch(
-            "worker.jobs.analyze_all_files",
+            "worker.index.full.analyze_all_files",
             return_value=MagicMock(files={}, to_llm_summary=lambda **k: ""),
         ),
         patch(
-            "worker.jobs.build_dependency_graph",
+            "worker.index.full.build_dependency_graph",
             return_value=MagicMock(clusters=[], edges={}),
         ),
-        patch("worker.jobs.build_rag_index", new=AsyncMock()),
-        patch("worker.jobs.make_llm_provider"),
-        patch("worker.jobs.make_fast_llm_provider"),
+        patch("worker.index.full.build_rag_index", new=AsyncMock()),
+        patch("worker.index.full.make_llm_provider"),
+        patch("worker.index.full.make_fast_llm_provider"),
         patch(
-            "worker.jobs.make_embedding_provider",
+            "worker.index.full.make_embedding_provider",
             return_value=MagicMock(dimension=8),
         ),
-        patch("worker.jobs.generate_wiki_plan", new=_fake_plan),
-        patch("worker.jobs.compute_generation_order", return_value=[]),
+        patch("worker.index.full.generate_wiki_plan", new=_fake_plan),
+        patch("worker.index.full.compute_generation_order", return_value=[]),
     ):
         try:
             await run_full_index({}, "r1", "j1", "o", "n", clone_root=clone_root)

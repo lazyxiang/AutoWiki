@@ -141,7 +141,7 @@ superseded.
 1. **Request enters** — `POST /api/repos` in `api/routers/repos.py` enqueues a job
    via `api/queue.py` → Redis.
 
-2. **Worker picks up** — `run_full_index()` in `worker/jobs.py` is the top-level
+2. **Worker picks up** — `run_full_index()` in `worker/index/full.py` is the top-level
    orchestrator. Read it to understand stage sequencing and progress reporting.
 
 3. **Stages 1–4** (`worker/pipeline/ingestion.py`, `ast_analysis.py`,
@@ -180,7 +180,7 @@ See `docs/superpowers/specs/2026-04-10-wiki-page-quality-redesign.md` §6.
 
 ### How incremental refresh works
 
-`run_refresh_index()` in `worker/jobs.py` loads the saved `wiki_plan.json`,
+`run_refresh_index()` in `worker/index/refresh.py` loads the saved `wiki_plan.json`,
 identifies files changed since the last commit SHA, and re-runs only the affected
 pages through the Stage 6 pipeline. Unchanged pages are read from disk and can
 supply `child_contents` for parent pages that do need regeneration.

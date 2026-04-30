@@ -31,12 +31,14 @@ _FAKE_PLATFORM = MagicMock(
 )
 
 
-def _enter_platform_patches(stack: ExitStack) -> None:
+def _enter_platform_patches(
+    stack: ExitStack, module: str = "worker.index.full"
+) -> None:
     stack.enter_context(
-        patch("worker.jobs.get_platform_token", new=AsyncMock(return_value=None))
+        patch(f"{module}.get_platform_token", new=AsyncMock(return_value=None))
     )
     stack.enter_context(
-        patch("worker.jobs.get_platform_by_name", return_value=_FAKE_PLATFORM)
+        patch(f"{module}.get_platform_by_name", return_value=_FAKE_PLATFORM)
     )
 
 
@@ -451,23 +453,27 @@ async def test_run_full_index_persists_fast_report_index(
         await s.commit()
 
     with ExitStack() as stack:
-        mock_cfg = stack.enter_context(patch("worker.jobs.get_config"))
+        mock_cfg = stack.enter_context(patch("worker.index.full.get_config"))
         stack.enter_context(
             patch(
-                "worker.jobs.clone_or_fetch",
+                "worker.index.full.clone_or_fetch",
                 new_callable=AsyncMock,
                 return_value=("abc123", "main"),
             )
         )
         _enter_platform_patches(stack)
         stack.enter_context(
-            patch("worker.jobs.make_llm_provider", return_value=mock_llm)
+            patch("worker.index.full.make_llm_provider", return_value=mock_llm)
         )
         stack.enter_context(
-            patch("worker.jobs.make_fast_llm_provider", return_value=mock_fast_llm)
+            patch(
+                "worker.index.full.make_fast_llm_provider", return_value=mock_fast_llm
+            )
         )
         stack.enter_context(
-            patch("worker.jobs.make_embedding_provider", return_value=mock_embedding)
+            patch(
+                "worker.index.full.make_embedding_provider", return_value=mock_embedding
+            )
         )
         cfg = mock_cfg.return_value
         cfg.database_path = tmp_path / "test.db"
@@ -569,30 +575,36 @@ async def test_run_refresh_index_persists_fast_report_index(
     )
 
     with ExitStack() as stack:
-        mock_cfg = stack.enter_context(patch("worker.jobs.get_config"))
+        mock_cfg = stack.enter_context(patch("worker.index.refresh.get_config"))
         stack.enter_context(
             patch(
-                "worker.jobs.clone_or_fetch",
+                "worker.index.refresh.clone_or_fetch",
                 new_callable=AsyncMock,
                 return_value=("new456", "main"),
             )
         )
         stack.enter_context(
             patch(
-                "worker.jobs.get_changed_files",
+                "worker.index.refresh.get_changed_files",
                 new_callable=AsyncMock,
                 return_value=["main.py"],
             )
         )
-        _enter_platform_patches(stack)
+        _enter_platform_patches(stack, module="worker.index.refresh")
         stack.enter_context(
-            patch("worker.jobs.make_llm_provider", return_value=mock_llm)
+            patch("worker.index.refresh.make_llm_provider", return_value=mock_llm)
         )
         stack.enter_context(
-            patch("worker.jobs.make_fast_llm_provider", return_value=mock_fast_llm)
+            patch(
+                "worker.index.refresh.make_fast_llm_provider",
+                return_value=mock_fast_llm,
+            )
         )
         stack.enter_context(
-            patch("worker.jobs.make_embedding_provider", return_value=mock_embedding)
+            patch(
+                "worker.index.refresh.make_embedding_provider",
+                return_value=mock_embedding,
+            )
         )
         cfg = mock_cfg.return_value
         cfg.database_path = tmp_path / "test.db"

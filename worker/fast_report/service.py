@@ -23,20 +23,19 @@ from shared.fast_report_types import (
     FastReportEvidenceBlock,
     FastReportWikiLink,
 )
-from worker.deep_research import format_retrieved_chunks_for_prompt
-from worker.fast_report_interpretive import (
+from worker.fast_report.interpretive import (
     InterpretiveBundle,
     build_interpretive_bundle,
 )
-from worker.fast_report_planning import (
+from worker.fast_report.planning import (
     QUESTION_TYPES,
     build_plan_prompt_context,
     expansion_graph_for,
 )
-from worker.fast_report_search import (
+from worker.fast_report.search import (
     _tokenize as _tokenize_intent,
 )
-from worker.fast_report_search import (
+from worker.fast_report.search import (
     detect_question_language,
     normalize_fast_report_language,
     normalize_string_list,
@@ -44,6 +43,7 @@ from worker.fast_report_search import (
 from worker.llm.base import LLMProvider
 from worker.pipeline.language import get_fast_report_language_instruction
 from worker.pipeline.pipeline_logging import log_final_failure, log_validation_retry
+from worker.research.service import format_retrieved_chunks_for_prompt
 
 logger = logging.getLogger(__name__)
 

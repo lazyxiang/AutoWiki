@@ -65,12 +65,12 @@ async def test_full_pipeline_produces_pages(
         ),
     )
     with (
-        patch("worker.jobs.clone_or_fetch", return_value=("deadbeef", "main")),
-        patch("worker.jobs.get_platform_token", new=AsyncMock(return_value=None)),
-        patch("worker.jobs.get_platform_by_name", return_value=_mock_platform),
-        patch("worker.jobs.make_llm_provider", return_value=mock_llm),
-        patch("worker.jobs.make_fast_llm_provider", return_value=mock_fast_llm),
-        patch("worker.jobs.make_embedding_provider", return_value=mock_embedding),
+        patch("worker.index.full.clone_or_fetch", return_value=("deadbeef", "main")),
+        patch("worker.index.full.get_platform_token", new=AsyncMock(return_value=None)),
+        patch("worker.index.full.get_platform_by_name", return_value=_mock_platform),
+        patch("worker.index.full.make_llm_provider", return_value=mock_llm),
+        patch("worker.index.full.make_fast_llm_provider", return_value=mock_fast_llm),
+        patch("worker.index.full.make_embedding_provider", return_value=mock_embedding),
     ):
         from worker.jobs import run_full_index
 

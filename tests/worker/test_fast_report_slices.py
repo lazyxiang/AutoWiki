@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from worker.fast_report_slices import SliceResult, extract_source_slice
+from worker.fast_report.slices import SliceResult, extract_source_slice
 
 
 def _write(tmp_path: Path, name: str, content: str) -> Path:

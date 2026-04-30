@@ -136,7 +136,7 @@ Phase 2 中短暂加入，并在 Phase 2.5 中被移除 —— 页面生成器�
 1. **请求进入** —— `api/routers/repos.py` 中的 `POST /api/repos` 通过
    `api/queue.py` → Redis 将任务加入队列。
 
-2. **Worker 领取任务** —— `worker/jobs.py` 中的 `run_full_index()` 是顶层
+2. **Worker 领取任务** —— `worker/index/full.py` 中的 `run_full_index()` 是顶层
    编排器。阅读它可以了解阶段排序和进度报告。
 
 3. **第 1–4 阶段** (`worker/pipeline/ingestion.py`, `ast_analysis.py`,
@@ -175,7 +175,7 @@ Phase 2 中短暂加入，并在 Phase 2.5 中被移除 —— 页面生成器�
 
 ### 增量刷新是如何工作的
 
-`worker/jobs.py` 中的 `run_refresh_index()` 加载保存的 `wiki_plan.json`，
+`worker/index/refresh.py` 中的 `run_refresh_index()` 加载保存的 `wiki_plan.json`，
 识别出自上次提交 SHA 以来发生变化的文件，并仅通过第 6 阶段流水线重新运行受影响的页面。
 未更改的页面从磁盘读取，并可以为需要重新生成的父页面提供 `child_contents`。
 

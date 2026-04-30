@@ -1,4 +1,4 @@
-from worker.fast_report_planning import (
+from worker.fast_report.planning import (
     QUESTION_TYPES,
     ExpansionGraph,
     QuestionTypeProfile,
