@@ -189,7 +189,7 @@ def filter_files(
     return sorted(results)
 
 
-def extract_readme(root: Path, max_chars: int = 3000) -> str | None:
+def extract_readme(root: Path, max_chars: int = 15000) -> str | None:
     """Extract README content from the repository root directory.
 
     Tries several common README filenames in priority order and returns the
@@ -200,7 +200,8 @@ def extract_readme(root: Path, max_chars: int = 3000) -> str | None:
     Args:
         root: Absolute path to the repository root directory.
         max_chars: Maximum number of characters to return.  Defaults to
-            ``3000`` to keep the LLM prompt manageable.
+            ``15000`` to preserve detailed architectural overviews common in
+            larger projects while still bounding the LLM prompt.
 
     Returns:
         str | None: The first *max_chars* characters of the README content, or

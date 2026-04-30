@@ -750,8 +750,8 @@ class FileAnalysis:
             # Dependency line — asymmetric caps because internal imports are
             # the primary coupling signal for page grouping while external
             # package names mainly convey technology context.
-            _MAX_INTERNAL = 15  # enough signal even for large hub files
-            _MAX_EXTERNAL = 5  # package names rarely influence page grouping
+            _MAX_INTERNAL = 30  # raised so dense hub files surface their full coupling
+            _MAX_EXTERNAL = 15  # raised to capture richer technology context
             if dep_graph is not None:
                 internal = dep_graph.edges.get(rel_path, [])
                 external = dep_graph.external_deps.get(rel_path, [])

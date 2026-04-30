@@ -623,6 +623,53 @@ async def test_generate_wiki_plan_two_phase(mock_llm):
     assert plan.pages[titles.index("Utils")].files == ["utils.py"]
 
 
+async def test_generate_wiki_plan_scales_summary_budget_for_large_repos(
+    mock_llm, monkeypatch
+):
+    """Phase 1 gives larger repos a larger explicit summary budget."""
+    from worker.pipeline import wiki_planner as wp
+
+    class TrackingFileAnalysis(FileAnalysis):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.summary_kwargs = None
+
+        def to_llm_summary(self, **kwargs):
+            self.summary_kwargs = kwargs
+            return "tracked summary"
+
+    async def fake_generate_outline(**kwargs):
+        return [{"title": "Overview", "purpose": "Overview."}]
+
+    async def fake_select_files(**kwargs):
+        return {"Overview": [next(iter(kwargs["all_files"]))]}
+
+    def fake_validate_wiki_plan(*args, **kwargs):
+        return WikiPlan(pages=[WikiPageSpec(title="Overview", purpose="Overview.")])
+
+    monkeypatch.setattr(wp, "_generate_outline", fake_generate_outline)
+    monkeypatch.setattr(wp, "_select_files", fake_select_files)
+    monkeypatch.setattr(wp, "validate_wiki_plan", fake_validate_wiki_plan)
+
+    def make_analysis(paths: list[str]) -> TrackingFileAnalysis:
+        return TrackingFileAnalysis(
+            files={
+                path: FileInfo(rel_path=path, entities=[], summary="") for path in paths
+            }
+        )
+
+    small_repo = make_analysis(["main.py", "models.py", "utils.py"])
+    large_repo = make_analysis([f"pkg/mod{i}.py" for i in range(1000)])
+
+    await generate_wiki_plan(small_repo, repo_name="small", llm=mock_llm)
+    await generate_wiki_plan(large_repo, repo_name="large", llm=mock_llm)
+
+    assert small_repo.summary_kwargs["max_files"] >= len(small_repo.files)
+    assert (
+        large_repo.summary_kwargs["max_files"] > small_repo.summary_kwargs["max_files"]
+    )
+
+
 async def test_assign_files_logs_each_validation_failure_and_feedback(caplog):
     """_select_files must log each retry AND throw on final failure.
 
@@ -932,6 +979,14 @@ def test_prefilter_returns_at_most_max_candidates():
     infos = {f: FakeFileInfo([f"fn{i}"]) for i, f in enumerate(all_files)}
     result = _prefilter_candidates(page, all_files, infos, None, max_candidates=10)
     assert len(result) <= 10
+
+
+def test_prefilter_default_handles_moderately_large_candidate_sets():
+    page = {"title": "Worker", "purpose": "Background jobs."}
+    all_files = [f"worker/file{i}.py" for i in range(30)]
+    infos = {f: FakeFileInfo([f"fn{i}"]) for i, f in enumerate(all_files)}
+    result = _prefilter_candidates(page, all_files, infos, None)
+    assert set(result) == set(all_files)
 
 
 def test_prefilter_prefers_code_files():

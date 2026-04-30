@@ -25,7 +25,7 @@ class OpenAIProvider(LLMProvider):
             messages.append({"role": "system", "content": system_text})
         messages.append({"role": "user", "content": prompt_text})
         response = await self._client.chat.completions.create(
-            model=self._model, messages=messages, max_tokens=16000
+            model=self._model, messages=messages, max_tokens=32000
         )
         return response.choices[0].message.content
 
@@ -51,7 +51,7 @@ class OpenAIProvider(LLMProvider):
             messages.append({"role": "system", "content": system_text})
         messages.append({"role": "user", "content": prompt_text})
         stream = await self._client.chat.completions.create(
-            model=self._model, messages=messages, max_tokens=16000, stream=True
+            model=self._model, messages=messages, max_tokens=32000, stream=True
         )
         async for chunk in stream:
             delta = chunk.choices[0].delta.content

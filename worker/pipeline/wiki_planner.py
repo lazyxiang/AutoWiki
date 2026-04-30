@@ -783,7 +783,7 @@ def _prefilter_candidates(
     all_files: list[str],
     file_infos: dict[str, Any],
     dep_graph: DependencyGraph | None,
-    max_candidates: int = 25,
+    max_candidates: int = 40,
 ) -> list[str]:
     scored = [
         (f, _score_file_for_page(f, page, file_infos, dep_graph)) for f in all_files
@@ -803,7 +803,7 @@ def _heuristic_select_files(
     """Score-based file selection used as Phase 2 fallback.
 
     Preserves valid partial selections from a failed LLM attempt, then fills
-    remaining pages by pre-filtering to ~25 candidates and selecting the
+    remaining pages by pre-filtering to ~40 candidates and selecting the
     top-scoring files up to MAX_FILES_PER_PAGE.
     """
     result: dict[str, list[str]] = {}
@@ -820,7 +820,7 @@ def _heuristic_select_files(
         if title in result:
             continue
         candidates = _prefilter_candidates(
-            page, all_files, file_infos, dep_graph, max_candidates=25
+            page, all_files, file_infos, dep_graph, max_candidates=40
         )
         if not candidates:
             result[title] = []
@@ -1221,8 +1221,13 @@ async def generate_wiki_plan(
     from worker.pipeline.dependency_graph import format_for_llm_prompt
     from worker.pipeline.user_steering import assign_by_modules
 
-    file_summary = file_analysis.to_llm_summary(dep_graph=dep_graph, max_files=200)
     all_files = list(file_analysis.files.keys())
+    # Adaptive cap: small repos pay nothing, medium repos get full coverage,
+    # huge repos fall back to the 800-file safety cap inside to_llm_summary.
+    outline_max_files = min(800, max(500, len(all_files)))
+    file_summary = file_analysis.to_llm_summary(
+        dep_graph=dep_graph, max_files=outline_max_files
+    )
     dep_info = format_for_llm_prompt(dep_graph) if dep_graph is not None else None
     clusters = dep_graph.clusters if dep_graph is not None else None
 
