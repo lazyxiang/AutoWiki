@@ -217,6 +217,7 @@ async def test_ollama_provider_concatenates_segments(monkeypatch):
     provider = OllamaProvider(model="test", base_url="http://localhost:11434")
 
     captured_payload = {}
+    captured_client_kwargs = {}
 
     async def mock_post(url, json=None):
         captured_payload.update(json)
@@ -229,7 +230,12 @@ async def test_ollama_provider_concatenates_segments(monkeypatch):
     mock_client.post = AsyncMock(side_effect=mock_post)
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: mock_client)
+
+    def mock_async_client(**kwargs):
+        captured_client_kwargs.update(kwargs)
+        return mock_client
+
+    monkeypatch.setattr(httpx, "AsyncClient", mock_async_client)
 
     segments = [
         PromptSegment(text="cached ", cacheable=True),
@@ -239,6 +245,8 @@ async def test_ollama_provider_concatenates_segments(monkeypatch):
 
     assert captured_payload["prompt"] == "cached tail"
     assert captured_payload["system"] == "sys"
+    assert captured_payload["options"]["num_predict"] == 32000
+    assert captured_client_kwargs["timeout"].read >= 1800
 
 
 def test_llm_config_has_fast_model():

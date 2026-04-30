@@ -9,6 +9,16 @@ import httpx
 from worker.llm.base import LLMProvider, _parse_json_response
 from worker.llm.prompt_segment import PromptInput, normalize_prompt, segments_to_text
 
+_OLLAMA_NUM_PREDICT = 32000
+_OLLAMA_SECONDS_PER_1K_OUTPUT_TOKENS = 60.0
+
+
+def _timeout_for_num_predict(num_predict: int) -> httpx.Timeout:
+    timeout_seconds = max(
+        120.0, (num_predict / 1000) * _OLLAMA_SECONDS_PER_1K_OUTPUT_TOKENS
+    )
+    return httpx.Timeout(timeout_seconds, connect=10.0)
+
 
 class OllamaProvider(LLMProvider):
     def __init__(self, model: str = "llama3", base_url: str = "http://localhost:11434"):
@@ -22,11 +32,13 @@ class OllamaProvider(LLMProvider):
             "model": self._model,
             "prompt": prompt_text,
             "stream": False,
-            "options": {"num_predict": 32000},
+            "options": {"num_predict": _OLLAMA_NUM_PREDICT},
         }
         if system_text:
             payload["system"] = system_text
-        async with httpx.AsyncClient(timeout=120) as client:
+        async with httpx.AsyncClient(
+            timeout=_timeout_for_num_predict(_OLLAMA_NUM_PREDICT)
+        ) as client:
             resp = await client.post(f"{self._base_url}/api/generate", json=payload)
             resp.raise_for_status()
             return resp.json()["response"]
@@ -52,11 +64,13 @@ class OllamaProvider(LLMProvider):
             "model": self._model,
             "prompt": prompt_text,
             "stream": True,
-            "options": {"num_predict": 32000},
+            "options": {"num_predict": _OLLAMA_NUM_PREDICT},
         }
         if system_text:
             payload["system"] = system_text
-        async with httpx.AsyncClient(timeout=120) as client:
+        async with httpx.AsyncClient(
+            timeout=_timeout_for_num_predict(_OLLAMA_NUM_PREDICT)
+        ) as client:
             async with client.stream(
                 "POST", f"{self._base_url}/api/generate", json=payload
             ) as resp:

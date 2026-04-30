@@ -623,6 +623,66 @@ async def test_generate_wiki_plan_two_phase(mock_llm):
     assert plan.pages[titles.index("Utils")].files == ["utils.py"]
 
 
+@pytest.mark.parametrize(
+    ("file_count", "first_file", "expected_max_files"),
+    [
+        (3, "main.py", 500),
+        (1000, "pkg/mod0.py", 800),
+    ],
+)
+async def test_generate_wiki_plan_uses_adaptive_summary_budget(
+    mock_llm, monkeypatch, file_count, first_file, expected_max_files
+):
+    """Phase 1 opts into the issue #39 500-800 file summary budget."""
+    from worker.pipeline import wiki_planner as wp
+
+    class TrackingFileAnalysis(FileAnalysis):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.summary_kwargs = None
+
+        def to_llm_summary(self, **kwargs):
+            self.summary_kwargs = kwargs
+            return "tracked summary"
+
+    async def fake_generate_outline(**kwargs):
+        return [{"title": "Overview", "purpose": "Overview."}]
+
+    async def fake_select_files(**kwargs):
+        return {"Overview": [first_file]}
+
+    def fake_validate_wiki_plan(*args, **kwargs):
+        return WikiPlan(
+            pages=[
+                WikiPageSpec(
+                    title="Overview",
+                    purpose="Overview.",
+                    files=[first_file],
+                )
+            ]
+        )
+
+    monkeypatch.setattr(wp, "_generate_outline", fake_generate_outline)
+    monkeypatch.setattr(wp, "_select_files", fake_select_files)
+    monkeypatch.setattr(wp, "validate_wiki_plan", fake_validate_wiki_plan)
+
+    paths = (
+        [f"pkg/mod{i}.py" for i in range(file_count)]
+        if file_count > 3
+        else ["main.py", "models.py", "utils.py"]
+    )
+    file_analysis = TrackingFileAnalysis(
+        files={path: FileInfo(rel_path=path, entities=[], summary="") for path in paths}
+    )
+
+    await generate_wiki_plan(file_analysis, repo_name="test", llm=mock_llm)
+
+    assert file_analysis.summary_kwargs == {
+        "dep_graph": None,
+        "max_files": expected_max_files,
+    }
+
+
 async def test_assign_files_logs_each_validation_failure_and_feedback(caplog):
     """_select_files must log each retry AND throw on final failure.
 
@@ -923,6 +983,14 @@ def test_prefilter_returns_at_most_max_candidates():
     infos = {f: FakeFileInfo([f"fn{i}"]) for i, f in enumerate(all_files)}
     result = _prefilter_candidates(page, all_files, infos, None, max_candidates=10)
     assert len(result) <= 10
+
+
+def test_prefilter_defaults_to_top_40_candidates():
+    page = {"title": "Worker", "purpose": "Background jobs."}
+    all_files = [f"worker/file{i}.py" for i in range(50)]
+    infos = {f: FakeFileInfo([f"fn{i}"]) for i, f in enumerate(all_files)}
+    result = _prefilter_candidates(page, all_files, infos, None)
+    assert len(result) == 40
 
 
 def test_prefilter_prefers_code_files():
