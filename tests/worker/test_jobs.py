@@ -360,6 +360,117 @@ async def test_always_clears_existing_artifacts(
         await dispose_db(db_path)
 
 
+async def test_reuse_plan_preserves_user_edited_page_notes(
+    tmp_path, mock_llm, mock_fast_llm, mock_embedding
+):
+    """reuse_plan=True must preserve user-edited page_notes from wiki.json.
+
+    Regression for PR #38 review: ``_clear_repo_artifacts`` previously deleted
+    every entry under ``wiki/`` (including ``wiki.json``) before the reuse-plan
+    branch tried to read it, so user-edited ``page_notes`` were silently dropped.
+    """
+    import json
+
+    from shared.database import dispose_db, get_session
+    from shared.models import Job, Repository
+
+    mock_embedding.dimension = 1536
+    db_path = await _setup_db(tmp_path)
+
+    repo_id = "reuse-plan-r1"
+    job_id = "reuse-plan-j1"
+    async with get_session(db_path) as s:
+        s.add(
+            Repository(
+                id=repo_id,
+                owner="testowner",
+                name="simple-repo",
+                platform="github",
+                status="ready",
+            )
+        )
+        s.add(
+            Job(
+                id=job_id,
+                repo_id=repo_id,
+                type="full_index",
+                status="queued",
+                progress=0,
+            )
+        )
+        await s.commit()
+
+    repo_data = tmp_path / "repos" / repo_id
+    ast_dir = repo_data / "ast"
+    wiki_dir = repo_data / "wiki"
+    ast_dir.mkdir(parents=True)
+    wiki_dir.mkdir(parents=True)
+
+    plan_data = {
+        "repo_notes": [{"content": ""}],
+        "all_repo_files": ["main.py"],
+        "pages": [
+            {
+                "title": "Overview",
+                "purpose": "Top-level overview.",
+                "files": ["main.py"],
+            }
+        ],
+    }
+    (ast_dir / "wiki_plan.json").write_text(json.dumps(plan_data))
+
+    user_note = "Key invariant: the bus owns lifecycle."
+    wiki_data = {
+        "repo_notes": [{"content": "Repo-level user note"}],
+        "pages": [
+            {
+                "title": "Overview",
+                "purpose": "Top-level overview.",
+                "page_notes": [{"content": user_note}],
+            }
+        ],
+    }
+    (wiki_dir / "wiki.json").write_text(json.dumps(wiki_data))
+
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch("worker.index.full.clone_or_fetch", return_value=("newsha", "main"))
+        )
+        _enter_platform_patches(stack)
+        stack.enter_context(
+            patch("worker.index.full.make_llm_provider", return_value=mock_llm)
+        )
+        stack.enter_context(
+            patch(
+                "worker.index.full.make_fast_llm_provider", return_value=mock_fast_llm
+            )
+        )
+        stack.enter_context(
+            patch(
+                "worker.index.full.make_embedding_provider", return_value=mock_embedding
+            )
+        )
+        from worker.jobs import run_full_index
+
+        await run_full_index(
+            ctx={},
+            repo_id=repo_id,
+            job_id=job_id,
+            owner="testowner",
+            name="simple-repo",
+            clone_root=Path("tests/fixtures/simple-repo"),
+            reuse_plan=True,
+        )
+
+    try:
+        regenerated = json.loads((wiki_dir / "wiki.json").read_text())
+        overview = next(p for p in regenerated["pages"] if p["title"] == "Overview")
+        contents = [n.get("content", "") for n in overview["page_notes"]]
+        assert user_note in contents
+    finally:
+        await dispose_db(db_path)
+
+
 async def test_full_index_first_time_failure_preserves_failure_metadata(tmp_path):
     """Failed first-time index removes wiki rows but keeps failure metadata."""
     from shared.database import dispose_db, get_session

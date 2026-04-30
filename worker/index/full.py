@@ -185,9 +185,12 @@ async def run_full_index(
         def _clear_repo_artifacts() -> None:
             """Remove generated wiki files and optionally the search index.
 
-            Always removes all Markdown pages in ``wiki/`` and the internal
-            wiki plan.  When *reuse_index* is ``False`` the FAISS index and
-            metadata pickle are also deleted.  The git clone is preserved.
+            Removes Markdown pages and other entries under ``wiki/``.  When
+            *reuse_plan* is ``True`` the user-facing ``wiki.json`` is
+            preserved so the reuse-plan branch can recover user-edited
+            ``page_notes``; otherwise ``ast/wiki_plan.json`` is also deleted.
+            When *reuse_index* is ``False`` the FAISS index and metadata
+            pickle are deleted.  The git clone is preserved.
             """
             index_path = repo_data_dir / "faiss.index"
             meta_path = repo_data_dir / "faiss.meta.pkl"
@@ -199,6 +202,10 @@ async def run_full_index(
                         p.unlink()
             if wiki_dir.exists():
                 for f in wiki_dir.iterdir():
+                    # Preserve wiki.json when reusing the plan: the reuse-plan
+                    # path below reads it to recover user-edited page_notes.
+                    if reuse_plan and f.name == "wiki.json":
+                        continue
                     _remove_path(f)
             if not reuse_plan:
                 wiki_plan = ast_dir / "wiki_plan.json"
