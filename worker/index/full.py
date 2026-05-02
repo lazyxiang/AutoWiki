@@ -37,7 +37,6 @@ from worker.index.progress import (
 from worker.llm import make_fast_llm_provider, make_llm_provider
 from worker.pipeline.ast_analysis import analyze_all_files
 from worker.pipeline.dependency_graph import build_dependency_graph
-from worker.pipeline.fast_report_index import build_fast_report_index
 from worker.pipeline.ingestion import (
     clone_or_fetch,
     extract_readme,
@@ -49,6 +48,7 @@ from worker.pipeline.page_generator import (
     generate_page_batch,
 )
 from worker.pipeline.rag_indexer import build_rag_index
+from worker.pipeline.retrieval.repo_index import build_repo_index
 from worker.pipeline.user_steering import load_user_steering
 from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan, generate_wiki_plan
 from worker.platform.registry import get_platform_by_name
@@ -293,9 +293,9 @@ async def run_full_index(
             sum(len(c) for c in dep_graph.clusters),
             sum(len(e) for e in dep_graph.edges.values()),
         )
-        fast_report_index = await loop.run_in_executor(
+        repo_index = await loop.run_in_executor(
             None,
-            lambda: build_fast_report_index(
+            lambda: build_repo_index(
                 root=clone_root,
                 files=files,
                 file_analysis=file_analysis,
@@ -304,8 +304,12 @@ async def run_full_index(
             ),
         )
         await _write_text_async(
+            ast_dir / "repo_index.json",
+            json.dumps(repo_index, indent=2, ensure_ascii=False),
+        )
+        await _write_text_async(
             ast_dir / "fast_report_index.json",
-            json.dumps(fast_report_index, indent=2, ensure_ascii=False),
+            json.dumps(repo_index, indent=2, ensure_ascii=False),
         )
         await _update_job(
             db_path,
