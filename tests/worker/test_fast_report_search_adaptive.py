@@ -28,7 +28,7 @@ class _FakeSliceResult:
 
 def _install_fake_slice_extractor(monkeypatch, *, fail_paths: set[str] | None = None):
     fail_paths = fail_paths or set()
-    module = types.ModuleType("worker.fast_report.slices")
+    module = types.ModuleType("worker.pipeline.retrieval.code_slices")
 
     def extract_source_slice(
         *,
@@ -57,7 +57,7 @@ def _install_fake_slice_extractor(monkeypatch, *, fail_paths: set[str] | None = 
         )
 
     module.extract_source_slice = extract_source_slice
-    monkeypatch.setitem(sys.modules, "worker.fast_report.slices", module)
+    monkeypatch.setitem(sys.modules, "worker.pipeline.retrieval.code_slices", module)
 
 
 def test_profile_for_question_type_uses_adaptive_budgets():

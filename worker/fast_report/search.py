@@ -391,7 +391,7 @@ def _load_slice_extractor():
 
 def _source_slice_extractor():
     try:
-        from worker.fast_report.slices import extract_source_slice
+        from worker.pipeline.retrieval.code_slices import extract_source_slice
     except ImportError:
         return None
     return extract_source_slice
