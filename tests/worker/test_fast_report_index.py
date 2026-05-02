@@ -425,7 +425,7 @@ def test_build_fast_report_index_normalizes_mixed_path_separators(tmp_path: Path
     ]
 
 
-async def test_run_full_index_persists_fast_report_index(
+async def test_run_full_index_persists_repo_index_only(
     tmp_path, mock_llm, mock_fast_llm, mock_embedding
 ):
     from shared.database import dispose_db, get_session, init_db
@@ -489,11 +489,12 @@ async def test_run_full_index_persists_fast_report_index(
         )
 
     try:
-        fast_report_index_path = (
-            tmp_path / "repos" / repo_id / "ast" / "fast_report_index.json"
-        )
-        assert fast_report_index_path.exists()
-        index_data = json.loads(fast_report_index_path.read_text())
+        ast_dir = tmp_path / "repos" / repo_id / "ast"
+        repo_index_path = ast_dir / "repo_index.json"
+        fast_report_index_path = ast_dir / "fast_report_index.json"
+        assert repo_index_path.exists()
+        assert not fast_report_index_path.exists()
+        index_data = json.loads(repo_index_path.read_text())
         assert index_data["index_version"] == 2
         assert "top_level_entries" not in index_data
         assert "directory_tree" in index_data
@@ -518,7 +519,7 @@ async def test_run_full_index_persists_fast_report_index(
         await dispose_db(db_path)
 
 
-async def test_run_refresh_index_persists_fast_report_index(
+async def test_run_refresh_index_persists_repo_index_only(
     tmp_path, mock_llm, mock_fast_llm, mock_embedding
 ):
     from shared.database import dispose_db, get_session, init_db
@@ -620,11 +621,12 @@ async def test_run_refresh_index_persists_fast_report_index(
         )
 
     try:
-        fast_report_index_path = (
-            tmp_path / "repos" / repo_id / "ast" / "fast_report_index.json"
-        )
-        assert fast_report_index_path.exists()
-        index_data = json.loads(fast_report_index_path.read_text())
+        ast_dir = tmp_path / "repos" / repo_id / "ast"
+        repo_index_path = ast_dir / "repo_index.json"
+        fast_report_index_path = ast_dir / "fast_report_index.json"
+        assert repo_index_path.exists()
+        assert not fast_report_index_path.exists()
+        index_data = json.loads(repo_index_path.read_text())
         assert "main.py" in index_data["files"]
         main_file = index_data["files"]["main.py"]
         assert isinstance(main_file["tokens"], list)

@@ -125,7 +125,7 @@ async def _run_refresh_with_mocks(
             "worker.index.refresh.build_dependency_graph",
             return_value=DependencyGraph(edges={}, clusters=[["main.py"]]),
         ),
-        patch("worker.index.refresh.build_fast_report_index", return_value={}),
+        patch("worker.index.refresh.build_repo_index", return_value={}),
         patch("worker.index.refresh._make_faiss_store", return_value=MagicMock()),
         patch("worker.index.refresh.build_rag_index", new_callable=AsyncMock),
         patch("worker.index.refresh.make_llm_provider", return_value=mock_llm),

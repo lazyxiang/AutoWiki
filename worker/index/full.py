@@ -307,10 +307,6 @@ async def run_full_index(
             ast_dir / "repo_index.json",
             json.dumps(repo_index, indent=2, ensure_ascii=False),
         )
-        await _write_text_async(
-            ast_dir / "fast_report_index.json",
-            json.dumps(repo_index, indent=2, ensure_ascii=False),
-        )
         await _update_job(
             db_path,
             job_id,
