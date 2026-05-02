@@ -51,6 +51,8 @@ from worker.platform.token_store import get_platform_token
 
 logger = logging.getLogger("worker.task")
 
+_LEGACY_REPO_INDEX_NAME = "fast_report_index.json"
+
 
 # ---------------------------------------------------------------------------
 # DB helpers
@@ -68,6 +70,12 @@ def _repo_metadata_updates(meta, active_branch: str) -> dict:
             is_private=meta.is_private,
         )
     return updates
+
+
+def _remove_legacy_repo_index(ast_dir: Path) -> None:
+    legacy_path = ast_dir / _LEGACY_REPO_INDEX_NAME
+    if legacy_path.exists():
+        legacy_path.unlink()
 
 
 def _is_global_planner_input(path: str) -> bool:
@@ -718,6 +726,9 @@ async def run_refresh_index(
         await _write_text_async(
             wiki_dir / "wiki.json",
             json.dumps(merged_plan.to_wiki_json(), indent=2, ensure_ascii=False),
+        )
+        await asyncio.get_running_loop().run_in_executor(
+            None, _remove_legacy_repo_index, ast_dir
         )
         structure_data = merged_plan.to_api_structure()
 

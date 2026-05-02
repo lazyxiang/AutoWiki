@@ -4,15 +4,21 @@ from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from worker.pipeline.ast_analysis import FileAnalysis, FileInfo, analyze_all_files
 from worker.pipeline.dependency_graph import DependencyGraph, build_dependency_graph
-from worker.pipeline.fast_report_index import (
-    INDEX_VERSION,
+from worker.pipeline.retrieval.repo_index import (
+    REPO_INDEX_VERSION as INDEX_VERSION,
+)
+from worker.pipeline.retrieval.repo_index import (
     _build_directory_tree,
     _build_directory_tree_with_degradation,
     _compute_hub_modules,
     _extract_readme_sections,
-    build_fast_report_index,
+)
+from worker.pipeline.retrieval.repo_index import (
+    build_repo_index as build_fast_report_index,
 )
 from worker.platform.base import RepoMetadata
 
@@ -425,6 +431,7 @@ def test_build_fast_report_index_normalizes_mixed_path_separators(tmp_path: Path
     ]
 
 
+@pytest.mark.filterwarnings("ignore:builtin type Swig.*:DeprecationWarning")
 async def test_run_full_index_persists_repo_index_only(
     tmp_path, mock_llm, mock_fast_llm, mock_embedding
 ):
@@ -451,6 +458,10 @@ async def test_run_full_index_persists_repo_index_only(
             )
         )
         await s.commit()
+
+    ast_dir = tmp_path / "repos" / repo_id / "ast"
+    ast_dir.mkdir(parents=True)
+    (ast_dir / "fast_report_index.json").write_text("{}")
 
     with ExitStack() as stack:
         mock_cfg = stack.enter_context(patch("worker.index.full.get_config"))
@@ -519,6 +530,7 @@ async def test_run_full_index_persists_repo_index_only(
         await dispose_db(db_path)
 
 
+@pytest.mark.filterwarnings("ignore:builtin type Swig.*:DeprecationWarning")
 async def test_run_refresh_index_persists_repo_index_only(
     tmp_path, mock_llm, mock_fast_llm, mock_embedding
 ):
@@ -560,6 +572,7 @@ async def test_run_refresh_index_persists_repo_index_only(
 
     ast_dir = tmp_path / "repos" / repo_id / "ast"
     ast_dir.mkdir(parents=True)
+    (ast_dir / "fast_report_index.json").write_text("{}")
     (ast_dir / "wiki_plan.json").write_text(
         json.dumps(
             {
