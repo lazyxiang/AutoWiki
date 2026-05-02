@@ -19,9 +19,11 @@ from worker.pipeline.retrieval.repo_search import (
     ScoredEntity,
     SliceCandidate,
     apply_token_budget,
-    build_slice_candidates,
     expand_candidate_paths,
     score_file_for_query,
+)
+from worker.pipeline.retrieval.repo_search import (
+    build_slice_candidates as _repo_build_slice_candidates,
 )
 from worker.pipeline.retrieval.repo_search import (
     neighbors_for_graph as _repo_neighbors_for_graph,
@@ -83,7 +85,6 @@ _RankedFile = RankedFile
 _ScoredEntity = ScoredEntity
 _SliceCandidate = SliceCandidate
 _score_file_multi_slice = score_file_for_query
-_build_slice_candidates = build_slice_candidates
 _apply_token_budget = apply_token_budget
 _neighbors_for_graph = _repo_neighbors_for_graph
 
@@ -172,7 +173,7 @@ def retrieve_code_evidence(
         query_tokens,
         profile,
     )
-    slice_candidates = build_slice_candidates(
+    slice_candidates = _repo_build_slice_candidates(
         files,
         selected,
         profile,
@@ -342,6 +343,22 @@ def _expand_candidate_paths(
     )
 
 
+def _build_slice_candidates(
+    files: dict[str, dict[str, Any]],
+    selected: list[RankedFile],
+    profile: _RetrievalProfile,
+    *,
+    clone_root: Path | None,
+) -> list[SliceCandidate]:
+    return _repo_build_slice_candidates(
+        files,
+        selected,
+        profile,
+        clone_root=clone_root,
+        slice_extractor=_source_slice_extractor() if clone_root is not None else None,
+    )
+
+
 def _is_low_signal_entry(
     entry: dict[str, Any],
     focus_hints: list[str],
@@ -369,6 +386,10 @@ def _is_config_relevant_query(
 
 
 def _load_slice_extractor():
+    return _source_slice_extractor()
+
+
+def _source_slice_extractor():
     try:
         from worker.fast_report.slices import extract_source_slice
     except ImportError:

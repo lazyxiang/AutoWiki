@@ -96,6 +96,69 @@ def test_expansion_graph_for_maps_question_types():
     assert expansion_graph_for("other") == ("imports_and_imported_by", None)
 
 
+def test_build_slice_candidates_compatibility_loads_source_slices(tmp_path):
+    from worker.fast_report.search import (
+        _build_slice_candidates,
+        _RankedFile,
+        _ScoredEntity,
+        profile_for_question_type,
+    )
+
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "service.py").write_text(
+        "\n".join(
+            [
+                "def helper():",
+                "    return 'helper'",
+                "",
+                "def build_service():",
+                "    value = helper()",
+                "    return value",
+                "",
+                "def other():",
+                "    return None",
+            ]
+        )
+    )
+    entity = {
+        "name": "build_service",
+        "start_line": 4,
+        "end_line": 6,
+        "symbol_path": "app.service.build_service",
+    }
+    files = {
+        "app/service.py": {
+            "path": "app/service.py",
+            "tokens": ["service"],
+            "imports": [],
+            "imported_by": [],
+            "external_deps": [],
+            "entities": [entity],
+            "is_test": False,
+            "is_config": False,
+        }
+    }
+    selected = [
+        _RankedFile(
+            path="app/service.py",
+            score=3.0,
+            matched_entity=entity,
+            matched_entities=[_ScoredEntity(entity=entity, score=3.0)],
+        )
+    ]
+
+    slices = _build_slice_candidates(
+        files,
+        selected,
+        profile_for_question_type("implementation_location"),
+        clone_root=tmp_path,
+    )
+
+    assert slices
+    assert "def build_service():" in slices[0].code
+    assert "return value" in slices[0].code
+
+
 def test_architecture_retrieval_emits_top_k_multi_slice_source_citations(
     tmp_path, monkeypatch
 ):
