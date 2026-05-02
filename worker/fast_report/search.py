@@ -15,15 +15,11 @@ from worker.fast_report.planning import (
 from worker.fast_report.planning import (
     profile_for_question_type as _planning_profile_for_question_type,
 )
+from worker.utils.tokenize import tokenize_text as _tokenize
 
 _CJK_RE = re.compile(
     r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]"
 )
-_CJK_RUN_RE = re.compile(
-    r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]+"
-)
-_TOKEN_SPLIT_RE = re.compile(r"[^A-Za-z0-9]+")
-_CAMEL_CASE_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 _CONFIG_QUERY_TOKENS = {
     "config",
@@ -938,22 +934,3 @@ def _make_evidence_block(
         code=code,
         symbol_path=symbol_path,
     )
-
-
-def _tokenize(text: str) -> set[str]:
-    tokens: set[str] = set()
-    # CJK runs: add whole run plus bigrams/trigrams so partial matches work.
-    for run in _CJK_RUN_RE.findall(text.lower()):
-        tokens.add(run)
-        max_ngram = min(3, len(run))
-        for size in range(2, max_ngram + 1):
-            for i in range(len(run) - size + 1):
-                tokens.add(run[i : i + size])
-    for part in _TOKEN_SPLIT_RE.split(text.replace("/", " ").replace(".", " ")):
-        if not part:
-            continue
-        for camel_part in _CAMEL_CASE_RE.split(part):
-            normalized = camel_part.strip().lower()
-            if len(normalized) >= 2:
-                tokens.add(normalized)
-    return tokens

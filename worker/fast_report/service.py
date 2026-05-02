@@ -33,9 +33,6 @@ from worker.fast_report.planning import (
     expansion_graph_for,
 )
 from worker.fast_report.search import (
-    _tokenize as _tokenize_intent,
-)
-from worker.fast_report.search import (
     detect_question_language,
     normalize_fast_report_language,
     normalize_string_list,
@@ -44,6 +41,7 @@ from worker.llm.base import LLMProvider
 from worker.pipeline.language import get_fast_report_language_instruction
 from worker.pipeline.pipeline_logging import log_final_failure, log_validation_retry
 from worker.research.service import format_retrieved_chunks_for_prompt
+from worker.utils.tokenize import tokenize_text as _tokenize_intent
 
 logger = logging.getLogger(__name__)
 
@@ -568,27 +566,7 @@ def _filter_evidence_blocks(
 
 
 def _tokenize_for_wiki_rank(text: str) -> set[str]:
-    tokens: set[str] = set()
-    cjk_runs = re.findall(
-        r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]+",
-        text.lower(),
-    )
-    for token in re.findall(r"[a-z0-9]+", text.lower()):
-        if token.isascii():
-            if len(token) >= 3:
-                tokens.add(token)
-    for run in cjk_runs:
-        if not run:
-            continue
-        tokens.add(run)
-        if len(run) == 1:
-            tokens.add(run)
-            continue
-        max_ngram = min(3, len(run))
-        for size in range(2, max_ngram + 1):
-            for index in range(0, len(run) - size + 1):
-                tokens.add(run[index : index + size])
-    return tokens
+    return _tokenize_intent(text)
 
 
 def _citation_tokens(citation: FastReportCitation) -> set[str]:

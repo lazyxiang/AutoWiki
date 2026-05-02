@@ -39,6 +39,7 @@ from worker.llm.prompt_segment import PromptSegment
 from worker.pipeline.language import get_planner_language_instruction
 from worker.pipeline.pipeline_logging import log_final_failure, log_validation_retry
 from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
+from worker.utils.tokenize import tokenize_text as _tokenize
 
 if TYPE_CHECKING:
     from worker.pipeline.ast_analysis import FileAnalysis
@@ -728,16 +729,6 @@ async def _generate_outline(
                 raise WikiPlannerError(
                     f"Failed to generate a valid wiki outline: {e}"
                 ) from e
-
-
-def _tokenize(text: str) -> set[str]:
-    """Unicode-aware lowercase word tokens for heuristic scoring."""
-    tokens = re.findall(r"\w+", text.lower(), flags=re.UNICODE)
-    return {
-        token
-        for token in tokens
-        if len(token) >= 3 or any(ord(ch) > 127 for ch in token)
-    }
 
 
 def _score_file_for_page(

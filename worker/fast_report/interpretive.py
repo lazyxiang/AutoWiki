@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from worker.fast_report.search import _tokenize as _shared_tokenize
+from worker.utils.tokenize import tokenize_text as _shared_tokenize
 
 _AUTO_ATTACH_TOKEN_CAP = 8_000
 _README_BODY_CAP = 800
