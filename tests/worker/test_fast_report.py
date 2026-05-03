@@ -630,6 +630,40 @@ def test_select_related_wiki_pages_matches_partial_cjk_phrase_overlap():
     assert [page.slug for page in selected] == ["执行流程"]
 
 
+def test_select_related_wiki_pages_matches_two_character_ascii_signal():
+    from worker.fast_report import _select_related_wiki_pages
+
+    pages = [
+        FastReportWikiLink(
+            slug="ui-architecture",
+            title="UI Architecture",
+            reason="Frontend structure",
+        ),
+        FastReportWikiLink(
+            slug="api-overview",
+            title="API Overview",
+            reason="Backend endpoints",
+        ),
+    ]
+
+    selected = _select_related_wiki_pages(
+        question="How does the UI render repository pages?",
+        evidence_citations=[
+            FastReportCitation(
+                id="code-1",
+                file_path="web/components/wiki_page.tsx",
+                start_line=1,
+                end_line=20,
+                label="WikiPage",
+                kind="code_evidence",
+            )
+        ],
+        candidate_pages=pages,
+    )
+
+    assert [page.slug for page in selected] == ["ui-architecture"]
+
+
 def test_generation_prompt_includes_interpretive_block_with_no_cite_warning():
     from worker.fast_report import (
         CodeEvidenceLayer,

@@ -26,10 +26,9 @@ def tokenize_text(text: str, *, min_ascii_len: int = 3) -> set[str]:
 
     normalized = _CAMEL_SPLIT_RE.sub(" ", text)
     normalized = _SEPARATOR_RE.sub(" ", normalized)
+    word_text = _CJK_RUN_RE.sub(" ", normalized)
     tokens: set[str] = set()
-    for token in _WORD_TOKEN_RE.findall(normalized):
-        if _CJK_RUN_RE.search(token):
-            continue
+    for token in _WORD_TOKEN_RE.findall(word_text):
         normalized_token = token.lower()
         if token.isascii() and len(normalized_token) < min_ascii_len:
             continue

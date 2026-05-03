@@ -33,6 +33,9 @@ from worker.fast_report.planning import (
     expansion_graph_for,
 )
 from worker.fast_report.search import (
+    _tokenize as _tokenize_fast_report,
+)
+from worker.fast_report.search import (
     detect_question_language,
     normalize_fast_report_language,
     normalize_string_list,
@@ -41,7 +44,6 @@ from worker.llm.base import LLMProvider
 from worker.pipeline.language import get_fast_report_language_instruction
 from worker.pipeline.pipeline_logging import log_final_failure, log_validation_retry
 from worker.research.service import format_retrieved_chunks_for_prompt
-from worker.utils.tokenize import tokenize_text as _tokenize_intent
 
 logger = logging.getLogger(__name__)
 
@@ -435,7 +437,7 @@ def _selected_interpretive_entities(
 def _interpretive_intent_tokens(
     question: str, intent: FastReportQuestionIntent
 ) -> set[str]:
-    tokens = _tokenize_intent(question)
+    tokens = _tokenize_fast_report(question)
     intent_fields = [
         intent.question_type,
         intent.target,
@@ -443,7 +445,7 @@ def _interpretive_intent_tokens(
         intent.evidence_shape,
     ]
     for item in intent_fields + intent.search_terms + intent.retrieval_focus:
-        tokens |= _tokenize_intent(item)
+        tokens |= _tokenize_fast_report(item)
     return tokens
 
 
@@ -566,7 +568,7 @@ def _filter_evidence_blocks(
 
 
 def _tokenize_for_wiki_rank(text: str) -> set[str]:
-    return _tokenize_intent(text)
+    return _tokenize_fast_report(text)
 
 
 def _citation_tokens(citation: FastReportCitation) -> set[str]:

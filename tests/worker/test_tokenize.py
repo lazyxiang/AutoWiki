@@ -38,6 +38,13 @@ def test_cjk_mixed_with_ascii():
     assert {"前端", "路由"} <= tokens
 
 
+def test_adjacent_cjk_ascii_extracts_both_signal_types():
+    tokens = tokenize_text("前端API路由 Graph依赖Builder")
+
+    assert {"api", "graph", "builder"} <= tokens
+    assert {"前端", "路由", "依赖"} <= tokens
+
+
 def test_no_short_tokens():
     assert "a" not in tokenize_text("a ab abc")
     assert "ab" not in tokenize_text("ab abc")
