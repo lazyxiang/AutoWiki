@@ -725,8 +725,7 @@ def _validate_raw_selections(
         if not isinstance(raw_files, list):
             raise ValueError(f"VALIDATION_FAILURE: Page '{title}' files must be a list")
 
-        paths: list[str] = []
-        previous_relevance: int | None = None
+        accepted_entries: list[tuple[int, str, int]] = []
         for index, item in enumerate(raw_files):
             if not isinstance(item, dict):
                 raise ValueError(
@@ -751,7 +750,14 @@ def _validate_raw_selections(
                     f"VALIDATION_FAILURE: Page '{title}' file entry {index} "
                     "relevance must be between 1 and 10"
                 )
-            if index == 0 and relevance < 3:
+
+            candidate_files = candidate_files_by_title.get(title, set())
+            if path in all_files_set and path in candidate_files:
+                accepted_entries.append((index, path, relevance))
+
+        if accepted_entries:
+            first_relevance = accepted_entries[0][2]
+            if first_relevance < 3:
                 raise _SelectionOrderingError(
                     f"VALIDATION_FAILURE: Page '{title}' first file relevance "
                     "must be >= 3",
@@ -761,23 +767,23 @@ def _validate_raw_selections(
                     candidate_files_by_title=candidate_files_by_title,
                     reason="first file relevance below 3",
                 )
-            if previous_relevance is not None and relevance > previous_relevance:
-                raise _SelectionOrderingError(
-                    f"VALIDATION_FAILURE: Page '{title}' relevance scores must be "
-                    "non-increasing",
-                    raw=raw,
-                    valid_titles=valid_titles,
-                    all_files_set=all_files_set,
-                    candidate_files_by_title=candidate_files_by_title,
-                    reason="relevance scores not non-increasing",
-                )
-            previous_relevance = relevance
+            previous_relevance = first_relevance
+            for _index, _path, relevance in accepted_entries[1:]:
+                if relevance > previous_relevance:
+                    raise _SelectionOrderingError(
+                        f"VALIDATION_FAILURE: Page '{title}' relevance scores must be "
+                        "non-increasing",
+                        raw=raw,
+                        valid_titles=valid_titles,
+                        all_files_set=all_files_set,
+                        candidate_files_by_title=candidate_files_by_title,
+                        reason="relevance scores not non-increasing",
+                    )
+                previous_relevance = relevance
 
-            candidate_files = candidate_files_by_title.get(title, set())
-            if path in all_files_set and path in candidate_files:
-                paths.append(path)
-
-        result[title] = paths[:MAX_FILES_PER_PAGE]
+        result[title] = [path for _index, path, _relevance in accepted_entries][
+            :MAX_FILES_PER_PAGE
+        ]
 
     return result
 
@@ -835,22 +841,30 @@ def _demote_ordering_invalid_raw_selection(
 
             candidate_files = error.candidate_files_by_title.get(title, set())
             if path in error.all_files_set and path in candidate_files:
-                entries.append((index, path, relevance))
+                entries.append((len(entries), path, relevance))
 
         sorted_entries = sorted(entries, key=lambda entry: entry[2], reverse=True)
+        if sorted_entries and sorted_entries[0][2] < 3:
+            raise _SelectionOrderingError(
+                f"VALIDATION_FAILURE: Page '{title}' first file relevance must be >= 3",
+                raw=error.raw,
+                valid_titles=error.valid_titles,
+                all_files_set=error.all_files_set,
+                candidate_files_by_title=error.candidate_files_by_title,
+                reason="first file relevance below 3",
+            )
+
         result[title] = [path for _index, path, _relevance in sorted_entries][
             :MAX_FILES_PER_PAGE
         ]
 
-        if sorted_entries != entries or (sorted_entries and sorted_entries[0][2] < 3):
+        if sorted_entries != entries:
             reason = error.reason
             demoted = [
                 entry
                 for new_index, entry in enumerate(sorted_entries)
                 if new_index > entry[0]
             ]
-            if not demoted and sorted_entries:
-                demoted = [sorted_entries[0]]
             for _index, path, relevance in demoted:
                 log_validation_retry(
                     logger,
@@ -860,9 +874,9 @@ def _demote_ordering_invalid_raw_selection(
                     exc=ValueError(reason),
                     context={
                         "page": title,
-                        "demoted_path": path,
-                        "relevance": relevance,
-                        "reason": reason,
+                        "demoted_file": path,
+                        "original_position": _index,
+                        "score": relevance,
                     },
                 )
 
@@ -894,6 +908,20 @@ def _ordering_errors_from_exception(
                 add(error)
         cause = cause.__cause__
     return errors
+
+
+def _has_non_ordering_errors(exc: BaseException) -> bool:
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, _PartialSelectionError):
+            if current.non_ordering_errors:
+                return True
+        elif not isinstance(current, _SelectionOrderingError):
+            return True
+        current = current.__cause__
+    return False
 
 
 async def _generate_outline(
@@ -1099,16 +1127,29 @@ class _PartialSelectionError(ValueError):
         partial_result: dict[str, list[str]],
         original_error: BaseException | None = None,
         ordering_errors: list[_SelectionOrderingError] | None = None,
+        non_ordering_errors: list[BaseException] | None = None,
     ) -> None:
         super().__init__(message)
         self.partial_result = partial_result
         self.original_error = original_error
         if ordering_errors is not None:
             self.ordering_errors = ordering_errors
+        elif isinstance(original_error, _PartialSelectionError):
+            self.ordering_errors = list(original_error.ordering_errors)
         elif isinstance(original_error, _SelectionOrderingError):
             self.ordering_errors = [original_error]
         else:
             self.ordering_errors = []
+        if non_ordering_errors is not None:
+            self.non_ordering_errors = non_ordering_errors
+        elif isinstance(original_error, _PartialSelectionError):
+            self.non_ordering_errors = list(original_error.non_ordering_errors)
+        elif original_error is not None and not isinstance(
+            original_error, _SelectionOrderingError
+        ):
+            self.non_ordering_errors = [original_error]
+        else:
+            self.non_ordering_errors = []
 
 
 class _SelectionFailure(ValueError):
@@ -1205,20 +1246,23 @@ async def _select_files_in_batches(
                 *(_run_page_batch(b) for b in batches[1:]),
                 return_exceptions=True,
             )
-            first_error = next(
-                (res for res in batch_results if isinstance(res, Exception)), None
-            )
+            errors = [res for res in batch_results if isinstance(res, Exception)]
+            first_error = next(iter(errors), None)
             if first_error is not None:
                 ordering_errors = [
+                    res for res in errors if isinstance(res, _SelectionOrderingError)
+                ]
+                non_ordering_errors = [
                     res
-                    for res in batch_results
-                    if isinstance(res, _SelectionOrderingError)
+                    for res in errors
+                    if not isinstance(res, _SelectionOrderingError)
                 ]
                 raise _PartialSelectionError(
                     str(first_error),
                     dict(result),
                     first_error,
                     ordering_errors,
+                    non_ordering_errors,
                 ) from first_error
     except Exception as exc:
         if isinstance(exc, _PartialSelectionError):
@@ -1276,7 +1320,8 @@ async def _select_files(
                 last_result = exc.partial_result
 
             ordering_errors = _ordering_errors_from_exception(exc)
-            if ordering_errors:
+            has_non_ordering_errors = _has_non_ordering_errors(exc)
+            if ordering_errors and not has_non_ordering_errors:
                 if not ordering_retry_used:
                     ordering_retry_used = True
                     allowed_attempts += 1

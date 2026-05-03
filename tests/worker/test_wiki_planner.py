@@ -964,9 +964,80 @@ async def test_select_files_retries_then_demotes_ordering_violations(
     assert llm.generate_structured.await_count == 2
     assert any(
         "wiki_planner.ordering_demotion" in record.getMessage()
-        and "demoted_path=api/legacy.py" in record.getMessage()
+        and "demoted_file=api/legacy.py" in record.getMessage()
+        and "original_position=0" in record.getMessage()
+        and "score=2" in record.getMessage()
         for record in caplog.records
     )
+
+
+async def test_select_files_mixed_provider_and_ordering_failure_is_not_salvaged(
+    monkeypatch,
+):
+    """Provider failure in one batch must block ordering-only salvage."""
+    from unittest.mock import AsyncMock
+
+    from worker.pipeline import wiki_planner as wp
+
+    monkeypatch.setattr(wp, "_PAGE_BATCH_SIZE", 1)
+    monkeypatch.setattr(
+        wp,
+        "_prefilter_candidates",
+        lambda _page, all_files, _file_infos, _dep_graph: list(all_files),
+    )
+
+    async def fake_generate_structured(prompt, **_kwargs):
+        text = prompt[0].text
+        if 'Page: "Core"' in text:
+            return {
+                "selections": [
+                    {"page_title": "Core", "files": [_selected("core.py", 9)]}
+                ]
+            }
+        if 'Page: "Overview"' in text:
+            raise RuntimeError("provider exhausted")
+        return {
+            "selections": [
+                {
+                    "page_title": "API",
+                    "files": [
+                        _selected("api/legacy.py", 2),
+                        _selected("api/routes.py", 9),
+                    ],
+                }
+            ]
+        }
+
+    llm = AsyncMock()
+    llm.generate_structured.side_effect = fake_generate_structured
+    outline = [
+        {"title": "Core", "purpose": "Core subsystem."},
+        {"title": "Overview", "purpose": "Repository overview."},
+        {"title": "API", "purpose": "REST API."},
+    ]
+
+    with pytest.raises(ValueError) as exc_info:
+        await wp._select_files(
+            outline=outline,
+            file_summary="fs",
+            dep_info=None,
+            all_files=["core.py", "api/legacy.py", "api/routes.py"],
+            file_infos={},
+            dep_graph=None,
+            llm=llm,
+            system="sys",
+            on_retry=None,
+            max_retries=1,
+        )
+
+    assert isinstance(exc_info.value, wp._SelectionFailure)
+    assert exc_info.value.last_error is not None
+    assert "provider exhausted" in exc_info.value.last_error
+    assert exc_info.value.partial_result == {
+        "Core": ["core.py"],
+        "Overview": [],
+        "API": [],
+    }
 
 
 async def test_select_files_provider_failure_preserves_successful_batch(
@@ -1381,6 +1452,28 @@ def test_validate_raw_selections_rejects_first_relevance_below_floor():
         )
 
 
+def test_validate_raw_selections_applies_first_relevance_floor_after_filtering():
+    raw = {
+        "selections": [
+            {
+                "page_title": "API",
+                "files": [
+                    {"path": "docs/api.md", "relevance": 9},
+                    {"path": "api/routes.py", "relevance": 2},
+                ],
+            }
+        ]
+    }
+
+    with pytest.raises(wp._SelectionOrderingError, match="first file"):
+        wp._validate_raw_selections(
+            raw,
+            valid_titles={"API"},
+            all_files_set={"docs/api.md", "api/routes.py"},
+            candidate_files_by_title={"API": {"api/routes.py"}},
+        )
+
+
 def test_validate_raw_selections_unwraps_and_filters_candidate_paths():
     raw = {
         "selections": [
@@ -1402,6 +1495,28 @@ def test_validate_raw_selections_unwraps_and_filters_candidate_paths():
     )
 
     assert result == {"API": ["api/routes.py"]}
+
+
+def test_demote_ordering_invalid_raw_selection_rejects_below_floor_only_file():
+    raw = {
+        "selections": [
+            {
+                "page_title": "API",
+                "files": [{"path": "api/legacy.py", "relevance": 2}],
+            }
+        ]
+    }
+    error = wp._SelectionOrderingError(
+        "VALIDATION_FAILURE: Page 'API' first file relevance must be >= 3",
+        raw=raw,
+        valid_titles={"API"},
+        all_files_set={"api/legacy.py"},
+        candidate_files_by_title={"API": {"api/legacy.py"}},
+        reason="first file relevance below 3",
+    )
+
+    with pytest.raises(wp._SelectionOrderingError, match="first file"):
+        wp._demote_ordering_invalid_raw_selection(error)
 
 
 def test_validate_selections_passes_normal():
