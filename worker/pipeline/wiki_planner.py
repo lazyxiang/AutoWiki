@@ -951,6 +951,20 @@ class _PartialSelectionError(ValueError):
         self.partial_result = partial_result
 
 
+class _SelectionFailure(ValueError):
+    """File selection failed after retries, carrying retry context."""
+
+    def __init__(
+        self,
+        message: str,
+        last_error: str | None,
+        partial_result: dict[str, list[str]] | None,
+    ) -> None:
+        super().__init__(message)
+        self.last_error = last_error
+        self.partial_result = partial_result
+
+
 async def _select_files_in_batches(
     outline: list[dict],
     file_summary: str,
@@ -1027,8 +1041,20 @@ async def _select_files_in_batches(
         if batches:
             await _run_page_batch(batches[0])  # serial first batch warms cache
         if len(batches) > 1:
-            await asyncio.gather(*(_run_page_batch(b) for b in batches[1:]))
+            batch_results = await asyncio.gather(
+                *(_run_page_batch(b) for b in batches[1:]),
+                return_exceptions=True,
+            )
+            first_error = next(
+                (res for res in batch_results if isinstance(res, ValueError)), None
+            )
+            if first_error is not None:
+                raise _PartialSelectionError(
+                    str(first_error), dict(result)
+                ) from first_error
     except ValueError as exc:
+        if isinstance(exc, _PartialSelectionError):
+            raise
         raise _PartialSelectionError(str(exc), dict(result)) from exc
 
     return result
@@ -1050,6 +1076,7 @@ async def _select_files(
     """Phase 2: Select representative files for each page with retry + feedback."""
     preferred_llm = fast_llm or llm
     last_error: str | None = None
+    last_exception: ValueError | None = None
     last_result: dict[str, list[str]] | None = None
 
     for attempt in range(1, max_retries + 1):
@@ -1072,6 +1099,7 @@ async def _select_files(
             return result
         except ValueError as exc:
             last_error = str(exc)
+            last_exception = exc
             if isinstance(exc, _PartialSelectionError):
                 last_result = exc.partial_result
             if attempt < max_retries:
@@ -1091,11 +1119,11 @@ async def _select_files(
                     context={"outline_pages": len(outline)},
                 )
 
-    raise ValueError(
+    raise _SelectionFailure(
         f"Failed to select files after {max_retries} attempts",
         last_error,
         last_result,
-    )
+    ) from last_exception
 
 
 def validate_wiki_plan(
@@ -1447,11 +1475,9 @@ async def generate_wiki_plan(
         )
     except Exception as exc:
         # Phase 2 failure — trigger heuristic recovery while keeping the outline.
-        # If it's a ValueError with 3 args (msg, last_error, last_result),
-        # extract the partial assignments.
         partial = None
-        if isinstance(exc, ValueError) and len(exc.args) == 3:
-            partial = exc.args[2]
+        if isinstance(exc, _SelectionFailure):
+            partial = exc.partial_result
 
         recovery_type = "partial heuristic" if partial else "full heuristic"
         log_final_failure(

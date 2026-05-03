@@ -909,7 +909,86 @@ async def test_select_files_preserves_partial_batches_on_raw_validation_failure(
             max_retries=1,
         )
 
-    assert exc_info.value.args[2] == {"Core": ["core.py"], "API": []}
+    assert isinstance(exc_info.value, wp._SelectionFailure)
+    assert exc_info.value.last_error is not None
+    assert exc_info.value.partial_result == {"Core": ["core.py"], "API": []}
+
+
+async def test_select_files_drains_parallel_batches_before_partial_failure(
+    monkeypatch,
+):
+    """Successful sibling batches must be captured before partial fallback."""
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from worker.pipeline import wiki_planner as wp
+
+    monkeypatch.setattr(wp, "_PAGE_BATCH_SIZE", 1)
+    monkeypatch.setattr(
+        wp,
+        "_prefilter_candidates",
+        lambda _page, all_files, _file_infos, _dep_graph: list(all_files),
+    )
+
+    calls = 0
+
+    async def fake_generate_structured(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {
+                "selections": [
+                    {"page_title": "Core", "files": [_selected("core.py", 9)]}
+                ]
+            }
+        if calls == 2:
+            return {
+                "selections": [
+                    {
+                        "page_title": "API",
+                        "files": [
+                            _selected("api.py", 7),
+                            _selected("routes.py", 8),
+                        ],
+                    }
+                ]
+            }
+        await asyncio.sleep(0.01)
+        return {
+            "selections": [
+                {"page_title": "Worker", "files": [_selected("worker.py", 9)]}
+            ]
+        }
+
+    llm = AsyncMock()
+    llm.generate_structured.side_effect = fake_generate_structured
+    outline = [
+        {"title": "Core", "purpose": "Core subsystem."},
+        {"title": "API", "purpose": "API subsystem."},
+        {"title": "Worker", "purpose": "Worker subsystem."},
+    ]
+
+    with pytest.raises(ValueError) as exc_info:
+        await wp._select_files(
+            outline=outline,
+            file_summary="fs",
+            dep_info=None,
+            all_files=["core.py", "api.py", "routes.py", "worker.py"],
+            file_infos={},
+            dep_graph=None,
+            llm=llm,
+            system="sys",
+            on_retry=None,
+            max_retries=1,
+        )
+
+    assert isinstance(exc_info.value, wp._SelectionFailure)
+    assert exc_info.value.last_error is not None
+    assert exc_info.value.partial_result == {
+        "Core": ["core.py"],
+        "API": [],
+        "Worker": ["worker.py"],
+    }
 
 
 def test_build_outline_prompt_includes_anchors_section_when_provided():
