@@ -667,6 +667,49 @@ async def test_generate_outline_logs_en_keywords_required_retry(caplog):
     )
 
 
+async def test_generate_outline_logs_en_keywords_required_final_failure(caplog):
+    """Exhausted CJK en_keywords failures should keep dedicated telemetry."""
+    import logging
+    from unittest.mock import AsyncMock
+
+    from worker.pipeline.wiki_planner import WikiPlannerError, _generate_outline
+
+    bad = {
+        "pages": [
+            {"title": "前端应用", "purpose": "介绍 Next.js 应用架构。"},
+            {"title": "Backend", "purpose": "Backend subsystem."},
+            {"title": "Components", "purpose": "组件库。", "parent": "前端应用"},
+        ]
+    }
+    llm = AsyncMock()
+    llm.generate_structured.side_effect = [bad, bad]
+
+    with caplog.at_level(logging.WARNING, logger="worker.planner"):
+        with pytest.raises(WikiPlannerError, match="en_keywords"):
+            await _generate_outline(
+                file_summary="files",
+                repo_name="repo",
+                llm=llm,
+                readme=None,
+                dep_info=None,
+                clusters=None,
+                page_range=(1, 10),
+                system="sys",
+                on_retry=None,
+                max_retries=2,
+                total_file_count=10,
+            )
+
+    final_logs = [
+        record for record in caplog.records if record.levelno >= logging.ERROR
+    ]
+    assert any(
+        "wiki_planner.en_keywords_required" in record.getMessage()
+        for record in final_logs
+    )
+    assert any("wiki_planner.outline" in record.getMessage() for record in final_logs)
+
+
 async def test_generate_wiki_plan_two_phase(mock_llm):
     """generate_wiki_plan uses two-phase planning."""
     # Phase 1 returns outline, Phase 2 returns assignments
@@ -1434,6 +1477,16 @@ def test_validate_outline_rejects_cjk_title_without_en_keywords():
         _validate_outline_structure(pages, page_range=(1, 10), total_file_count=10)
 
 
+def test_validate_outline_rejects_cjk_compatibility_ideograph_without_en_keywords():
+    pages = [
+        {"title": "\ufa11 UI", "purpose": "Compatibility ideograph page."},
+        {"title": "Backend", "purpose": "Backend subsystem."},
+    ]
+
+    with pytest.raises(ValueError, match="en_keywords"):
+        _validate_outline_structure(pages, page_range=(1, 10), total_file_count=10)
+
+
 def test_validate_outline_accepts_ascii_title_without_en_keywords():
     pages = [
         {"title": "Frontend App", "purpose": "Describes the Next.js app."},
@@ -1512,6 +1565,25 @@ def test_score_en_keywords_path_overlap_boosts_cjk_page():
     score_miss = _score_file_for_page("server/jobs/Worker.ts", page, infos, None)
 
     assert score_match >= score_miss + 4
+
+
+def test_score_en_keywords_exact_boost_handles_windows_separators():
+    page = {
+        "title": "前端应用架构",
+        "purpose": "介绍交互组件库。",
+        "en_keywords": ["components", "frontend", "sidebar"],
+    }
+    infos = _fake_infos(
+        ("web\\components\\Sidebar.tsx", []),
+        ("server/jobs/Worker.tsx", []),
+    )
+
+    score_match = _score_file_for_page(
+        "web\\components\\Sidebar.tsx", page, infos, None
+    )
+    score_miss = _score_file_for_page("server/jobs/Worker.tsx", page, infos, None)
+
+    assert score_match >= score_miss + 8
 
 
 def test_prefilter_preserves_two_character_architectural_signals():

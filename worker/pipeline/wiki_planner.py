@@ -82,7 +82,9 @@ def _tokenize_planner_text(text: str) -> set[str]:
     return tokenize_text(text, min_ascii_len=2)
 
 
-_CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]")
+_CJK_RE = re.compile(
+    r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]"
+)
 
 
 def _contains_cjk(text: str) -> bool:
@@ -1053,6 +1055,16 @@ async def _generate_outline(
                     "Please fix and retry."
                 )
             else:
+                if "en_keywords" in str(e):
+                    log_final_failure(
+                        logger,
+                        stage="wiki_planner.en_keywords_required",
+                        exc=e,
+                        context={
+                            "total_files": total_file_count,
+                            "max_retries": max_retries,
+                        },
+                    )
                 log_final_failure(
                     logger,
                     stage="wiki_planner.outline",
@@ -1097,7 +1109,7 @@ def _score_file_for_page(
         score += min(in_degree * 0.3, 2.0)
 
     en_keywords = page.get("en_keywords") or []
-    path_parts = [part.lower() for part in path.split("/") if part]
+    path_parts = [part.lower() for part in path.replace("\\", "/").split("/") if part]
     basename = path_parts[-1] if path_parts else lower
     file_stem = basename.rsplit(".", 1)[0] if "." in basename else basename
     path_signals = set(path_parts)
