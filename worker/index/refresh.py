@@ -20,7 +20,7 @@ from worker.index.artifacts import (
     _make_faiss_store,
     _write_text_async,
 )
-from worker.index.full import run_full_index
+from worker.index.full import _phase1_prompt_dump_path, run_full_index
 from worker.index.progress import (
     _make_on_retry,
     _make_page_progress_callback,
@@ -404,9 +404,6 @@ async def run_refresh_index(
             "AST analysis complete: %d files analyzed", len(file_analysis.files)
         )
         ast_dir.mkdir(parents=True, exist_ok=True)
-        await _write_text_async(
-            ast_dir / "file_analysis_summary.txt", file_analysis.to_llm_summary()
-        )
 
         # Detect structural changes: added or removed files relative to the old plan
         old_all_files = (
@@ -554,6 +551,7 @@ async def run_refresh_index(
             fast_llm=fast_llm,
             user_steering=user_steering,
             clone_root=clone_root,
+            debug_prompt_dump_path=_phase1_prompt_dump_path(repo_data_dir),
         )
         logger.info(
             "Wiki plan generated: %d pages updated for %s", len(plan.pages), name

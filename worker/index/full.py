@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -81,6 +82,12 @@ def _remove_legacy_repo_index(ast_dir: Path) -> None:
     legacy_path = ast_dir / _LEGACY_REPO_INDEX_NAME
     if legacy_path.exists():
         legacy_path.unlink()
+
+
+def _phase1_prompt_dump_path(repo_data_dir: Path) -> Path | None:
+    if os.environ.get("AUTOWIKI_DEBUG_DUMP_PROMPTS") == "1":
+        return repo_data_dir / "logs" / "phase1_prompt.txt"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -281,9 +288,6 @@ async def run_full_index(
         logger.info(
             "AST analysis complete: %d files analyzed", len(file_analysis.files)
         )
-        await _write_text_async(
-            ast_dir / "file_analysis_summary.txt", file_analysis.to_llm_summary()
-        )
         await _update_job(
             db_path,
             job_id,
@@ -415,6 +419,7 @@ async def run_full_index(
                 fast_llm=fast_llm,
                 user_steering=user_steering,
                 clone_root=clone_root,
+                debug_prompt_dump_path=_phase1_prompt_dump_path(repo_data_dir),
             )
         logger.info(
             "Wiki plan generated: %d pages planned for %s", len(plan.pages), name

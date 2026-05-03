@@ -26,6 +26,7 @@ and :meth:`WikiPlan.to_api_structure`.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -487,6 +488,11 @@ def _build_outline_prompt(
     return "\n\n".join(sections)
 
 
+def _write_prompt_dump(path: Path, prompt: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(prompt)
+
+
 def _build_selection_system(
     file_summary: str,
     dep_info: str | None,
@@ -658,6 +664,7 @@ async def _generate_outline(
     total_file_count: int = 0,
     _extra_context: str | None = None,
     anchors_block: str | None = None,
+    debug_prompt_dump_path: Path | None = None,
 ) -> list[dict]:
     """Phase 1: Generate page tree and validate outline structure.
 
@@ -680,6 +687,8 @@ async def _generate_outline(
     )
     if _extra_context:
         prompt += f"\n\n{_extra_context}"
+    if debug_prompt_dump_path is not None:
+        await asyncio.to_thread(_write_prompt_dump, debug_prompt_dump_path, prompt)
 
     for attempt in range(max_retries):
         try:
@@ -852,8 +861,6 @@ async def _select_files_in_batches(
     context.  The first batch runs serially to warm the Anthropic prompt cache;
     remaining batches run in parallel.
     """
-    import asyncio
-
     all_files_set = set(all_files)
     valid_titles = [p["title"] for p in outline]
     result: dict[str, list[str]] = {t: [] for t in valid_titles}
@@ -1190,6 +1197,7 @@ async def generate_wiki_plan(
     fast_llm: LLMProvider | None = None,
     user_steering: UserSteering | None = None,
     clone_root: Path | None = None,
+    debug_prompt_dump_path: Path | None = None,
 ) -> WikiPlan:
     """Generate a hierarchical wiki plan using two-phase LLM planning.
 
@@ -1307,6 +1315,7 @@ async def generate_wiki_plan(
             max_retries=max_retries,
             total_file_count=len(all_files),
             anchors_block=anchors_block,
+            debug_prompt_dump_path=debug_prompt_dump_path,
         )
     except WikiPlannerError as exc:
         # Phase 1 failure is critical — stop the task
