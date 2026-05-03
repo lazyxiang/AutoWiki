@@ -973,6 +973,19 @@ def test_score_semantic_alignment_uses_unicode_tokens():
     ) > _score_file_for_page("services/misc.py", page, infos, None)
 
 
+def test_prefilter_preserves_two_character_architectural_signals():
+    page = {"title": "UI Components", "purpose": "Frontend UI controls."}
+    all_files = ["server/payments/Invoice.ts", "web/ui/Button.tsx"]
+    infos = {
+        "web/ui/Button.tsx": FakeFileInfo([]),
+        "server/payments/Invoice.ts": FakeFileInfo([]),
+    }
+
+    result = _prefilter_candidates(page, all_files, infos, None)
+
+    assert result[0] == "web/ui/Button.tsx"
+
+
 def test_prefilter_returns_at_most_max_candidates():
     page = {"title": "Worker", "purpose": "Background jobs."}
     all_files = [f"worker/file{i}.py" for i in range(50)]

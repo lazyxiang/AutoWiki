@@ -40,7 +40,7 @@ from worker.llm.prompt_segment import PromptSegment
 from worker.pipeline.language import get_planner_language_instruction
 from worker.pipeline.pipeline_logging import log_final_failure, log_validation_retry
 from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
-from worker.utils.tokenize import tokenize_text as _tokenize
+from worker.utils.tokenize import tokenize_text
 
 if TYPE_CHECKING:
     from worker.pipeline.ast_analysis import FileAnalysis
@@ -76,6 +76,10 @@ _DOC_EXTS: frozenset[str] = frozenset({".md", ".rst", ".txt", ".adoc"})
 _CONFIG_EXTS: frozenset[str] = frozenset(
     {".json", ".yaml", ".yml", ".toml", ".ini", ".env", ".cfg"}
 )
+
+
+def _tokenize_planner_text(text: str) -> set[str]:
+    return tokenize_text(text, min_ascii_len=2)
 
 
 class WikiPlannerError(Exception):
@@ -769,10 +773,12 @@ def _score_file_for_page(
         in_degree = sum(1 for deps in dep_graph.edges.values() if path in deps)
         score += min(in_degree * 0.3, 2.0)
 
-    page_tokens = _tokenize(page["title"] + " " + page.get("purpose", ""))
+    page_tokens = _tokenize_planner_text(page["title"] + " " + page.get("purpose", ""))
     for kw in page.get("en_keywords") or []:
-        page_tokens |= _tokenize(kw)
-    file_tokens = _tokenize(path.replace("/", " ").replace("_", " ").replace("-", " "))
+        page_tokens |= _tokenize_planner_text(kw)
+    file_tokens = _tokenize_planner_text(
+        path.replace("/", " ").replace("_", " ").replace("-", " ")
+    )
     score += len(page_tokens & file_tokens) * 0.5
 
     return score

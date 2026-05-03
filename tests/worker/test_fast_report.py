@@ -664,6 +664,18 @@ def test_select_related_wiki_pages_matches_two_character_ascii_signal():
     assert [page.slug for page in selected] == ["ui-architecture"]
 
 
+def test_service_uses_public_tokenizer_for_wiki_ranking():
+    import worker.fast_report.service as service
+
+    assert service._tokenize_for_wiki_rank("UI DB S3 Go") == {
+        "ui",
+        "db",
+        "s3",
+        "go",
+    }
+    assert not hasattr(service, "_tokenize_fast_report")
+
+
 def test_generation_prompt_includes_interpretive_block_with_no_cite_warning():
     from worker.fast_report import (
         CodeEvidenceLayer,

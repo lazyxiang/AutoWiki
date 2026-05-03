@@ -59,6 +59,13 @@ def test_preserves_accented_latin_words_without_ascii_fragments():
     assert "ve" not in tokens
 
 
+def test_normalizes_decomposed_accented_latin_words():
+    tokens = tokenize_text("e\u0301clair")
+
+    assert "éclair" in tokens
+    assert "clair" not in tokens
+
+
 def test_preserves_cyrillic_words():
     tokens = tokenize_text("привет сервис")
     assert "привет" in tokens

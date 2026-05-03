@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
 _WORD_TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 _CAMEL_SPLIT_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
@@ -24,6 +25,7 @@ def tokenize_text(text: str, *, min_ascii_len: int = 3) -> set[str]:
     if not text:
         return set()
 
+    text = unicodedata.normalize("NFC", text)
     normalized = _CAMEL_SPLIT_RE.sub(" ", text)
     normalized = _SEPARATOR_RE.sub(" ", normalized)
     word_text = _CJK_RUN_RE.sub(" ", normalized)
