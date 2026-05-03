@@ -82,6 +82,22 @@ def _tokenize_planner_text(text: str) -> set[str]:
     return tokenize_text(text, min_ascii_len=2)
 
 
+_CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]")
+
+
+def _contains_cjk(text: str) -> bool:
+    return bool(_CJK_RE.search(text))
+
+
+def _is_usable_en_keyword(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    keyword = value.strip()
+    if not keyword or not keyword.isascii() or not re.search(r"[A-Za-z]", keyword):
+        return False
+    return bool(_tokenize_planner_text(keyword))
+
+
 class WikiPlannerError(Exception):
     """Critical error in wiki planner that should stop the generation task.
 
@@ -495,10 +511,11 @@ def _build_outline_prompt(
         "and its backend route).\n"
         "- Page titles should describe concepts/components, not directory names\n"
         "- Do NOT assign files to pages — just define the page structure\n"
-        "- en_keywords (optional): when page title/purpose are non-English, "
-        "list 3–8 English directory or module names from the file listing that "
-        "best identify the source files this page covers (e.g. 'worker', "
-        "'pipeline', 'api', 'routes'). Used internally for file pre-filtering.\n\n"
+        "- en_keywords REQUIRED when title or purpose contains non-Latin/CJK "
+        "characters; optional otherwise; list 3-8 English keywords drawn from "
+        "directory names, module names, or file basenames; examples like "
+        '["web", "components", "next"], '
+        '["api", "routers", "fastapi"].\n\n'
         "Output JSON matching this schema:\n"
         f"{schema_json}"
     )
@@ -600,6 +617,24 @@ def _validate_outline_structure(
         p["title"]: p.get("parent") for p in pages
     }
     known = set(title_to_parent)
+
+    for page in pages:
+        title = page["title"]
+        purpose = page.get("purpose", "")
+        if not (_contains_cjk(title) or _contains_cjk(purpose)):
+            continue
+
+        en_keywords = page.get("en_keywords")
+        if not isinstance(en_keywords, list) or not (3 <= len(en_keywords) <= 8):
+            raise ValueError(
+                f"page {title!r} has CJK title/purpose but lacks 3-8 en_keywords"
+            )
+        invalid = [kw for kw in en_keywords if not _is_usable_en_keyword(kw)]
+        if invalid:
+            raise ValueError(
+                f"page {title!r} has CJK title/purpose but invalid "
+                f"en_keywords: {invalid!r}"
+            )
 
     def _depth(title: str) -> int:
         d, current, seen = 1, title, {title}
@@ -990,6 +1025,18 @@ async def _generate_outline(
             return pages
         except (ValueError, json.JSONDecodeError, KeyError) as e:
             if attempt < max_retries - 1:
+                if "en_keywords" in str(e):
+                    log_validation_retry(
+                        logger,
+                        stage="wiki_planner.en_keywords_required",
+                        attempt=attempt + 1,
+                        max_retries=max_retries,
+                        exc=e,
+                        context={
+                            "total_files": total_file_count,
+                            "page_range": f"{page_range[0]}-{page_range[1]}",
+                        },
+                    )
                 log_validation_retry(
                     logger,
                     stage="wiki_planner.outline",
@@ -1049,8 +1096,19 @@ def _score_file_for_page(
         in_degree = sum(1 for deps in dep_graph.edges.values() if path in deps)
         score += min(in_degree * 0.3, 2.0)
 
+    en_keywords = page.get("en_keywords") or []
+    path_parts = [part.lower() for part in path.split("/") if part]
+    basename = path_parts[-1] if path_parts else lower
+    file_stem = basename.rsplit(".", 1)[0] if "." in basename else basename
+    path_signals = set(path_parts)
+    path_signals.add(file_stem)
+    en_keyword_signals = {
+        kw.strip().lower() for kw in en_keywords if isinstance(kw, str) and kw.strip()
+    }
+    score += len(en_keyword_signals & path_signals) * 4.0
+
     page_tokens = _tokenize_planner_text(page["title"] + " " + page.get("purpose", ""))
-    for kw in page.get("en_keywords") or []:
+    for kw in en_keywords:
         page_tokens |= _tokenize_planner_text(kw)
     file_tokens = _tokenize_planner_text(
         path.replace("/", " ").replace("_", " ").replace("-", " ")

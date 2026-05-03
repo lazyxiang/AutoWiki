@@ -9,6 +9,7 @@ from worker.pipeline.wiki_planner import (
     _prefilter_candidates,
     _score_file_for_page,
     _suggest_page_range,
+    _validate_outline_structure,
     _validate_selections,
     generate_wiki_plan,
     validate_wiki_plan,
@@ -606,6 +607,64 @@ async def test_generate_outline_logs_each_validation_failure(caplog):
     assert len(retry_logs) == 2  # two failures logged, third succeeded
     assert all("attempt" in r.getMessage() for r in retry_logs)
     assert all("Duplicate page slugs" in r.getMessage() for r in retry_logs)
+
+
+async def test_generate_outline_logs_en_keywords_required_retry(caplog):
+    """CJK outline pages without en_keywords should emit dedicated telemetry."""
+    import logging
+    from unittest.mock import AsyncMock
+
+    from worker.pipeline.wiki_planner import _generate_outline
+
+    bad = {
+        "pages": [
+            {"title": "前端应用", "purpose": "介绍 Next.js 应用架构。"},
+            {"title": "Backend", "purpose": "Backend subsystem."},
+            {"title": "Components", "purpose": "组件库。", "parent": "前端应用"},
+        ]
+    }
+    good = {
+        "pages": [
+            {
+                "title": "前端应用",
+                "purpose": "介绍 Next.js 应用架构。",
+                "en_keywords": ["web", "app", "next"],
+            },
+            {"title": "Backend", "purpose": "Backend subsystem."},
+            {
+                "title": "Components",
+                "purpose": "组件库。",
+                "parent": "前端应用",
+                "en_keywords": ["web", "components", "next"],
+            },
+        ]
+    }
+    llm = AsyncMock()
+    llm.generate_structured.side_effect = [bad, good]
+
+    with caplog.at_level(logging.WARNING, logger="worker.planner"):
+        pages = await _generate_outline(
+            file_summary="files",
+            repo_name="repo",
+            llm=llm,
+            readme=None,
+            dep_info=None,
+            clusters=None,
+            page_range=(1, 10),
+            system="sys",
+            on_retry=None,
+            max_retries=2,
+            total_file_count=10,
+        )
+
+    assert pages == good["pages"]
+    assert any(
+        "wiki_planner.en_keywords_required" in record.getMessage()
+        for record in caplog.records
+    )
+    assert any(
+        "wiki_planner.outline" in record.getMessage() for record in caplog.records
+    )
 
 
 async def test_generate_wiki_plan_two_phase(mock_llm):
@@ -1260,6 +1319,26 @@ def test_build_outline_prompt_without_anchors_unchanged():
     assert "Architectural anchors" not in prompt
 
 
+def test_build_outline_prompt_requires_en_keywords_for_cjk_with_examples():
+    from worker.pipeline.wiki_planner import _build_outline_prompt
+
+    prompt = _build_outline_prompt(
+        file_summary="web/components/Sidebar.tsx\napi/routers/repos.py",
+        repo_name="demo",
+    )
+
+    assert (
+        "en_keywords REQUIRED when title or purpose contains non-Latin/CJK characters"
+    ) in prompt
+    assert "optional otherwise" in prompt
+    assert (
+        "list 3-8 English keywords drawn from directory names, module names, "
+        "or file basenames"
+    ) in prompt
+    assert '["web", "components", "next"]' in prompt
+    assert '["api", "routers", "fastapi"]' in prompt
+
+
 def test_to_internal_json_roundtrips_files():
     plan = WikiPlan(pages=[WikiPageSpec(title="Core", purpose="p", files=["a.py"])])
     payload = plan.to_internal_json()
@@ -1344,6 +1423,46 @@ def _fake_infos(*paths_entities):
     return {path: FakeFileInfo(ents) for path, ents in paths_entities}
 
 
+def test_validate_outline_rejects_cjk_title_without_en_keywords():
+    pages = [
+        {"title": "前端应用", "purpose": "介绍 Next.js 应用架构。"},
+        {"title": "Backend", "purpose": "Backend subsystem."},
+        {"title": "Components", "purpose": "组件库。", "parent": "前端应用"},
+    ]
+
+    with pytest.raises(ValueError, match="en_keywords"):
+        _validate_outline_structure(pages, page_range=(1, 10), total_file_count=10)
+
+
+def test_validate_outline_accepts_ascii_title_without_en_keywords():
+    pages = [
+        {"title": "Frontend App", "purpose": "Describes the Next.js app."},
+        {"title": "Backend", "purpose": "Backend subsystem."},
+        {"title": "Components", "purpose": "UI components.", "parent": "Frontend App"},
+    ]
+
+    _validate_outline_structure(pages, page_range=(1, 10), total_file_count=10)
+
+
+def test_validate_outline_accepts_cjk_page_with_en_keywords():
+    pages = [
+        {
+            "title": "前端应用",
+            "purpose": "介绍 Next.js 应用架构。",
+            "en_keywords": ["web", "app", "next"],
+        },
+        {"title": "Backend", "purpose": "Backend subsystem."},
+        {
+            "title": "Components",
+            "purpose": "组件库。",
+            "parent": "前端应用",
+            "en_keywords": ["web", "components", "next"],
+        },
+    ]
+
+    _validate_outline_structure(pages, page_range=(1, 10), total_file_count=10)
+
+
 def test_score_prefers_code_over_doc():
     page = {"title": "API Gateway", "purpose": "Handles HTTP routing."}
     infos = _fake_infos(("api/routes.py", ["route_a", "route_b"]), ("docs/api.md", []))
@@ -1376,6 +1495,23 @@ def test_score_semantic_alignment_uses_unicode_tokens():
     assert _score_file_for_page(
         "services/认证/登录.py", page, infos, None
     ) > _score_file_for_page("services/misc.py", page, infos, None)
+
+
+def test_score_en_keywords_path_overlap_boosts_cjk_page():
+    page = {
+        "title": "前端应用架构",
+        "purpose": "介绍交互组件库。",
+        "en_keywords": ["web", "components", "next"],
+    }
+    infos = _fake_infos(
+        ("web/components/Sidebar.tsx", []),
+        ("server/jobs/Worker.ts", []),
+    )
+
+    score_match = _score_file_for_page("web/components/Sidebar.tsx", page, infos, None)
+    score_miss = _score_file_for_page("server/jobs/Worker.ts", page, infos, None)
+
+    assert score_match >= score_miss + 4
 
 
 def test_prefilter_preserves_two_character_architectural_signals():
