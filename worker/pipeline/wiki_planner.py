@@ -348,7 +348,18 @@ _SELECTION_SCHEMA = {
                     "page_title": {"type": "string"},
                     "files": {
                         "type": "array",
-                        "items": {"type": "string"},
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string"},
+                                "relevance": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 10,
+                                },
+                            },
+                            "required": ["path", "relevance"],
+                        },
                     },
                 },
                 "required": ["page_title", "files"],
@@ -387,7 +398,10 @@ _SYSTEM = (
     "Each page should have a clear PURPOSE — it should "
     "explain a concept, component, or workflow. Pages are "
     "represented by 5\u20138 of their most representative source "
-    "code files \u2014 full coverage of every file is not required.\n\n"
+    "code files \u2014 full coverage of every file is not required. "
+    "When selecting files, return each file with a 1\u201310 relevance "
+    "score in non-increasing, most-representative-first order; the "
+    "first selected file must score at least 3.\n\n"
     "Output ONLY valid JSON."
 )
 
@@ -538,7 +552,12 @@ def _build_selection_user(
         "- Target 5–8 files per page; fewer is fine when fewer candidates "
         "are relevant\n"
         "- You may select fewer than 3 only when genuinely fewer relevant "
-        "files exist\n\n"
+        "files exist\n"
+        "- Return each selected file as {path, relevance}, where relevance "
+        "is an integer from 1 to 10\n"
+        "- Order files most-representative-first with non-increasing relevance "
+        "scores\n"
+        "- The first file for each page must have relevance >= 3\n\n"
         f"Pages:\n{pages_str}\n\n"
     )
     if last_error:
@@ -652,6 +671,82 @@ def _validate_selections(
                 f"VALIDATION_FAILURE: Page '{title}' has no files selected. "
                 "Select at least one representative source file or remove this page."
             )
+
+
+def _validate_raw_selections(
+    raw: dict,
+    *,
+    valid_titles: set[str],
+    all_files_set: set[str],
+    candidate_files_by_title: dict[str, set[str]],
+) -> dict[str, list[str]]:
+    """Validate raw Phase-2 LLM output and unwrap file objects to path lists."""
+    selections = raw.get("selections")
+    if not isinstance(selections, list):
+        raise ValueError("VALIDATION_FAILURE: Selection response must include a list")
+
+    result: dict[str, list[str]] = {title: [] for title in valid_titles}
+    for selection in selections:
+        if not isinstance(selection, dict):
+            raise ValueError("VALIDATION_FAILURE: Each selection must be an object")
+
+        title = selection.get("page_title")
+        if not isinstance(title, str):
+            raise ValueError(
+                "VALIDATION_FAILURE: Selection page_title must be a string"
+            )
+        if title not in valid_titles:
+            continue
+
+        raw_files = selection.get("files")
+        if not isinstance(raw_files, list):
+            raise ValueError(f"VALIDATION_FAILURE: Page '{title}' files must be a list")
+
+        paths: list[str] = []
+        previous_relevance: int | None = None
+        for index, item in enumerate(raw_files):
+            if not isinstance(item, dict):
+                raise ValueError(
+                    f"VALIDATION_FAILURE: Page '{title}' file entry {index} "
+                    "must be an object with path and relevance"
+                )
+
+            path = item.get("path")
+            relevance = item.get("relevance")
+            if not isinstance(path, str):
+                raise ValueError(
+                    f"VALIDATION_FAILURE: Page '{title}' file entry {index} "
+                    "path must be a string"
+                )
+            if type(relevance) is not int:
+                raise ValueError(
+                    f"VALIDATION_FAILURE: Page '{title}' file entry {index} "
+                    "relevance must be an integer"
+                )
+            if not 1 <= relevance <= 10:
+                raise ValueError(
+                    f"VALIDATION_FAILURE: Page '{title}' file entry {index} "
+                    "relevance must be between 1 and 10"
+                )
+            if index == 0 and relevance < 3:
+                raise ValueError(
+                    f"VALIDATION_FAILURE: Page '{title}' first file relevance "
+                    "must be >= 3"
+                )
+            if previous_relevance is not None and relevance > previous_relevance:
+                raise ValueError(
+                    f"VALIDATION_FAILURE: Page '{title}' relevance scores must be "
+                    "non-increasing"
+                )
+            previous_relevance = relevance
+
+            candidate_files = candidate_files_by_title.get(title, set())
+            if path in all_files_set and path in candidate_files:
+                paths.append(path)
+
+        result[title] = paths[:MAX_FILES_PER_PAGE]
+
+    return result
 
 
 async def _generate_outline(
@@ -904,27 +999,17 @@ async def _select_files_in_batches(
                 context={"batch_pages": len(batch_pages)},
             )
             return
-        title_to_page = {p["title"]: p for p in batch_pages}
         candidate_files_by_title = {
             title: set(candidates)
             for title, _purpose, candidates in pages_with_candidates
         }
-        for sel in raw.get("selections", []):
-            title = sel.get("page_title", "")
-            files = sel.get("files", [])
-            if title not in title_to_page:
-                continue
-            valid = [
-                f
-                for f in files
-                if f in all_files_set and f in candidate_files_by_title[title]
-            ]
-            page_dict = title_to_page[title]
-            valid.sort(
-                key=lambda f: _score_file_for_page(f, page_dict, file_infos, dep_graph),
-                reverse=True,
-            )
-            result[title] = valid[:MAX_FILES_PER_PAGE]
+        parsed = _validate_raw_selections(
+            raw,
+            valid_titles={p["title"] for p in batch_pages},
+            all_files_set=all_files_set,
+            candidate_files_by_title=candidate_files_by_title,
+        )
+        result.update(parsed)
 
     batches: list[list[dict]] = [
         outline[i : i + _PAGE_BATCH_SIZE]

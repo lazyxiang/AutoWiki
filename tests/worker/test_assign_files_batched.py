@@ -52,6 +52,17 @@ def test_selection_user_segment_includes_file_count_range():
     assert str(MAX_FILES_PER_PAGE) in seg.text
 
 
+def test_selection_user_segment_requests_relevance_ordering():
+    pages_with_candidates = [("Core", "Core logic.", ["core/a.py", "core/b.py"])]
+    seg = _build_selection_user(pages_with_candidates)
+
+    assert "{path, relevance}" in seg.text
+    assert "most-representative-first" in seg.text
+    assert "non-increasing" in seg.text
+    assert "first file" in seg.text
+    assert ">= 3" in seg.text
+
+
 def test_selection_user_segment_injects_last_error():
     pages_with_candidates = [("API", "REST API.", ["api/routes.py"])]
     seg = _build_selection_user(
@@ -66,3 +77,17 @@ def test_selection_schema_has_selections_key():
     item_props = _SELECTION_SCHEMA["properties"]["selections"]["items"]["properties"]
     assert "page_title" in item_props
     assert "files" in item_props
+
+
+def test_selection_schema_files_are_relevance_objects():
+    item_props = _SELECTION_SCHEMA["properties"]["selections"]["items"]["properties"]
+    file_items = item_props["files"]["items"]
+
+    assert file_items["type"] == "object"
+    assert file_items["required"] == ["path", "relevance"]
+    assert file_items["properties"]["path"] == {"type": "string"}
+    assert file_items["properties"]["relevance"] == {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 10,
+    }

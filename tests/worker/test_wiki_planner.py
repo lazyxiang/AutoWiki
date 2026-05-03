@@ -1,5 +1,6 @@
 import pytest
 
+from worker.pipeline import wiki_planner as wp
 from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
 from worker.pipeline.wiki_planner import (
     WikiPageSpec,
@@ -42,7 +43,27 @@ def _make_file_analysis():
     )
 
 
+def _selected(path: str, relevance: int = 8) -> dict[str, object]:
+    return {"path": path, "relevance": relevance}
+
+
 async def test_generate_wiki_plan(mock_llm):
+    mock_llm.generate_structured.side_effect = [
+        {
+            "pages": [
+                {"title": "Core", "purpose": "Core subsystem."},
+                {"title": "Infra", "purpose": "Infrastructure subsystem."},
+                {"title": "Models", "purpose": "Data models.", "parent": "Core"},
+                {"title": "Utils", "purpose": "Utility helpers.", "parent": "Infra"},
+            ]
+        },
+        {
+            "selections": [
+                {"page_title": "Models", "files": [_selected("models.py", 8)]},
+                {"page_title": "Utils", "files": [_selected("utils.py", 7)]},
+            ]
+        },
+    ]
     file_analysis = _make_file_analysis()
     plan = await generate_wiki_plan(file_analysis, repo_name="testrepo", llm=mock_llm)
 
@@ -355,9 +376,9 @@ async def test_assign_files(mock_llm):
     mock_llm.generate_structured.side_effect = None
     mock_llm.generate_structured.return_value = {
         "selections": [
-            {"page_title": "Overview", "files": ["main.py"]},
-            {"page_title": "API", "files": ["api.py"]},
-            {"page_title": "Worker", "files": ["worker.py"]},
+            {"page_title": "Overview", "files": [_selected("main.py", 8)]},
+            {"page_title": "API", "files": [_selected("api.py", 7)]},
+            {"page_title": "Worker", "files": [_selected("worker.py", 6)]},
         ]
     }
     outline = [
@@ -388,7 +409,7 @@ async def test_assign_files_orphans_distributed(mock_llm):
     mock_llm.generate_structured.side_effect = None
     mock_llm.generate_structured.return_value = {
         "selections": [
-            {"page_title": "Overview", "files": ["main.py"]},
+            {"page_title": "Overview", "files": [_selected("main.py", 8)]},
             # "orphan.py" omitted — page-centric model doesn't need to assign it
         ]
     }
@@ -603,8 +624,11 @@ async def test_generate_wiki_plan_two_phase(mock_llm):
         # Phase 2: file selection
         {
             "selections": [
-                {"page_title": "Models", "files": ["main.py", "models.py"]},
-                {"page_title": "Utils", "files": ["utils.py"]},
+                {
+                    "page_title": "Models",
+                    "files": [_selected("main.py", 8), _selected("models.py", 7)],
+                },
+                {"page_title": "Utils", "files": [_selected("utils.py", 8)]},
             ]
         },
     ]
@@ -685,7 +709,9 @@ async def test_assign_files_logs_each_validation_failure_and_feedback(caplog):
         {"title": "Core", "purpose": "core"},
     ]
     # stuffed selection: only Overview has files, Core is empty (fails validation)
-    stuffed = {"selections": [{"page_title": "Overview", "files": ["main.py"]}]}
+    stuffed = {
+        "selections": [{"page_title": "Overview", "files": [_selected("main.py", 8)]}]
+    }
     llm = AsyncMock()
     # Two batched calls will both return a stuffed response that fails validation.
     llm.generate_structured.side_effect = [stuffed, stuffed]
@@ -903,8 +929,11 @@ async def test_generate_wiki_plan_with_clone_root(mock_llm):
         },
         {
             "selections": [
-                {"page_title": "Models", "files": ["main.py", "models.py"]},
-                {"page_title": "Utils", "files": ["utils.py"]},
+                {
+                    "page_title": "Models",
+                    "files": [_selected("main.py", 8), _selected("models.py", 7)],
+                },
+                {"page_title": "Utils", "files": [_selected("utils.py", 8)]},
             ]
         },
     ]
@@ -1061,6 +1090,70 @@ def test_heuristic_select_files_respects_max():
 # ---------------------------------------------------------------------------
 
 
+def test_validate_raw_selections_rejects_increasing_relevance_scores():
+    raw = {
+        "selections": [
+            {
+                "page_title": "API",
+                "files": [
+                    {"path": "api/routes.py", "relevance": 6},
+                    {"path": "api/models.py", "relevance": 7},
+                ],
+            }
+        ]
+    }
+
+    with pytest.raises(ValueError, match="non-increasing"):
+        wp._validate_raw_selections(
+            raw,
+            valid_titles={"API"},
+            all_files_set={"api/routes.py", "api/models.py"},
+            candidate_files_by_title={"API": {"api/routes.py", "api/models.py"}},
+        )
+
+
+def test_validate_raw_selections_rejects_first_relevance_below_floor():
+    raw = {
+        "selections": [
+            {
+                "page_title": "API",
+                "files": [{"path": "api/routes.py", "relevance": 2}],
+            }
+        ]
+    }
+
+    with pytest.raises(ValueError, match="first file"):
+        wp._validate_raw_selections(
+            raw,
+            valid_titles={"API"},
+            all_files_set={"api/routes.py"},
+            candidate_files_by_title={"API": {"api/routes.py"}},
+        )
+
+
+def test_validate_raw_selections_unwraps_and_filters_candidate_paths():
+    raw = {
+        "selections": [
+            {
+                "page_title": "API",
+                "files": [
+                    {"path": "api/routes.py", "relevance": 9},
+                    {"path": "misc/unused.py", "relevance": 8},
+                ],
+            }
+        ]
+    }
+
+    result = wp._validate_raw_selections(
+        raw,
+        valid_titles={"API"},
+        all_files_set={"api/routes.py", "misc/unused.py"},
+        candidate_files_by_title={"API": {"api/routes.py"}},
+    )
+
+    assert result == {"API": ["api/routes.py"]}
+
+
 def test_validate_selections_passes_normal():
     outline = [{"title": "API", "purpose": "REST API."}]
     result = {"API": ["api/routes.py", "api/models.py"]}
@@ -1161,8 +1254,11 @@ async def test_generate_wiki_plan_uses_selection_model(mock_llm):
     # Phase 2: selection response — tests/test_api.py intentionally omitted
     selection_response = {
         "selections": [
-            {"page_title": "Routes", "files": ["api/routes.py", "api/models.py"]},
-            {"page_title": "Worker", "files": ["worker/job.py"]},
+            {
+                "page_title": "Routes",
+                "files": [_selected("api/routes.py", 8), _selected("api/models.py", 7)],
+            },
+            {"page_title": "Worker", "files": [_selected("worker/job.py", 8)]},
         ]
     }
     mock_llm.generate_structured = AsyncMock(
