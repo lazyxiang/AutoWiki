@@ -1201,7 +1201,7 @@ def _ownership_mode(mode: str | None = None) -> str:
 
 
 def _compute_hub_modules(dep_graph: DependencyGraph | None) -> set[str]:
-    """Return top-decile in-degree files for DependencyGraph-like objects."""
+    """Return meaningful top-decile in-degree files for DependencyGraph-like objects."""
     edges = getattr(dep_graph, "edges", None)
     if not edges:
         return set()
@@ -1216,16 +1216,11 @@ def _compute_hub_modules(dep_graph: DependencyGraph | None) -> set[str]:
 
     hub_count = max(1, math.ceil(len(in_degrees) * 0.1))
     ranked = sorted(
-        ((path, degree) for path, degree in in_degrees.items() if degree > 0),
+        ((path, degree) for path, degree in in_degrees.items() if degree >= 2),
         key=lambda item: item[1],
         reverse=True,
     )
     return {path for path, _degree in ranked[:hub_count]}
-
-
-def _is_non_overview_leaf_page(title: str, outline: list[dict]) -> bool:
-    all_parents = {p.get("parent") for p in outline if p.get("parent")}
-    return "overview" not in title.lower() and title not in all_parents
 
 
 def _log_ownership_demotion(
@@ -1245,13 +1240,9 @@ def _log_ownership_demotion(
         context["kept_page"] = kept_page
     if score_delta is not None:
         context["score_delta"] = round(score_delta, 3)
-    log_validation_retry(
-        logger,
-        stage="wiki_planner.ownership_demotion",
-        attempt=1,
-        max_retries=1,
-        exc=ValueError(reason),
-        context=context,
+    logger.info(
+        "wiki_planner.ownership_demotion: normalized ownership selection | %s",
+        " ".join(f"{key}={value}" for key, value in context.items()),
     )
 
 
@@ -1276,6 +1267,14 @@ def _enforce_ownership(
         page = page_by_title.get(title, {"title": title, "purpose": ""})
         return _score_file_for_page(path, page, file_infos, dep_graph)
 
+    def ownership_score(title: str, path: str) -> float:
+        page = page_by_title.get(title, {})
+        page_score = score(title, path)
+        parent = page.get("parent")
+        if parent:
+            page_score += score(parent, path) * 0.25
+        return page_score
+
     def owners_by_file() -> dict[str, list[str]]:
         owners: dict[str, list[str]] = {}
         for title, files in result.items():
@@ -1283,10 +1282,13 @@ def _enforce_ownership(
                 owners.setdefault(path, []).append(title)
         return owners
 
-    def can_demote(title: str) -> bool:
-        return not (
-            len(result.get(title, [])) <= 1
-            and _is_non_overview_leaf_page(title, outline)
+    all_parents = {p.get("parent") for p in outline if p.get("parent")}
+
+    def would_empty_non_overview_leaf(title: str, files: list[str]) -> bool:
+        return (
+            len(files) <= 1
+            and "overview" not in title.lower()
+            and title not in all_parents
         )
 
     for path, owners in owners_by_file().items():
@@ -1301,14 +1303,12 @@ def _enforce_ownership(
                 continue
             ranked = sorted(
                 sibling_owners,
-                key=lambda title: score(title, path),
+                key=lambda title: ownership_score(title, path),
                 reverse=True,
             )
             kept = ranked[0]
-            kept_score = score(kept, path)
+            kept_score = ownership_score(kept, path)
             for demoted in ranked[1:]:
-                if not can_demote(demoted):
-                    continue
                 if path in result.get(demoted, []):
                     result[demoted].remove(path)
                     _log_ownership_demotion(
@@ -1316,19 +1316,19 @@ def _enforce_ownership(
                         demoted_page=demoted,
                         kept_page=kept,
                         reason="sibling_duplicate",
-                        score_delta=kept_score - score(demoted, path),
+                        score_delta=kept_score - ownership_score(demoted, path),
                     )
 
     for path, owners in owners_by_file().items():
         if path in hubs or len(owners) <= 2:
             continue
-        ranked = sorted(owners, key=lambda title: score(title, path), reverse=True)
+        ranked = sorted(
+            owners, key=lambda title: ownership_score(title, path), reverse=True
+        )
         kept = ranked[:2]
         best_kept = kept[0]
-        best_kept_score = score(best_kept, path)
+        best_kept_score = ownership_score(best_kept, path)
         for demoted in ranked[2:]:
-            if not can_demote(demoted):
-                continue
             if path in result.get(demoted, []):
                 result[demoted].remove(path)
                 _log_ownership_demotion(
@@ -1336,31 +1336,40 @@ def _enforce_ownership(
                     demoted_page=demoted,
                     kept_page=best_kept,
                     reason="non_sibling_owner_cap",
-                    score_delta=best_kept_score - score(demoted, path),
+                    score_delta=best_kept_score - ownership_score(demoted, path),
                 )
 
     assignment_cap = int(1.5 * len(all_repo_files))
-    if assignment_cap > 0:
-        while sum(len(files) for files in result.values()) > assignment_cap:
-            candidates: list[tuple[int, float, str, str]] = []
-            for title, files in result.items():
-                if len(files) <= 1 and _is_non_overview_leaf_page(title, outline):
-                    continue
-                for path in files:
-                    candidates.append((len(files), score(title, path), title, path))
-            if not candidates:
-                break
-            _length, lowest_score, demoted_page, path = max(
-                candidates,
-                key=lambda item: (item[0], -item[1], item[2], item[3]),
+    while sum(len(files) for files in result.values()) > assignment_cap:
+        candidates: list[tuple[bool, int, float, str, str]] = []
+        for title, files in result.items():
+            for path in files:
+                candidates.append(
+                    (
+                        not would_empty_non_overview_leaf(title, files),
+                        len(files),
+                        score(title, path),
+                        title,
+                        path,
+                    )
+                )
+        if not candidates:
+            total = sum(len(files) for files in result.values())
+            raise ValueError(
+                "Ownership enforcement could not reduce total assignments "
+                f"to cap {assignment_cap}; total remains {total}"
             )
-            result[demoted_page].remove(path)
-            _log_ownership_demotion(
-                file=path,
-                demoted_page=demoted_page,
-                reason="total_assignment_cap",
-                score_delta=-lowest_score,
-            )
+        _preserves_leaf, _length, lowest_score, demoted_page, path = max(
+            candidates,
+            key=lambda item: (item[0], item[1], -item[2], item[3], item[4]),
+        )
+        result[demoted_page].remove(path)
+        _log_ownership_demotion(
+            file=path,
+            demoted_page=demoted_page,
+            reason="total_assignment_cap",
+            score_delta=-lowest_score,
+        )
 
     return result
 
@@ -2006,6 +2015,13 @@ async def generate_wiki_plan(
         )
         primary_assignments = _heuristic_select_files(
             outline, all_files, file_analysis.files, dep_graph, partial
+        )
+        primary_assignments = _enforce_ownership(
+            primary_assignments,
+            outline,
+            all_repo_files=all_files,
+            file_infos=file_analysis.files,
+            dep_graph=dep_graph,
         )
 
     # Final: combine and normalise (handles orphan files, safety-net checks)
