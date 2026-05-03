@@ -971,6 +971,61 @@ async def test_select_files_retries_then_demotes_ordering_violations(
     )
 
 
+async def test_select_files_repeated_below_floor_only_ordering_is_salvaged(
+    monkeypatch,
+    caplog,
+):
+    """Repeated below-floor-only ordering failures return after one feedback retry."""
+    import logging
+    from unittest.mock import AsyncMock
+
+    from worker.pipeline import wiki_planner as wp
+
+    monkeypatch.setattr(
+        wp,
+        "_prefilter_candidates",
+        lambda _page, all_files, _file_infos, _dep_graph: list(all_files),
+    )
+
+    below_floor = {
+        "selections": [
+            {
+                "page_title": "API",
+                "files": [_selected("api/legacy.py", 2)],
+            }
+        ]
+    }
+    llm = AsyncMock()
+    llm.generate_structured.side_effect = [below_floor, below_floor]
+    outline = [{"title": "API", "purpose": "REST API."}]
+
+    with caplog.at_level(logging.WARNING, logger="worker.planner"):
+        result = await wp._select_files(
+            outline=outline,
+            file_summary="fs",
+            dep_info=None,
+            all_files=["api/legacy.py"],
+            file_infos={},
+            dep_graph=None,
+            llm=llm,
+            system="sys",
+            on_retry=None,
+            max_retries=1,
+        )
+
+    assert result == {"API": ["api/legacy.py"]}
+    assert isinstance(result, dict)
+    assert all(isinstance(paths, list) for paths in result.values())
+    assert llm.generate_structured.await_count == 2
+    assert any(
+        "wiki_planner.ordering_demotion" in record.getMessage()
+        and "demoted_file=api/legacy.py" in record.getMessage()
+        and "original_position=0" in record.getMessage()
+        and "score=2" in record.getMessage()
+        for record in caplog.records
+    )
+
+
 async def test_select_files_mixed_provider_and_ordering_failure_is_not_salvaged(
     monkeypatch,
 ):
@@ -1497,12 +1552,19 @@ def test_validate_raw_selections_unwraps_and_filters_candidate_paths():
     assert result == {"API": ["api/routes.py"]}
 
 
-def test_demote_ordering_invalid_raw_selection_rejects_below_floor_only_file():
+def test_demote_ordering_invalid_raw_selection_salvages_below_floor_only_file(
+    caplog,
+):
+    import logging
+
     raw = {
         "selections": [
             {
                 "page_title": "API",
-                "files": [{"path": "api/legacy.py", "relevance": 2}],
+                "files": [
+                    {"path": "docs/api.md", "relevance": 9},
+                    {"path": "api/legacy.py", "relevance": 2},
+                ],
             }
         ]
     }
@@ -1510,13 +1572,22 @@ def test_demote_ordering_invalid_raw_selection_rejects_below_floor_only_file():
         "VALIDATION_FAILURE: Page 'API' first file relevance must be >= 3",
         raw=raw,
         valid_titles={"API"},
-        all_files_set={"api/legacy.py"},
+        all_files_set={"docs/api.md", "api/legacy.py"},
         candidate_files_by_title={"API": {"api/legacy.py"}},
         reason="first file relevance below 3",
     )
 
-    with pytest.raises(wp._SelectionOrderingError, match="first file"):
-        wp._demote_ordering_invalid_raw_selection(error)
+    with caplog.at_level(logging.WARNING, logger="worker.planner"):
+        result = wp._demote_ordering_invalid_raw_selection(error)
+
+    assert result == {"API": ["api/legacy.py"]}
+    assert any(
+        "wiki_planner.ordering_demotion" in record.getMessage()
+        and "demoted_file=api/legacy.py" in record.getMessage()
+        and "original_position=0" in record.getMessage()
+        and "score=2" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_validate_selections_passes_normal():

@@ -845,13 +845,19 @@ def _demote_ordering_invalid_raw_selection(
 
         sorted_entries = sorted(entries, key=lambda entry: entry[2], reverse=True)
         if sorted_entries and sorted_entries[0][2] < 3:
-            raise _SelectionOrderingError(
-                f"VALIDATION_FAILURE: Page '{title}' first file relevance must be >= 3",
-                raw=error.raw,
-                valid_titles=error.valid_titles,
-                all_files_set=error.all_files_set,
-                candidate_files_by_title=error.candidate_files_by_title,
-                reason="first file relevance below 3",
+            _index, path, relevance = sorted_entries[0]
+            log_validation_retry(
+                logger,
+                stage="wiki_planner.ordering_demotion",
+                attempt=1,
+                max_retries=1,
+                exc=ValueError(error.reason),
+                context={
+                    "page": title,
+                    "demoted_file": path,
+                    "original_position": _index,
+                    "score": relevance,
+                },
             )
 
         result[title] = [path for _index, path, _relevance in sorted_entries][
