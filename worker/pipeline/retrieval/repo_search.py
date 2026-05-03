@@ -8,9 +8,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from worker.utils.tokenize import tokenize_text as _tokenize
+from worker.utils.tokenize import tokenize_text
 
 Tokenizer = Callable[[str], set[str]]
+
+
+def _tokenize(text: str) -> set[str]:
+    return tokenize_text(text, min_ascii_len=2)
 
 
 class RetrievalProfileLike(Protocol):

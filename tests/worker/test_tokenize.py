@@ -66,6 +66,13 @@ def test_normalizes_decomposed_accented_latin_words():
     assert "clair" not in tokens
 
 
+def test_normalizes_full_width_ascii_near_cjk_to_ascii_signal():
+    tokens = tokenize_text("前端ＡＰＩ１２路由")
+
+    assert "api12" in tokens
+    assert "ＡＰＩ１２" not in tokens
+
+
 def test_preserves_cyrillic_words():
     tokens = tokenize_text("привет сервис")
     assert "привет" in tokens

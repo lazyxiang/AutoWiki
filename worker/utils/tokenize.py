@@ -25,7 +25,7 @@ def tokenize_text(text: str, *, min_ascii_len: int = 3) -> set[str]:
     if not text:
         return set()
 
-    text = unicodedata.normalize("NFC", text)
+    text = unicodedata.normalize("NFKC", text)
     normalized = _CAMEL_SPLIT_RE.sub(" ", text)
     normalized = _SEPARATOR_RE.sub(" ", normalized)
     word_text = _CJK_RUN_RE.sub(" ", normalized)

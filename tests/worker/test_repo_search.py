@@ -186,6 +186,41 @@ def test_score_file_for_query_accepts_custom_tokenizer_for_short_tokens():
     assert ranked.matched_entity == entry["entities"][0]
 
 
+def test_score_file_for_query_default_tokenizer_scores_two_character_signals():
+    from worker.pipeline.retrieval.repo_search import score_file_for_query
+
+    profile = _Profile()
+    entry = {
+        "path": "app/ui.py",
+        "tokens": [],
+        "imports": [],
+        "imported_by": [],
+        "entities": [
+            {
+                "name": "DB",
+                "type": "class",
+                "start_line": 1,
+                "end_line": 5,
+                "signature": "class DB",
+                "symbol_path": "app.ui.DB",
+            }
+        ],
+        "is_test": False,
+        "is_config": False,
+    }
+
+    ranked = score_file_for_query(
+        "app/ui.py",
+        entry,
+        {"ui", "db"},
+        [],
+        profile,
+    )
+
+    assert ranked.score > 0
+    assert ranked.matched_entity == entry["entities"][0]
+
+
 def test_fast_report_search_compatibility_exports_retrieval_and_tuple_graph():
     from worker.fast_report.search import expansion_graph_for, retrieve_code_evidence
 
