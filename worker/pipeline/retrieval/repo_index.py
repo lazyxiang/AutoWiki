@@ -8,9 +8,8 @@ from typing import Any
 
 from worker.pipeline.ast_analysis import FileAnalysis
 from worker.pipeline.dependency_graph import DependencyGraph
+from worker.utils.tokenize import tokenize_text
 
-_TOKEN_SPLIT_RE = re.compile(r"[^A-Za-z0-9]+")
-_CAMEL_CASE_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 _README_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
 
 REPO_INDEX_VERSION = 2
@@ -369,29 +368,12 @@ def _symbol_path(rel_path: str, entity_name: str) -> str:
 
 def _file_tokens(rel_path: str, entities: list[dict[str, Any]]) -> list[str]:
     rel_path = _normalize_rel_path(rel_path)
-    tokens: list[str] = []
-    seen: set[str] = set()
-
-    def _add_token(token: str) -> None:
-        normalized = token.strip().lower()
-        if not normalized or normalized in seen:
-            return
-        seen.add(normalized)
-        tokens.append(normalized)
-
-    def _add_text(text: str) -> None:
-        for part in _TOKEN_SPLIT_RE.split(text):
-            if not part:
-                continue
-            for camel_part in _CAMEL_CASE_RE.split(part):
-                _add_token(camel_part)
-
-    _add_text(rel_path.replace("/", " "))
+    tokens = set(tokenize_text(rel_path, min_ascii_len=2))
     for entity in entities:
-        _add_text(entity.get("name", ""))
-        _add_text(entity.get("symbol_path", ""))
+        tokens |= tokenize_text(entity.get("name", ""), min_ascii_len=2)
+        tokens |= tokenize_text(entity.get("symbol_path", ""), min_ascii_len=2)
         if entity.get("signature"):
-            _add_text(entity["signature"])
+            tokens |= tokenize_text(entity["signature"], min_ascii_len=2)
     return sorted(tokens)
 
 

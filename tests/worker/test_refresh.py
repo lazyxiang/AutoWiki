@@ -1,4 +1,5 @@
 import json
+import threading
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -97,12 +98,18 @@ async def _run_refresh_with_mocks(
     generate_wiki_plan,
     generate_page_batch,
     readme: str = "",
+    build_dependency_graph=None,
+    build_repo_index=None,
 ):
     from worker.jobs import run_refresh_index
     from worker.pipeline.dependency_graph import DependencyGraph
 
     file_analysis = _make_single_file_analysis()
     mock_embedding.dimension = 1536
+    dependency_graph_builder = build_dependency_graph or (
+        lambda *_args, **_kwargs: DependencyGraph(edges={}, clusters=[["main.py"]])
+    )
+    repo_index_builder = build_repo_index or (lambda *_args, **_kwargs: {})
     with (
         patch("worker.index.refresh.get_config") as mock_cfg,
         patch(
@@ -123,9 +130,9 @@ async def _run_refresh_with_mocks(
         patch("worker.index.refresh.analyze_all_files", return_value=file_analysis),
         patch(
             "worker.index.refresh.build_dependency_graph",
-            return_value=DependencyGraph(edges={}, clusters=[["main.py"]]),
+            side_effect=dependency_graph_builder,
         ),
-        patch("worker.index.refresh.build_repo_index", return_value={}),
+        patch("worker.index.refresh.build_repo_index", side_effect=repo_index_builder),
         patch("worker.index.refresh._make_faiss_store", return_value=MagicMock()),
         patch("worker.index.refresh.build_rag_index", new_callable=AsyncMock),
         patch("worker.index.refresh.make_llm_provider", return_value=mock_llm),
@@ -366,6 +373,71 @@ async def test_run_refresh_index_replans_all_files_for_readme_only_change(
     finally:
         from shared.database import dispose_db
 
+        await dispose_db(db_path)
+
+
+async def test_run_refresh_index_builds_dependency_graph_and_repo_index_in_executor(
+    tmp_path, mock_llm, mock_fast_llm, mock_embedding
+):
+    from shared.database import dispose_db
+    from worker.pipeline.dependency_graph import DependencyGraph
+    from worker.pipeline.page_generator import PageResult
+    from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan
+
+    repo_id = "executor_refresh_repo"
+    job_id = str(uuid.uuid4())
+    db_path, clone_root, _wiki_dir = await _seed_refresh_repo(
+        tmp_path, repo_id=repo_id, job_id=job_id
+    )
+    event_loop_thread = threading.get_ident()
+    worker_threads: dict[str, int] = {}
+
+    def fake_build_dependency_graph(*_args, **_kwargs):
+        worker_threads["dependency_graph"] = threading.get_ident()
+        return DependencyGraph(edges={}, clusters=[["main.py"]])
+
+    def fake_build_repo_index(*_args, **_kwargs):
+        worker_threads["repo_index"] = threading.get_ident()
+        return {"index_version": 2, "files": {"main.py": {}}}
+
+    async def fake_generate_wiki_plan(*_args, **_kwargs):
+        return WikiPlan(
+            pages=[
+                WikiPageSpec(
+                    title="Overview",
+                    purpose="Updated source page.",
+                    files=["main.py"],
+                )
+            ],
+            all_repo_files=["main.py"],
+        )
+
+    async def fake_generate_page_batch(specs_with_children, *args, on_result, **kwargs):
+        spec = specs_with_children[0][0]
+        await on_result(
+            PageResult(slug=spec.slug, title=spec.title, content="new content"), spec
+        )
+        return []
+
+    try:
+        await _run_refresh_with_mocks(
+            tmp_path,
+            repo_id=repo_id,
+            job_id=job_id,
+            clone_root=clone_root,
+            mock_llm=mock_llm,
+            mock_fast_llm=mock_fast_llm,
+            mock_embedding=mock_embedding,
+            changed_files=["main.py"],
+            generate_wiki_plan=fake_generate_wiki_plan,
+            generate_page_batch=fake_generate_page_batch,
+            build_dependency_graph=fake_build_dependency_graph,
+            build_repo_index=fake_build_repo_index,
+        )
+
+        assert worker_threads["dependency_graph"] != event_loop_thread
+        assert worker_threads["repo_index"] != event_loop_thread
+    finally:
         await dispose_db(db_path)
 
 

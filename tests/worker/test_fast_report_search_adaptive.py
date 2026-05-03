@@ -159,6 +159,103 @@ def test_build_slice_candidates_compatibility_loads_source_slices(tmp_path):
     assert "return value" in slices[0].code
 
 
+def test_build_slice_candidates_uses_load_slice_extractor_hook(tmp_path, monkeypatch):
+    from worker.fast_report import search
+    from worker.fast_report.search import (
+        _RankedFile,
+        _ScoredEntity,
+        profile_for_question_type,
+    )
+
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "service.py").write_text("def build_service():\n    pass\n")
+    entity = {
+        "name": "build_service",
+        "start_line": 1,
+        "end_line": 2,
+        "symbol_path": "app.service.build_service",
+    }
+    files = {
+        "app/service.py": {
+            "path": "app/service.py",
+            "tokens": ["service"],
+            "entities": [entity],
+        }
+    }
+    selected = [
+        _RankedFile(
+            path="app/service.py",
+            score=3.0,
+            matched_entity=entity,
+            matched_entities=[_ScoredEntity(entity=entity, score=3.0)],
+        )
+    ]
+    calls = []
+
+    def fake_slice_extractor(**kwargs):
+        calls.append(kwargs["rel_path"])
+        return _FakeSliceResult(
+            snippet_start=1,
+            snippet_end=2,
+            full_start=1,
+            full_end=2,
+            code="hooked source slice",
+            truncated_lines=0,
+        )
+
+    monkeypatch.setattr(search, "_load_slice_extractor", lambda: fake_slice_extractor)
+
+    slices = search._build_slice_candidates(
+        files,
+        selected,
+        profile_for_question_type("implementation_location"),
+        clone_root=tmp_path,
+    )
+
+    assert calls == ["app/service.py"]
+    assert slices[0].code == "hooked source slice"
+
+
+def test_fast_report_tokenize_preserves_two_character_ascii_tokens():
+    from worker.fast_report.search import _tokenize
+
+    assert {"ui", "db", "s3", "go"} <= _tokenize("UI DB S3 Go")
+
+
+def test_fast_report_retrieval_scores_two_character_query_tokens():
+    from worker.fast_report.search import retrieve_code_evidence
+
+    index = {
+        "files": {
+            "app/ui.py": {
+                "path": "app/ui.py",
+                "tokens": [],
+                "imports": [],
+                "imported_by": [],
+                "external_deps": [],
+                "entities": [
+                    {
+                        "name": "UI",
+                        "type": "class",
+                        "start_line": 1,
+                        "end_line": 5,
+                        "signature": "class UI",
+                        "docstring": "UI composition root.",
+                        "symbol_path": "app.ui.UI",
+                    }
+                ],
+                "is_test": False,
+                "is_config": False,
+            }
+        }
+    }
+    plan = _Plan(question_type="architecture", search_terms=["UI"])
+
+    layer = retrieve_code_evidence(index, plan, "How does UI work?")
+
+    assert [snippet["file"] for snippet in layer.snippets] == ["app/ui.py"]
+
+
 def test_architecture_retrieval_emits_top_k_multi_slice_source_citations(
     tmp_path, monkeypatch
 ):

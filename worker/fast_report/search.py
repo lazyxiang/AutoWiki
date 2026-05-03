@@ -28,7 +28,7 @@ from worker.pipeline.retrieval.repo_search import (
 from worker.pipeline.retrieval.repo_search import (
     neighbors_for_graph as _repo_neighbors_for_graph,
 )
-from worker.utils.tokenize import tokenize_text as _tokenize
+from worker.utils.tokenize import tokenize_text
 
 _CJK_RE = re.compile(
     r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]"
@@ -87,6 +87,10 @@ _SliceCandidate = SliceCandidate
 _score_file_multi_slice = score_file_for_query
 _apply_token_budget = apply_token_budget
 _neighbors_for_graph = _repo_neighbors_for_graph
+
+
+def _tokenize(text: str) -> set[str]:
+    return tokenize_text(text, min_ascii_len=2)
 
 
 def _to_retrieval_profile(profile: QuestionTypeProfile) -> _RetrievalProfile:
@@ -282,7 +286,7 @@ def _rank_files(
         ):
             continue
         candidate = score_file_for_query(
-            path, entry, query_tokens, focus_hints, profile
+            path, entry, query_tokens, focus_hints, profile, tokenizer=_tokenize
         )
         if candidate.score <= 0:
             continue
@@ -340,6 +344,7 @@ def _expand_candidate_paths(
         profile=profile,
         allow_config_files=allow_config_files,
         allow_test_files=allow_test_files,
+        tokenizer=_tokenize,
     )
 
 
@@ -355,7 +360,7 @@ def _build_slice_candidates(
         selected,
         profile,
         clone_root=clone_root,
-        slice_extractor=_source_slice_extractor() if clone_root is not None else None,
+        slice_extractor=_load_slice_extractor() if clone_root is not None else None,
     )
 
 

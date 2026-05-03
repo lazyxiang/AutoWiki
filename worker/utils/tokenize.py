@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-_ASCII_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_WORD_TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 _CAMEL_SPLIT_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 _CJK_RUN_RE = re.compile(
     r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]+"
@@ -12,12 +12,13 @@ _CJK_RUN_RE = re.compile(
 _SEPARATOR_RE = re.compile(r"[/_\-.]")
 
 
-def tokenize_text(text: str) -> set[str]:
+def tokenize_text(text: str, *, min_ascii_len: int = 3) -> set[str]:
     """Return lowercased ASCII tokens plus CJK runs and n-grams.
 
     ASCII identifiers are split on path separators, punctuation, snake case,
-    and camel case. Tokens shorter than three characters are ignored except for
-    CJK n-grams, where two-character compounds are useful search signals.
+    and camel case. ASCII tokens shorter than ``min_ascii_len`` are ignored
+    except for CJK n-grams, where two-character compounds are useful search
+    signals. Non-CJK Unicode words are preserved as whole tokens.
     """
 
     if not text:
@@ -25,11 +26,14 @@ def tokenize_text(text: str) -> set[str]:
 
     normalized = _CAMEL_SPLIT_RE.sub(" ", text)
     normalized = _SEPARATOR_RE.sub(" ", normalized)
-    tokens = {
-        token
-        for token in _ASCII_TOKEN_RE.findall(normalized.lower())
-        if len(token) >= 3
-    }
+    tokens: set[str] = set()
+    for token in _WORD_TOKEN_RE.findall(normalized):
+        if _CJK_RUN_RE.search(token):
+            continue
+        normalized_token = token.lower()
+        if token.isascii() and len(normalized_token) < min_ascii_len:
+            continue
+        tokens.add(normalized_token)
 
     for run in _CJK_RUN_RE.findall(text):
         tokens.add(run)

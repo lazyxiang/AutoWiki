@@ -125,4 +125,4 @@ def _approx_tokens(text: str) -> int:
 
 
 def _tokenize(text: str) -> set[str]:
-    return _shared_tokenize(text)
+    return _shared_tokenize(text, min_ascii_len=2)

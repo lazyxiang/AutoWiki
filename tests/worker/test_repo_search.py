@@ -149,6 +149,43 @@ def test_score_expand_slice_and_budget_primitives_are_domain_agnostic():
     assert kept[0].citation_id == "code-1-0"
 
 
+def test_score_file_for_query_accepts_custom_tokenizer_for_short_tokens():
+    from worker.pipeline.retrieval.repo_search import score_file_for_query
+    from worker.utils.tokenize import tokenize_text
+
+    profile = _Profile()
+    entry = {
+        "path": "app/ui.py",
+        "tokens": [],
+        "imports": [],
+        "imported_by": [],
+        "entities": [
+            {
+                "name": "UI",
+                "type": "class",
+                "start_line": 1,
+                "end_line": 5,
+                "signature": "class UI",
+                "symbol_path": "app.ui.UI",
+            }
+        ],
+        "is_test": False,
+        "is_config": False,
+    }
+
+    ranked = score_file_for_query(
+        "app/ui.py",
+        entry,
+        {"ui"},
+        [],
+        profile,
+        tokenizer=lambda text: tokenize_text(text, min_ascii_len=2),
+    )
+
+    assert ranked.score > 0
+    assert ranked.matched_entity == entry["entities"][0]
+
+
 def test_fast_report_search_compatibility_exports_retrieval_and_tuple_graph():
     from worker.fast_report.search import expansion_graph_for, retrieve_code_evidence
 

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
 from worker.utils.tokenize import tokenize_text as _tokenize
+
+Tokenizer = Callable[[str], set[str]]
 
 
 class RetrievalProfileLike(Protocol):
@@ -68,9 +71,11 @@ def score_file_for_query(
     query_tokens: set[str],
     focus_hints: list[str],
     profile: RetrievalProfileLike,
+    *,
+    tokenizer: Tokenizer = _tokenize,
 ) -> RankedFile:
     lower_path = path.lower()
-    file_tokens = set(entry.get("tokens") or []) | _tokenize(path)
+    file_tokens = set(entry.get("tokens") or []) | tokenizer(path)
     best_entity = _select_primary_entity(entry)
     exact_focus_match = False
 
@@ -90,7 +95,7 @@ def score_file_for_query(
     scored_entities: list[ScoredEntity] = []
     for entity in entry.get("entities") or []:
         candidate_score = float(
-            len(query_tokens & _entity_tokens(entity)) * 2
+            len(query_tokens & _entity_tokens(entity, tokenizer=tokenizer)) * 2
             + _focus_hint_score(entity, lower_path, focus_hints)
         )
         scored_entities.append(ScoredEntity(entity=entity, score=candidate_score))
@@ -142,6 +147,7 @@ def expand_candidate_paths(
     profile: RetrievalProfileLike,
     allow_config_files: bool = False,
     allow_test_files: bool = False,
+    tokenizer: Tokenizer = _tokenize,
 ) -> list[RankedFile]:
     if not seeds:
         return []
@@ -166,6 +172,7 @@ def expand_candidate_paths(
             primary_graph,
             query_tokens,
             allow_test_files=allow_test_files,
+            tokenizer=tokenizer,
         )
         if not neighbors and fallback_graph:
             neighbors = neighbors_for_graph(
@@ -174,6 +181,7 @@ def expand_candidate_paths(
                 fallback_graph,
                 query_tokens,
                 allow_test_files=allow_test_files,
+                tokenizer=tokenizer,
             )
         for neighbor_path in neighbors:
             if neighbor_path in seen or neighbor_path not in files:
@@ -209,6 +217,7 @@ def neighbors_for_graph(
     query_tokens: set[str] | None = None,
     *,
     allow_test_files: bool = False,
+    tokenizer: Tokenizer = _tokenize,
 ) -> list[str]:
     query_tokens = query_tokens or set()
     entry = files.get(path, {})
@@ -221,7 +230,9 @@ def neighbors_for_graph(
     if graph == "call_sites":
         return _call_site_neighbors(files, path)
     if graph == "exception_touchpoints":
-        return _exception_touchpoint_neighbors(files, path, allow_test_files)
+        return _exception_touchpoint_neighbors(
+            files, path, allow_test_files, tokenizer=tokenizer
+        )
     if graph == "config_touchpoints":
         return _config_touchpoint_neighbors(files, path, matching_key_only=True)
     if graph == "is_config_files":
@@ -229,7 +240,9 @@ def neighbors_for_graph(
     if graph == "sibling_directory":
         return _sibling_neighbors(files, path)
     if graph == "sibling_token_overlap":
-        return _sibling_neighbors(files, path, query_tokens=query_tokens)
+        return _sibling_neighbors(
+            files, path, query_tokens=query_tokens, tokenizer=tokenizer
+        )
     if graph == "external_deps_overlap":
         return _external_dep_neighbors(files, path)
     return []
@@ -352,12 +365,14 @@ def _focus_hint_score(
     return score
 
 
-def _entity_tokens(entity: dict[str, Any]) -> set[str]:
+def _entity_tokens(
+    entity: dict[str, Any], *, tokenizer: Tokenizer = _tokenize
+) -> set[str]:
     tokens = set()
-    tokens |= _tokenize(str(entity.get("name", "")))
-    tokens |= _tokenize(str(entity.get("symbol_path", "")))
-    tokens |= _tokenize(str(entity.get("signature", "")))
-    tokens |= _tokenize(str(entity.get("docstring", "")))
+    tokens |= tokenizer(str(entity.get("name", "")))
+    tokens |= tokenizer(str(entity.get("symbol_path", "")))
+    tokens |= tokenizer(str(entity.get("signature", "")))
+    tokens |= tokenizer(str(entity.get("docstring", "")))
     return tokens
 
 
@@ -420,7 +435,11 @@ def _call_site_neighbors(files: dict[str, dict[str, Any]], path: str) -> list[st
 
 
 def _exception_touchpoint_neighbors(
-    files: dict[str, dict[str, Any]], path: str, allow_test_files: bool
+    files: dict[str, dict[str, Any]],
+    path: str,
+    allow_test_files: bool,
+    *,
+    tokenizer: Tokenizer = _tokenize,
 ) -> list[str]:
     seed_touchpoints = files.get(path, {}).get("exception_touchpoints") or []
     seed_symbols = {
@@ -430,7 +449,7 @@ def _exception_touchpoint_neighbors(
     }
     seed_message_tokens: set[str] = set()
     for touchpoint in seed_touchpoints:
-        seed_message_tokens |= _tokenize(str(touchpoint.get("message", "")))
+        seed_message_tokens |= tokenizer(str(touchpoint.get("message", "")))
     if not seed_symbols and not seed_message_tokens:
         return []
     neighbors: list[str] = []
@@ -441,7 +460,7 @@ def _exception_touchpoint_neighbors(
             continue
         for touchpoint in candidate_entry.get("exception_touchpoints") or []:
             symbol = str(touchpoint.get("symbol_path", "")).lower()
-            message_tokens = _tokenize(str(touchpoint.get("message", "")))
+            message_tokens = tokenizer(str(touchpoint.get("message", "")))
             if symbol in seed_symbols or seed_message_tokens & message_tokens:
                 neighbors.append(candidate_path)
                 break
@@ -477,6 +496,7 @@ def _sibling_neighbors(
     path: str,
     *,
     query_tokens: set[str] | None = None,
+    tokenizer: Tokenizer = _tokenize,
 ) -> list[str]:
     directory = str(Path(path).parent)
     if directory == ".":
@@ -491,7 +511,7 @@ def _sibling_neighbors(
         if candidate_directory != directory:
             continue
         if query_tokens is not None:
-            candidate_tokens = set(candidate_entry.get("tokens") or []) | _tokenize(
+            candidate_tokens = set(candidate_entry.get("tokens") or []) | tokenizer(
                 candidate_path
             )
             if not (query_tokens & candidate_tokens):

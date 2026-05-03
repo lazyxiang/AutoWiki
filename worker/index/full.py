@@ -58,6 +58,7 @@ from worker.platform.token_store import get_platform_token
 logger = logging.getLogger("worker.task")
 
 _LEGACY_REPO_INDEX_NAME = "fast_report_index.json"
+_LEGACY_FILE_ANALYSIS_SUMMARY_NAME = "file_analysis_summary.txt"
 
 
 # ---------------------------------------------------------------------------
@@ -78,10 +79,11 @@ def _repo_metadata_updates(meta, active_branch: str) -> dict:
     return updates
 
 
-def _remove_legacy_repo_index(ast_dir: Path) -> None:
-    legacy_path = ast_dir / _LEGACY_REPO_INDEX_NAME
-    if legacy_path.exists():
-        legacy_path.unlink()
+def _remove_stale_ast_artifacts(ast_dir: Path) -> None:
+    for name in (_LEGACY_REPO_INDEX_NAME, _LEGACY_FILE_ANALYSIS_SUMMARY_NAME):
+        stale_path = ast_dir / name
+        if stale_path.exists():
+            stale_path.unlink()
 
 
 def _phase1_prompt_dump_path(repo_data_dir: Path) -> Path | None:
@@ -528,7 +530,7 @@ async def run_full_index(
 
         structure_data = plan.to_api_structure()
         now = datetime.now(UTC)
-        await loop.run_in_executor(None, _remove_legacy_repo_index, ast_dir)
+        await loop.run_in_executor(None, _remove_stale_ast_artifacts, ast_dir)
         logger.info("Full index job complete for %s/%s", owner, name)
         await _update_job(
             db_path,

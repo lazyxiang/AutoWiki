@@ -462,6 +462,7 @@ async def test_run_full_index_persists_repo_index_only(
     ast_dir = tmp_path / "repos" / repo_id / "ast"
     ast_dir.mkdir(parents=True)
     (ast_dir / "fast_report_index.json").write_text("{}")
+    (ast_dir / "file_analysis_summary.txt").write_text("stale summary")
 
     with ExitStack() as stack:
         mock_cfg = stack.enter_context(patch("worker.index.full.get_config"))
@@ -503,8 +504,10 @@ async def test_run_full_index_persists_repo_index_only(
         ast_dir = tmp_path / "repos" / repo_id / "ast"
         repo_index_path = ast_dir / "repo_index.json"
         fast_report_index_path = ast_dir / "fast_report_index.json"
+        file_analysis_summary_path = ast_dir / "file_analysis_summary.txt"
         assert repo_index_path.exists()
         assert not fast_report_index_path.exists()
+        assert not file_analysis_summary_path.exists()
         index_data = json.loads(repo_index_path.read_text())
         assert index_data["index_version"] == 2
         assert "top_level_entries" not in index_data
@@ -573,6 +576,7 @@ async def test_run_refresh_index_persists_repo_index_only(
     ast_dir = tmp_path / "repos" / repo_id / "ast"
     ast_dir.mkdir(parents=True)
     (ast_dir / "fast_report_index.json").write_text("{}")
+    (ast_dir / "file_analysis_summary.txt").write_text("stale summary")
     (ast_dir / "wiki_plan.json").write_text(
         json.dumps(
             {
@@ -637,8 +641,10 @@ async def test_run_refresh_index_persists_repo_index_only(
         ast_dir = tmp_path / "repos" / repo_id / "ast"
         repo_index_path = ast_dir / "repo_index.json"
         fast_report_index_path = ast_dir / "fast_report_index.json"
+        file_analysis_summary_path = ast_dir / "file_analysis_summary.txt"
         assert repo_index_path.exists()
         assert not fast_report_index_path.exists()
+        assert not file_analysis_summary_path.exists()
         index_data = json.loads(repo_index_path.read_text())
         assert "main.py" in index_data["files"]
         main_file = index_data["files"]["main.py"]

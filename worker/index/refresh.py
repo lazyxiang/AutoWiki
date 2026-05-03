@@ -52,6 +52,7 @@ from worker.platform.token_store import get_platform_token
 logger = logging.getLogger("worker.task")
 
 _LEGACY_REPO_INDEX_NAME = "fast_report_index.json"
+_LEGACY_FILE_ANALYSIS_SUMMARY_NAME = "file_analysis_summary.txt"
 
 
 # ---------------------------------------------------------------------------
@@ -72,10 +73,11 @@ def _repo_metadata_updates(meta, active_branch: str) -> dict:
     return updates
 
 
-def _remove_legacy_repo_index(ast_dir: Path) -> None:
-    legacy_path = ast_dir / _LEGACY_REPO_INDEX_NAME
-    if legacy_path.exists():
-        legacy_path.unlink()
+def _remove_stale_ast_artifacts(ast_dir: Path) -> None:
+    for name in (_LEGACY_REPO_INDEX_NAME, _LEGACY_FILE_ANALYSIS_SUMMARY_NAME):
+        stale_path = ast_dir / name
+        if stale_path.exists():
+            stale_path.unlink()
 
 
 def _is_global_planner_input(path: str) -> bool:
@@ -458,18 +460,23 @@ async def run_refresh_index(
 
         # Stage 3: Dependency Graph
         logger.info("Stage 3: Dependency Graph starting")
-        dep_graph = build_dependency_graph(files, clone_root)
+        dep_graph = await loop.run_in_executor(
+            None, build_dependency_graph, files, clone_root
+        )
         logger.info(
             "Dependency graph built: %d nodes, %d edges",
             sum(len(c) for c in dep_graph.clusters),
             sum(len(e) for e in dep_graph.edges.values()),
         )
-        repo_index = build_repo_index(
-            root=clone_root,
-            files=files,
-            file_analysis=file_analysis,
-            dep_graph=dep_graph,
-            readme=readme,
+        repo_index = await loop.run_in_executor(
+            None,
+            lambda: build_repo_index(
+                root=clone_root,
+                files=files,
+                file_analysis=file_analysis,
+                dep_graph=dep_graph,
+                readme=readme,
+            ),
         )
         await _write_text_async(
             ast_dir / "repo_index.json",
@@ -726,7 +733,7 @@ async def run_refresh_index(
             json.dumps(merged_plan.to_wiki_json(), indent=2, ensure_ascii=False),
         )
         await asyncio.get_running_loop().run_in_executor(
-            None, _remove_legacy_repo_index, ast_dir
+            None, _remove_stale_ast_artifacts, ast_dir
         )
         structure_data = merged_plan.to_api_structure()
 
