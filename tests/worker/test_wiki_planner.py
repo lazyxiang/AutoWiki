@@ -5,6 +5,7 @@ from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
 from worker.pipeline.wiki_planner import (
     WikiPageSpec,
     WikiPlan,
+    _enforce_ownership,
     _heuristic_select_files,
     _prefilter_candidates,
     _score_file_for_page,
@@ -1825,6 +1826,222 @@ def test_validate_selections_allows_empty_parent():
     ]
     result = {"Backend": [], "Auth": ["auth/login.py"]}
     _validate_selections(result, outline)  # parent with no files is fine
+
+
+def test_enforce_ownership_demotes_lower_scoring_sibling_duplicate():
+    outline = [
+        {"title": "Backend", "purpose": "Parent."},
+        {"title": "API Routes", "purpose": "REST API routes.", "parent": "Backend"},
+        {"title": "Worker Jobs", "purpose": "Background jobs.", "parent": "Backend"},
+    ]
+    selections = {
+        "Backend": [],
+        "API Routes": ["api/routes.py"],
+        "Worker Jobs": ["api/routes.py", "worker/jobs.py"],
+    }
+
+    result = _enforce_ownership(
+        selections,
+        outline,
+        all_repo_files=["api/routes.py", "worker/jobs.py"],
+        file_infos={},
+        dep_graph=None,
+        mode="enforce",
+    )
+
+    assert result["API Routes"] == ["api/routes.py"]
+    assert result["Worker Jobs"] == ["worker/jobs.py"]
+    assert sum(paths.count("api/routes.py") for paths in result.values()) == 1
+
+
+def test_enforce_ownership_allows_two_non_sibling_owners_for_non_hub_file():
+    outline = [
+        {"title": "Backend", "purpose": "Backend parent."},
+        {"title": "Runtime", "purpose": "Runtime parent."},
+        {"title": "API", "purpose": "REST API.", "parent": "Backend"},
+        {"title": "Worker", "purpose": "Background jobs.", "parent": "Runtime"},
+    ]
+    selections = {
+        "Backend": [],
+        "Runtime": [],
+        "API": ["shared/core.py"],
+        "Worker": ["shared/core.py"],
+    }
+
+    result = _enforce_ownership(
+        selections,
+        outline,
+        all_repo_files=["shared/core.py"],
+        file_infos={},
+        dep_graph=None,
+        mode="enforce",
+    )
+
+    assert result == selections
+
+
+def test_enforce_ownership_caps_three_non_sibling_owners_for_non_hub_file():
+    outline = [
+        {"title": "Backend", "purpose": "Backend parent."},
+        {"title": "Runtime", "purpose": "Runtime parent."},
+        {"title": "Data", "purpose": "Data parent."},
+        {"title": "API Routes", "purpose": "REST API routes.", "parent": "Backend"},
+        {"title": "Route Models", "purpose": "Route models.", "parent": "Runtime"},
+        {"title": "Worker Jobs", "purpose": "Background jobs.", "parent": "Data"},
+    ]
+    selections = {
+        "Backend": [],
+        "Runtime": [],
+        "Data": [],
+        "API Routes": ["api/routes.py"],
+        "Route Models": ["api/routes.py"],
+        "Worker Jobs": ["api/routes.py", "worker/jobs.py"],
+    }
+
+    result = _enforce_ownership(
+        selections,
+        outline,
+        all_repo_files=["api/routes.py", "worker/jobs.py"],
+        file_infos={},
+        dep_graph=None,
+        mode="enforce",
+    )
+
+    owners = [title for title, paths in result.items() if "api/routes.py" in paths]
+    assert owners == ["API Routes", "Route Models"]
+    assert result["Worker Jobs"] == ["worker/jobs.py"]
+
+
+def test_enforce_ownership_off_leaves_duplicates_untouched():
+    outline = [
+        {"title": "Backend", "purpose": "Parent."},
+        {"title": "API Routes", "purpose": "REST API routes.", "parent": "Backend"},
+        {"title": "Worker Jobs", "purpose": "Background jobs.", "parent": "Backend"},
+    ]
+    selections = {
+        "Backend": [],
+        "API Routes": ["api/routes.py"],
+        "Worker Jobs": ["api/routes.py", "worker/jobs.py"],
+    }
+
+    result = _enforce_ownership(
+        selections,
+        outline,
+        all_repo_files=["api/routes.py", "worker/jobs.py"],
+        file_infos={},
+        dep_graph=None,
+        mode="off",
+    )
+
+    assert result == selections
+
+
+def test_enforce_ownership_exempts_top_decile_in_degree_hub_files():
+    class FakeDepGraph:
+        edges = {
+            "a.py": ["shared/hub.py"],
+            "b.py": ["shared/hub.py"],
+            "c.py": ["shared/hub.py"],
+            "shared/hub.py": [],
+        }
+
+    outline = [
+        {"title": "Backend", "purpose": "Parent."},
+        {"title": "API Routes", "purpose": "REST API routes.", "parent": "Backend"},
+        {"title": "Worker Jobs", "purpose": "Background jobs.", "parent": "Backend"},
+    ]
+    selections = {
+        "Backend": [],
+        "API Routes": ["shared/hub.py"],
+        "Worker Jobs": ["shared/hub.py", "worker/jobs.py"],
+    }
+
+    result = _enforce_ownership(
+        selections,
+        outline,
+        all_repo_files=["shared/hub.py", "worker/jobs.py"],
+        file_infos={},
+        dep_graph=FakeDepGraph(),
+        mode="enforce",
+    )
+
+    assert result == selections
+
+
+def test_enforce_ownership_caps_total_assignments():
+    outline = [
+        {"title": "API Routes", "purpose": "REST API routes."},
+        {"title": "Worker Jobs", "purpose": "Background jobs."},
+        {"title": "Database Models", "purpose": "Database models."},
+    ]
+    all_files = ["api/routes.py", "worker/jobs.py", "db/models.py", "shared/util.py"]
+    selections = {
+        "API Routes": ["api/routes.py", "shared/util.py", "worker/jobs.py"],
+        "Worker Jobs": ["worker/jobs.py", "shared/util.py", "api/routes.py"],
+        "Database Models": ["db/models.py", "shared/util.py", "api/routes.py"],
+    }
+
+    result = _enforce_ownership(
+        selections,
+        outline,
+        all_repo_files=all_files,
+        file_infos={},
+        dep_graph=None,
+        mode="enforce",
+    )
+
+    assert sum(len(paths) for paths in result.values()) <= int(1.5 * len(all_files))
+    assert result["API Routes"]
+    assert result["Worker Jobs"]
+    assert result["Database Models"]
+
+
+async def test_select_files_enforces_ownership_after_validation(
+    monkeypatch,
+    mock_llm,
+):
+    from worker.pipeline import wiki_planner as wp
+
+    monkeypatch.setattr(
+        wp,
+        "_prefilter_candidates",
+        lambda _page, all_files, _file_infos, _dep_graph: list(all_files),
+    )
+    mock_llm.generate_structured.side_effect = None
+    mock_llm.generate_structured.return_value = {
+        "selections": [
+            {"page_title": "Backend", "files": []},
+            {"page_title": "API Routes", "files": [_selected("api/routes.py", 9)]},
+            {
+                "page_title": "Worker Jobs",
+                "files": [
+                    _selected("api/routes.py", 8),
+                    _selected("worker/jobs.py", 7),
+                ],
+            },
+        ]
+    }
+    outline = [
+        {"title": "Backend", "purpose": "Parent."},
+        {"title": "API Routes", "purpose": "REST API routes.", "parent": "Backend"},
+        {"title": "Worker Jobs", "purpose": "Background jobs.", "parent": "Backend"},
+    ]
+
+    result = await wp._select_files(
+        outline=outline,
+        file_summary="files",
+        dep_info=None,
+        all_files=["api/routes.py", "worker/jobs.py"],
+        file_infos={},
+        dep_graph=None,
+        llm=mock_llm,
+        system="sys",
+        on_retry=None,
+        max_retries=1,
+    )
+
+    assert result["API Routes"] == ["api/routes.py"]
+    assert result["Worker Jobs"] == ["worker/jobs.py"]
 
 
 def test_validate_wiki_plan_no_orphan_check():

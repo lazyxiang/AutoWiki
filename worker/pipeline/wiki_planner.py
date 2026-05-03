@@ -30,6 +30,8 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1191,6 +1193,178 @@ def _heuristic_select_files(
     return result
 
 
+def _ownership_mode(mode: str | None = None) -> str:
+    value = (mode or os.getenv("AUTOWIKI_PLANNER_OWNERSHIP", "advise")).strip().lower()
+    if value not in {"enforce", "advise", "off"}:
+        return "advise"
+    return value
+
+
+def _compute_hub_modules(dep_graph: DependencyGraph | None) -> set[str]:
+    """Return top-decile in-degree files for DependencyGraph-like objects."""
+    edges = getattr(dep_graph, "edges", None)
+    if not edges:
+        return set()
+
+    in_degrees: dict[str, int] = {}
+    for source, deps in edges.items():
+        in_degrees.setdefault(source, 0)
+        for dep in deps:
+            in_degrees[dep] = in_degrees.get(dep, 0) + 1
+    if not in_degrees:
+        return set()
+
+    hub_count = max(1, math.ceil(len(in_degrees) * 0.1))
+    ranked = sorted(
+        ((path, degree) for path, degree in in_degrees.items() if degree > 0),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    return {path for path, _degree in ranked[:hub_count]}
+
+
+def _is_non_overview_leaf_page(title: str, outline: list[dict]) -> bool:
+    all_parents = {p.get("parent") for p in outline if p.get("parent")}
+    return "overview" not in title.lower() and title not in all_parents
+
+
+def _log_ownership_demotion(
+    *,
+    file: str,
+    demoted_page: str,
+    kept_page: str | None = None,
+    reason: str,
+    score_delta: float | None = None,
+) -> None:
+    context: dict[str, Any] = {
+        "file": file,
+        "demoted_page": demoted_page,
+        "reason": reason,
+    }
+    if kept_page is not None:
+        context["kept_page"] = kept_page
+    if score_delta is not None:
+        context["score_delta"] = round(score_delta, 3)
+    log_validation_retry(
+        logger,
+        stage="wiki_planner.ownership_demotion",
+        attempt=1,
+        max_retries=1,
+        exc=ValueError(reason),
+        context=context,
+    )
+
+
+def _enforce_ownership(
+    selections: dict[str, list[str]],
+    outline: list[dict],
+    *,
+    all_repo_files: list[str],
+    file_infos: dict[str, Any],
+    dep_graph: DependencyGraph | None,
+    mode: str | None = None,
+) -> dict[str, list[str]]:
+    """Demote duplicate file ownership across sibling and non-sibling pages."""
+    if _ownership_mode(mode) == "off":
+        return {title: list(files) for title, files in selections.items()}
+
+    result = {title: list(files) for title, files in selections.items()}
+    page_by_title = {page["title"]: page for page in outline}
+    hubs = _compute_hub_modules(dep_graph)
+
+    def score(title: str, path: str) -> float:
+        page = page_by_title.get(title, {"title": title, "purpose": ""})
+        return _score_file_for_page(path, page, file_infos, dep_graph)
+
+    def owners_by_file() -> dict[str, list[str]]:
+        owners: dict[str, list[str]] = {}
+        for title, files in result.items():
+            for path in files:
+                owners.setdefault(path, []).append(title)
+        return owners
+
+    def can_demote(title: str) -> bool:
+        return not (
+            len(result.get(title, [])) <= 1
+            and _is_non_overview_leaf_page(title, outline)
+        )
+
+    for path, owners in owners_by_file().items():
+        if path in hubs or len(owners) < 2:
+            continue
+        owners_by_sibling_group: dict[str | None, list[str]] = {}
+        for title in owners:
+            page = page_by_title.get(title, {})
+            owners_by_sibling_group.setdefault(page.get("parent"), []).append(title)
+        for sibling_owners in owners_by_sibling_group.values():
+            if len(sibling_owners) < 2:
+                continue
+            ranked = sorted(
+                sibling_owners,
+                key=lambda title: score(title, path),
+                reverse=True,
+            )
+            kept = ranked[0]
+            kept_score = score(kept, path)
+            for demoted in ranked[1:]:
+                if not can_demote(demoted):
+                    continue
+                if path in result.get(demoted, []):
+                    result[demoted].remove(path)
+                    _log_ownership_demotion(
+                        file=path,
+                        demoted_page=demoted,
+                        kept_page=kept,
+                        reason="sibling_duplicate",
+                        score_delta=kept_score - score(demoted, path),
+                    )
+
+    for path, owners in owners_by_file().items():
+        if path in hubs or len(owners) <= 2:
+            continue
+        ranked = sorted(owners, key=lambda title: score(title, path), reverse=True)
+        kept = ranked[:2]
+        best_kept = kept[0]
+        best_kept_score = score(best_kept, path)
+        for demoted in ranked[2:]:
+            if not can_demote(demoted):
+                continue
+            if path in result.get(demoted, []):
+                result[demoted].remove(path)
+                _log_ownership_demotion(
+                    file=path,
+                    demoted_page=demoted,
+                    kept_page=best_kept,
+                    reason="non_sibling_owner_cap",
+                    score_delta=best_kept_score - score(demoted, path),
+                )
+
+    assignment_cap = int(1.5 * len(all_repo_files))
+    if assignment_cap > 0:
+        while sum(len(files) for files in result.values()) > assignment_cap:
+            candidates: list[tuple[int, float, str, str]] = []
+            for title, files in result.items():
+                if len(files) <= 1 and _is_non_overview_leaf_page(title, outline):
+                    continue
+                for path in files:
+                    candidates.append((len(files), score(title, path), title, path))
+            if not candidates:
+                break
+            _length, lowest_score, demoted_page, path = max(
+                candidates,
+                key=lambda item: (item[0], -item[1], item[2], item[3]),
+            )
+            result[demoted_page].remove(path)
+            _log_ownership_demotion(
+                file=path,
+                demoted_page=demoted_page,
+                reason="total_assignment_cap",
+                score_delta=-lowest_score,
+            )
+
+    return result
+
+
 _PAGE_BATCH_SIZE = 12  # pages per LLM selection call
 
 
@@ -1388,6 +1562,14 @@ async def _select_files(
             )
             last_result = result
             _validate_selections(result, outline)
+            result = _enforce_ownership(
+                result,
+                outline,
+                all_repo_files=all_files,
+                file_infos=file_infos,
+                dep_graph=dep_graph,
+            )
+            _validate_selections(result, outline)
             return result
         except ValueError as exc:
             last_error = str(exc)
@@ -1420,6 +1602,14 @@ async def _select_files(
                         demoted_result.update(
                             _demote_ordering_invalid_raw_selection(ordering_error)
                         )
+                    _validate_selections(demoted_result, outline)
+                    demoted_result = _enforce_ownership(
+                        demoted_result,
+                        outline,
+                        all_repo_files=all_files,
+                        file_infos=file_infos,
+                        dep_graph=dep_graph,
+                    )
                     _validate_selections(demoted_result, outline)
                     return demoted_result
                 except ValueError as demotion_exc:
