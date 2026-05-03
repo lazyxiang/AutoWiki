@@ -853,6 +853,65 @@ async def test_assign_files_uses_batched_path(monkeypatch):
     assert "b.py" in result["Two"]
 
 
+async def test_select_files_preserves_partial_batches_on_raw_validation_failure(
+    monkeypatch,
+):
+    """Valid earlier batches should survive a later relevance/schema failure."""
+    from unittest.mock import AsyncMock
+
+    from worker.pipeline import wiki_planner as wp
+
+    monkeypatch.setattr(wp, "_PAGE_BATCH_SIZE", 1)
+    monkeypatch.setattr(
+        wp,
+        "_prefilter_candidates",
+        lambda _page, all_files, _file_infos, _dep_graph: list(all_files),
+    )
+
+    llm = AsyncMock()
+    llm.generate_structured.side_effect = [
+        {
+            "selections": [
+                {
+                    "page_title": "Core",
+                    "files": [_selected("core.py", 9)],
+                }
+            ]
+        },
+        {
+            "selections": [
+                {
+                    "page_title": "API",
+                    "files": [
+                        _selected("api.py", 7),
+                        _selected("routes.py", 8),
+                    ],
+                }
+            ]
+        },
+    ]
+    outline = [
+        {"title": "Core", "purpose": "Core subsystem."},
+        {"title": "API", "purpose": "API subsystem."},
+    ]
+
+    with pytest.raises(ValueError) as exc_info:
+        await wp._select_files(
+            outline=outline,
+            file_summary="fs",
+            dep_info=None,
+            all_files=["core.py", "api.py", "routes.py"],
+            file_infos={},
+            dep_graph=None,
+            llm=llm,
+            system="sys",
+            on_retry=None,
+            max_retries=1,
+        )
+
+    assert exc_info.value.args[2] == {"Core": ["core.py"], "API": []}
+
+
 def test_build_outline_prompt_includes_anchors_section_when_provided():
     """When anchors are passed in, the prompt must surface them under a
     dedicated heading, not bury them in the existing sections."""

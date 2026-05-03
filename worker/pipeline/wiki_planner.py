@@ -943,6 +943,14 @@ def _heuristic_select_files(
 _PAGE_BATCH_SIZE = 12  # pages per LLM selection call
 
 
+class _PartialSelectionError(ValueError):
+    """Selection validation failed after some batch results were accepted."""
+
+    def __init__(self, message: str, partial_result: dict[str, list[str]]) -> None:
+        super().__init__(message)
+        self.partial_result = partial_result
+
+
 async def _select_files_in_batches(
     outline: list[dict],
     file_summary: str,
@@ -1015,10 +1023,13 @@ async def _select_files_in_batches(
         outline[i : i + _PAGE_BATCH_SIZE]
         for i in range(0, len(outline), _PAGE_BATCH_SIZE)
     ]
-    if batches:
-        await _run_page_batch(batches[0])  # serial first batch warms cache
-    if len(batches) > 1:
-        await asyncio.gather(*(_run_page_batch(b) for b in batches[1:]))
+    try:
+        if batches:
+            await _run_page_batch(batches[0])  # serial first batch warms cache
+        if len(batches) > 1:
+            await asyncio.gather(*(_run_page_batch(b) for b in batches[1:]))
+    except ValueError as exc:
+        raise _PartialSelectionError(str(exc), dict(result)) from exc
 
     return result
 
@@ -1061,6 +1072,8 @@ async def _select_files(
             return result
         except ValueError as exc:
             last_error = str(exc)
+            if isinstance(exc, _PartialSelectionError):
+                last_result = exc.partial_result
             if attempt < max_retries:
                 log_validation_retry(
                     logger,
