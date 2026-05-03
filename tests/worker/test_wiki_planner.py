@@ -883,8 +883,7 @@ async def test_select_files_preserves_partial_batches_on_raw_validation_failure(
                 {
                     "page_title": "API",
                     "files": [
-                        _selected("api.py", 7),
-                        _selected("routes.py", 8),
+                        {"path": "api.py", "relevance": "high"},
                     ],
                 }
             ]
@@ -914,11 +913,66 @@ async def test_select_files_preserves_partial_batches_on_raw_validation_failure(
     assert exc_info.value.partial_result == {"Core": ["core.py"], "API": []}
 
 
-async def test_select_files_drains_parallel_batches_before_partial_failure(
+async def test_select_files_retries_then_demotes_ordering_violations(
+    monkeypatch,
+    caplog,
+):
+    """Ordering-only failures should be salvaged after one feedback retry."""
+    import logging
+    from unittest.mock import AsyncMock
+
+    from worker.pipeline import wiki_planner as wp
+
+    monkeypatch.setattr(
+        wp,
+        "_prefilter_candidates",
+        lambda _page, all_files, _file_infos, _dep_graph: list(all_files),
+    )
+
+    low_first = {
+        "selections": [
+            {
+                "page_title": "API",
+                "files": [
+                    _selected("api/legacy.py", 2),
+                    _selected("api/routes.py", 9),
+                    _selected("api/models.py", 7),
+                ],
+            }
+        ]
+    }
+    llm = AsyncMock()
+    llm.generate_structured.side_effect = [low_first, low_first]
+    outline = [{"title": "API", "purpose": "REST API."}]
+
+    with caplog.at_level(logging.WARNING, logger="worker.planner"):
+        result = await wp._select_files(
+            outline=outline,
+            file_summary="fs",
+            dep_info=None,
+            all_files=["api/legacy.py", "api/routes.py", "api/models.py"],
+            file_infos={},
+            dep_graph=None,
+            llm=llm,
+            system="sys",
+            on_retry=None,
+            max_retries=1,
+        )
+
+    assert result == {"API": ["api/routes.py", "api/models.py", "api/legacy.py"]}
+    assert all(isinstance(path, str) for path in result["API"])
+    assert llm.generate_structured.await_count == 2
+    assert any(
+        "wiki_planner.ordering_demotion" in record.getMessage()
+        and "demoted_path=api/legacy.py" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+async def test_select_files_provider_failure_preserves_successful_batch(
     monkeypatch,
 ):
-    """Successful sibling batches must be captured before partial fallback."""
-    import asyncio
+    """Provider errors in a parallel batch must not be masked as empty output."""
     from unittest.mock import AsyncMock
 
     from worker.pipeline import wiki_planner as wp
@@ -930,30 +984,88 @@ async def test_select_files_drains_parallel_batches_before_partial_failure(
         lambda _page, all_files, _file_infos, _dep_graph: list(all_files),
     )
 
-    calls = 0
-
-    async def fake_generate_structured(*_args, **_kwargs):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
+    async def fake_generate_structured(prompt, **_kwargs):
+        text = prompt[0].text
+        if 'Page: "Core"' in text:
             return {
                 "selections": [
                     {"page_title": "Core", "files": [_selected("core.py", 9)]}
                 ]
             }
-        if calls == 2:
+        if 'Page: "API"' in text:
+            raise RuntimeError("provider exhausted")
+        return {
+            "selections": [
+                {"page_title": "Worker", "files": [_selected("worker.py", 9)]}
+            ]
+        }
+
+    llm = AsyncMock()
+    llm.generate_structured.side_effect = fake_generate_structured
+    outline = [
+        {"title": "Core", "purpose": "Core subsystem."},
+        {"title": "API", "purpose": "API subsystem."},
+        {"title": "Worker", "purpose": "Worker subsystem."},
+    ]
+
+    with pytest.raises(ValueError) as exc_info:
+        await wp._select_files(
+            outline=outline,
+            file_summary="fs",
+            dep_info=None,
+            all_files=["core.py", "api.py", "worker.py"],
+            file_infos={},
+            dep_graph=None,
+            llm=llm,
+            system="sys",
+            on_retry=None,
+            max_retries=1,
+        )
+
+    assert isinstance(exc_info.value, wp._SelectionFailure)
+    assert exc_info.value.last_error is not None
+    assert "provider exhausted" in exc_info.value.last_error
+    assert exc_info.value.partial_result == {
+        "Core": ["core.py"],
+        "API": [],
+        "Worker": ["worker.py"],
+    }
+
+
+async def test_select_files_drains_parallel_batches_before_partial_failure(
+    monkeypatch,
+):
+    """Successful sibling batches must be captured before partial fallback."""
+    from unittest.mock import AsyncMock
+
+    from worker.pipeline import wiki_planner as wp
+
+    monkeypatch.setattr(wp, "_PAGE_BATCH_SIZE", 1)
+    monkeypatch.setattr(
+        wp,
+        "_prefilter_candidates",
+        lambda _page, all_files, _file_infos, _dep_graph: list(all_files),
+    )
+
+    async def fake_generate_structured(prompt, **_kwargs):
+        text = prompt[0].text
+        if 'Page: "Core"' in text:
+            return {
+                "selections": [
+                    {"page_title": "Core", "files": [_selected("core.py", 9)]}
+                ]
+            }
+        if 'Page: "API"' in text:
             return {
                 "selections": [
                     {
                         "page_title": "API",
                         "files": [
-                            _selected("api.py", 7),
-                            _selected("routes.py", 8),
+                            {"path": "api.py", "relevance": "high"},
                         ],
                     }
                 ]
             }
-        await asyncio.sleep(0.01)
         return {
             "selections": [
                 {"page_title": "Worker", "files": [_selected("worker.py", 9)]}
@@ -1241,7 +1353,7 @@ def test_validate_raw_selections_rejects_increasing_relevance_scores():
         ]
     }
 
-    with pytest.raises(ValueError, match="non-increasing"):
+    with pytest.raises(wp._SelectionOrderingError, match="non-increasing"):
         wp._validate_raw_selections(
             raw,
             valid_titles={"API"},
@@ -1260,7 +1372,7 @@ def test_validate_raw_selections_rejects_first_relevance_below_floor():
         ]
     }
 
-    with pytest.raises(ValueError, match="first file"):
+    with pytest.raises(wp._SelectionOrderingError, match="first file"):
         wp._validate_raw_selections(
             raw,
             valid_titles={"API"},
