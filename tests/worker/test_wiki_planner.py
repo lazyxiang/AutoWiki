@@ -2154,6 +2154,74 @@ def test_enforce_ownership_total_cap_can_empty_one_file_leaf_pages():
     assert any(not result[page["title"]] for page in outline if page.get("parent"))
 
 
+def test_enforce_ownership_advise_mode_matches_enforce_mode():
+    outline = [
+        {"title": "Backend", "purpose": "Parent."},
+        {"title": "API Routes", "purpose": "REST API routes.", "parent": "Backend"},
+        {"title": "Worker Jobs", "purpose": "Background jobs.", "parent": "Backend"},
+    ]
+    selections = {
+        "Backend": [],
+        "API Routes": ["api/routes.py"],
+        "Worker Jobs": ["api/routes.py", "worker/jobs.py"],
+    }
+
+    enforced = _enforce_ownership(
+        selections,
+        outline,
+        all_repo_files=["api/routes.py", "worker/jobs.py"],
+        file_infos={},
+        dep_graph=None,
+        mode="enforce",
+    )
+    advised = _enforce_ownership(
+        selections,
+        outline,
+        all_repo_files=["api/routes.py", "worker/jobs.py"],
+        file_infos={},
+        dep_graph=None,
+        mode="advise",
+    )
+
+    assert advised == enforced
+
+
+def test_enforce_ownership_total_cap_demotes_hub_after_exemption():
+    class FakeDepGraph:
+        edges = {
+            "a.py": ["shared/hub.py"],
+            "b.py": ["shared/hub.py"],
+            "c.py": ["shared/hub.py"],
+            "shared/hub.py": [],
+        }
+
+    outline = [
+        {"title": "API Routes", "purpose": "REST API routes."},
+        {"title": "Worker Jobs", "purpose": "Background jobs."},
+        {"title": "Database Models", "purpose": "Database models."},
+    ]
+    all_files = ["a.py", "b.py", "c.py", "shared/hub.py"]
+    selections = {
+        "API Routes": ["a.py", "shared/hub.py", "b.py"],
+        "Worker Jobs": ["b.py", "shared/hub.py", "c.py"],
+        "Database Models": ["c.py", "shared/hub.py", "a.py"],
+    }
+
+    result = _enforce_ownership(
+        selections,
+        outline,
+        all_repo_files=all_files,
+        file_infos={},
+        dep_graph=FakeDepGraph(),
+        mode="enforce",
+    )
+
+    cap = int(1.5 * len(all_files))
+    assert sum(len(paths) for paths in result.values()) <= cap
+    # Hub exemption only protects from sibling/non-sibling caps; total-cap
+    # enforcement may still demote hub copies to satisfy the global cap.
+
+
 async def test_select_files_enforces_ownership_after_validation(
     monkeypatch,
     mock_llm,

@@ -40,7 +40,11 @@ from typing import TYPE_CHECKING, Any
 from worker.llm.base import LLMProvider
 from worker.llm.prompt_segment import PromptSegment
 from worker.pipeline.language import get_planner_language_instruction
-from worker.pipeline.pipeline_logging import log_final_failure, log_validation_retry
+from worker.pipeline.pipeline_logging import (
+    log_final_failure,
+    log_structured_event,
+    log_validation_retry,
+)
 from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
 from worker.utils.tokenize import tokenize_text
 
@@ -1215,6 +1219,8 @@ def _compute_hub_modules(dep_graph: DependencyGraph | None) -> set[str]:
         return set()
 
     hub_count = max(1, math.ceil(len(in_degrees) * 0.1))
+    # Floor at degree>=2 so trivial single-importer files don't qualify as hubs;
+    # in small repos every file has in-degree 1 and would otherwise be exempted.
     ranked = sorted(
         ((path, degree) for path, degree in in_degrees.items() if degree >= 2),
         key=lambda item: item[1],
@@ -1227,7 +1233,7 @@ def _log_ownership_demotion(
     *,
     file: str,
     demoted_page: str,
-    kept_page: str | None = None,
+    primary_page: str | None = None,
     reason: str,
     score_delta: float | None = None,
 ) -> None:
@@ -1236,13 +1242,14 @@ def _log_ownership_demotion(
         "demoted_page": demoted_page,
         "reason": reason,
     }
-    if kept_page is not None:
-        context["kept_page"] = kept_page
+    if primary_page is not None:
+        context["primary_page"] = primary_page
     if score_delta is not None:
         context["score_delta"] = round(score_delta, 3)
-    logger.info(
-        "wiki_planner.ownership_demotion: normalized ownership selection | %s",
-        " ".join(f"{key}={value}" for key, value in context.items()),
+    log_structured_event(
+        logger,
+        event="wiki_planner.ownership_demotion",
+        context=context,
     )
 
 
@@ -1268,6 +1275,10 @@ def _enforce_ownership(
         return _score_file_for_page(path, page, file_infos, dep_graph)
 
     def ownership_score(title: str, path: str) -> float:
+        # Mix in 25% of the parent's relevance so a leaf that lives inside a
+        # tightly-themed cluster is preferred over an unrelated leaf when both
+        # claim the same file. Pure leaf score alone produced ties that were
+        # broken arbitrarily by sort key in early manual tests.
         page = page_by_title.get(title, {})
         page_score = score(title, path)
         parent = page.get("parent")
@@ -1314,7 +1325,7 @@ def _enforce_ownership(
                     _log_ownership_demotion(
                         file=path,
                         demoted_page=demoted,
-                        kept_page=kept,
+                        primary_page=kept,
                         reason="sibling_duplicate",
                         score_delta=kept_score - ownership_score(demoted, path),
                     )
@@ -1334,7 +1345,7 @@ def _enforce_ownership(
                 _log_ownership_demotion(
                     file=path,
                     demoted_page=demoted,
-                    kept_page=best_kept,
+                    primary_page=best_kept,
                     reason="non_sibling_owner_cap",
                     score_delta=best_kept_score - ownership_score(demoted, path),
                 )
