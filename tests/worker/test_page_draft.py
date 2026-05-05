@@ -38,6 +38,23 @@ def test_draft_system_mentions_source_of_truth():
     )
 
 
+def test_draft_system_has_scope_discipline_rule():
+    """A3: draft prompt must instruct the LLM to stay within assigned files
+    and refer to siblings only by title with at most one sentence each."""
+    from worker.llm.prompt_segment import PromptSegment
+
+    if isinstance(DRAFT_SYSTEM, list):
+        assert all(isinstance(s, PromptSegment) for s in DRAFT_SYSTEM)
+        text = "".join(s.text for s in DRAFT_SYSTEM)
+    else:
+        text = DRAFT_SYSTEM
+
+    lower = text.lower()
+    assert "scope" in lower
+    assert "sibling" in lower
+    assert "≤ 1 sentence" in lower or "one sentence" in lower
+
+
 def test_build_draft_prompt_returns_segments():
     outline = PageOutline(
         sections=[

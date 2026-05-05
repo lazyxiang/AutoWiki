@@ -72,7 +72,11 @@ DRAFT_SYSTEM = (
     '  - Edge labels with special chars: -->|"GET /api/{id}"| not -->|GET /api/{id}|\n'
     "  - Special characters requiring quotes: ( ) { } | < > /\n"
     "- Write for developers who are new to this codebase but experienced programmers\n"
-    "- Organize content from high-level concepts down to implementation details"
+    "- Organize content from high-level concepts down to implementation details\n\n"
+    "**Scope discipline.** Stay strictly within the assigned files for this page. "
+    "If a topic is owned by a sibling page listed in the prompt, give it ≤ 1 sentence "
+    "and refer to the sibling by title. Never re-document a sibling's primary subject "
+    "in this page."
 )
 
 
