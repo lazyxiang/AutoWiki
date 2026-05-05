@@ -552,20 +552,19 @@ def _build_selection_system(
 
 
 def _build_selection_user(
-    pages_with_candidates: list[tuple[str, str, list[str]]],
+    pages_with_candidates: list[tuple[str, str, list[str], int]],
     last_error: str | None = None,
 ) -> PromptSegment:
     schema_json = json.dumps(_SELECTION_SCHEMA, indent=2)
     pages_str = "\n\n".join(
-        f'Page: "{title}"\nPurpose: {purpose}\nCandidates:\n'
-        + "\n".join(f"  - {f}" for f in candidates)
-        for title, purpose, candidates in pages_with_candidates
+        f'Page: "{title}"\nPurpose: {purpose}\nTarget: {n_target} files\n'
+        "Candidates:\n" + "\n".join(f"  - {f}" for f in candidates)
+        for title, purpose, candidates, n_target in pages_with_candidates
     )
     text = (
-        f"For each wiki page below, select the "
-        f"{MIN_FILES_PER_PAGE}–{MAX_FILES_PER_PAGE} "
-        "source code files from its candidate list that best represent "
-        "the page's content.\n\n"
+        "For each wiki page below, select roughly the page's Target number of "
+        "source code files from its candidate list that best represent the "
+        "page's content. The Target is adaptive to the page's topic breadth.\n\n"
         "Rules:\n"
         "- Strongly prefer code files (.py, .ts, .go, .rs, .java, etc.) over "
         ".md / .yaml / .json files\n"
@@ -574,9 +573,10 @@ def _build_selection_user(
         "- Configuration files only when central to understanding "
         "this page's architecture\n"
         "- README.md only on a top-level Overview page\n"
-        "- Target 5–8 files per page; fewer is fine when fewer candidates "
-        "are relevant\n"
-        "- You may select fewer than 3 only when genuinely fewer relevant "
+        "- Stay within the Target ±2 range; fewer is fine when fewer "
+        "candidates are relevant, never exceed "
+        f"{MAX_FILES_PER_PAGE} total files per page\n"
+        "- You may select fewer than 2 only when genuinely fewer relevant "
         "files exist\n"
         "- Return each selected file as {path, relevance}, where relevance "
         "is an integer from 1 to 10\n"
@@ -685,6 +685,7 @@ def _validate_outline_structure(
 def _validate_selections(
     result: dict[str, list[str]],
     outline: list[dict],
+    min_files_by_title: dict[str, int] | None = None,
 ) -> None:
     """Validate per-page file selection counts.
 
@@ -693,7 +694,12 @@ def _validate_selections(
 
     Checks:
     - No page has more than MAX_FILES_PER_PAGE files.
-    - No non-overview, non-parent leaf page has zero files.
+    - When ``min_files_by_title`` is supplied, every non-overview, non-parent
+      leaf clears its per-page floor (capped at 2 by the A10 adaptive budget,
+      lowered when fewer candidates are available so we never demand more
+      than the prefilter could supply). Without the override, the legacy
+      ≥1 check applies — used by ownership-demotion fallbacks that can
+      legitimately leave a page empty after total-cap pruning.
 
     Raises:
         ValueError: Describing the first constraint violated.
@@ -709,7 +715,17 @@ def _validate_selections(
             )
         is_overview = "overview" in title.lower()
         is_parent = title in all_parents
-        if not (is_overview or is_parent or files):
+        if is_overview or is_parent:
+            continue
+        if min_files_by_title is not None:
+            min_required = max(1, min_files_by_title.get(title, 1))
+            if len(files) < min_required:
+                raise ValueError(
+                    f"VALIDATION_FAILURE: Page '{title}' has {len(files)} files "
+                    f"(min {min_required}). Select at least {min_required} "
+                    "representative source files or remove this page."
+                )
+        elif not files:
             raise ValueError(
                 f"VALIDATION_FAILURE: Page '{title}' has no files selected. "
                 "Select at least one representative source file or remove this page."
@@ -1151,6 +1167,43 @@ def _prefilter_candidates(
     return [f for f, _ in scored[:max_candidates]]
 
 
+def _compute_n_target(median_score: float, score_threshold: float = 2.0) -> int:
+    """Adaptive per-page file budget from the prefilter score distribution.
+
+    Narrow topics (low median score) settle near the floor of 2; broad topics
+    (high median) reach the ceiling of 8. Falls back to 5 when the threshold
+    is non-positive, which would otherwise blow up the division.
+    """
+    if score_threshold <= 0:
+        return 5
+    n = max(2, math.ceil(median_score / score_threshold))
+    return min(n, 8)
+
+
+def _compute_page_budget(
+    page: dict,
+    all_files: list[str],
+    file_infos: dict[str, Any],
+    dep_graph: DependencyGraph | None,
+    score_threshold: float = 2.0,
+) -> int:
+    """Derive a page's adaptive file budget from positive prefilter scores."""
+    positive_scores = sorted(
+        (
+            score
+            for score in (
+                _score_file_for_page(f, page, file_infos, dep_graph) for f in all_files
+            )
+            if score > 0
+        ),
+        reverse=True,
+    )
+    if not positive_scores:
+        return _compute_n_target(0.0, score_threshold)
+    median = positive_scores[len(positive_scores) // 2]
+    return _compute_n_target(median, score_threshold)
+
+
 def _heuristic_select_files(
     outline: list[dict],
     all_files: list[str],
@@ -1469,6 +1522,7 @@ async def _select_files_in_batches(
                 p["title"],
                 p.get("purpose", ""),
                 _prefilter_candidates(p, all_files, file_infos, dep_graph),
+                _compute_page_budget(p, all_files, file_infos, dep_graph),
             )
             for p in batch_pages
         ]
@@ -1494,7 +1548,7 @@ async def _select_files_in_batches(
             raise
         candidate_files_by_title = {
             title: set(candidates)
-            for title, _purpose, candidates in pages_with_candidates
+            for title, _purpose, candidates, _n_target in pages_with_candidates
         }
         parsed = _validate_raw_selections(
             raw,
@@ -1563,6 +1617,13 @@ async def _select_files(
     ordering_retry_used = False
     attempt = 0
     allowed_attempts = max_retries
+    candidate_counts = {
+        p["title"]: len(_prefilter_candidates(p, all_files, file_infos, dep_graph))
+        for p in outline
+    }
+    min_files_by_title = {
+        title: min(2, count) for title, count in candidate_counts.items()
+    }
 
     while attempt < allowed_attempts:
         attempt += 1
@@ -1581,7 +1642,7 @@ async def _select_files(
                 last_error=last_error,
             )
             last_result = result
-            _validate_selections(result, outline)
+            _validate_selections(result, outline, min_files_by_title)
             result = _enforce_ownership(
                 result,
                 outline,

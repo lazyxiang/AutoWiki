@@ -378,9 +378,18 @@ async def test_assign_files(mock_llm):
     mock_llm.generate_structured.side_effect = None
     mock_llm.generate_structured.return_value = {
         "selections": [
-            {"page_title": "Overview", "files": [_selected("main.py", 8)]},
-            {"page_title": "API", "files": [_selected("api.py", 7)]},
-            {"page_title": "Worker", "files": [_selected("worker.py", 6)]},
+            {
+                "page_title": "Overview",
+                "files": [_selected("main.py", 8), _selected("config.py", 5)],
+            },
+            {
+                "page_title": "API",
+                "files": [_selected("api.py", 7), _selected("api_models.py", 5)],
+            },
+            {
+                "page_title": "Worker",
+                "files": [_selected("worker.py", 6), _selected("jobs.py", 4)],
+            },
         ]
     }
     outline = [
@@ -390,18 +399,25 @@ async def test_assign_files(mock_llm):
     ]
     result = await _select_files(
         outline=outline,
-        file_summary="main.py: ...\napi.py: ...\nworker.py: ...",
+        file_summary="main.py\napi.py\napi_models.py\nworker.py\njobs.py\nconfig.py",
         dep_info=None,
-        all_files=["main.py", "api.py", "worker.py"],
+        all_files=[
+            "main.py",
+            "api.py",
+            "api_models.py",
+            "worker.py",
+            "jobs.py",
+            "config.py",
+        ],
         file_infos={},
         dep_graph=None,
         llm=mock_llm,
         system="Select files.",
         on_retry=None,
     )
-    assert result["Overview"] == ["main.py"]
-    assert result["API"] == ["api.py"]
-    assert result["Worker"] == ["worker.py"]
+    assert result["Overview"][0] == "main.py"
+    assert "api.py" in result["API"]
+    assert "worker.py" in result["Worker"]
 
 
 async def test_assign_files_orphans_distributed(mock_llm):
@@ -731,7 +747,10 @@ async def test_generate_wiki_plan_two_phase(mock_llm):
                     "page_title": "Models",
                     "files": [_selected("main.py", 8), _selected("models.py", 7)],
                 },
-                {"page_title": "Utils", "files": [_selected("utils.py", 8)]},
+                {
+                    "page_title": "Utils",
+                    "files": [_selected("utils.py", 8), _selected("helpers.py", 6)],
+                },
             ]
         },
     ]
@@ -741,13 +760,14 @@ async def test_generate_wiki_plan_two_phase(mock_llm):
             "main.py": FileInfo(rel_path="main.py", entities=[], summary=""),
             "models.py": FileInfo(rel_path="models.py", entities=[], summary=""),
             "utils.py": FileInfo(rel_path="utils.py", entities=[], summary=""),
+            "helpers.py": FileInfo(rel_path="helpers.py", entities=[], summary=""),
         }
     )
     plan = await generate_wiki_plan(file_analysis, repo_name="test", llm=mock_llm)
     assert len(plan.pages) == 4
     assert {p.title for p in plan.pages} == {"Core", "Infra", "Models", "Utils"}
     titles = [p.title for p in plan.pages]
-    assert plan.pages[titles.index("Utils")].files == ["utils.py"]
+    assert plan.pages[titles.index("Utils")].files[0] == "utils.py"
 
 
 async def test_generate_wiki_plan_scales_summary_budget_for_large_repos(
@@ -941,7 +961,10 @@ async def test_assign_files_uses_batched_path(monkeypatch):
     async def fake_batched(**kwargs):
         called["hit"] = True
         titles = [page["title"] for page in kwargs["outline"]]
-        return {titles[0]: ["a.py"], titles[1]: ["b.py"]}
+        return {
+            titles[0]: ["a.py", "a2.py"],
+            titles[1]: ["b.py", "b2.py"],
+        }
 
     monkeypatch.setattr(wp, "_select_files_in_batches", fake_batched)
 
@@ -954,7 +977,7 @@ async def test_assign_files_uses_batched_path(monkeypatch):
         outline=outline,
         file_summary="fs",
         dep_info=None,
-        all_files=["a.py", "b.py"],
+        all_files=["a.py", "a2.py", "b.py", "b2.py"],
         file_infos={},
         dep_graph=None,
         llm=llm,
@@ -1839,6 +1862,48 @@ def test_validate_selections_allows_empty_parent():
     _validate_selections(result, outline)  # parent with no files is fine
 
 
+def test_n_target_clamps_between_2_and_8():
+    from worker.pipeline.wiki_planner import _compute_n_target
+
+    assert _compute_n_target(median_score=1.0, score_threshold=2.0) == 2
+    assert _compute_n_target(median_score=20.0, score_threshold=2.0) == 8
+    assert _compute_n_target(median_score=0.0, score_threshold=2.0) == 2
+
+
+def test_n_target_threshold_zero_falls_back_to_default():
+    from worker.pipeline.wiki_planner import _compute_n_target
+
+    assert _compute_n_target(median_score=5.0, score_threshold=0.0) == 5
+
+
+def test_validate_selections_with_min_floor_rejects_single_file_leaf():
+    outline = [{"title": "Auth", "purpose": "Login logic."}]
+    result = {"Auth": ["auth/login.py"]}
+    with pytest.raises(ValueError, match="min 2"):
+        _validate_selections(result, outline, min_files_by_title={"Auth": 2})
+
+
+def test_validate_selections_with_min_floor_allows_empty_overview():
+    outline = [{"title": "Repository Overview", "purpose": "Top level."}]
+    result = {"Repository Overview": []}
+    _validate_selections(result, outline, min_files_by_title={"Repository Overview": 2})
+
+
+def test_validate_selections_with_min_floor_allows_two_files():
+    outline = [{"title": "Auth", "purpose": "Login logic."}]
+    result = {"Auth": ["auth/login.py", "auth/session.py"]}
+    _validate_selections(result, outline, min_files_by_title={"Auth": 2})
+
+
+def test_validate_selections_min_floor_caps_at_candidate_count():
+    """When only one candidate exists, min floor drops to 1 (not 2)."""
+    outline = [{"title": "Tiny", "purpose": "Single-file leaf."}]
+    result = {"Tiny": ["tiny.py"]}
+    # Caller passes 1 because only 1 candidate is available;
+    # validator should accept 1 file.
+    _validate_selections(result, outline, min_files_by_title={"Tiny": 1})
+
+
 def test_enforce_ownership_demotes_lower_scoring_sibling_duplicate():
     outline = [
         {"title": "Backend", "purpose": "Parent."},
@@ -2237,7 +2302,13 @@ async def test_select_files_enforces_ownership_after_validation(
     mock_llm.generate_structured.return_value = {
         "selections": [
             {"page_title": "Backend", "files": []},
-            {"page_title": "API Routes", "files": [_selected("api/routes.py", 9)]},
+            {
+                "page_title": "API Routes",
+                "files": [
+                    _selected("api/routes.py", 9),
+                    _selected("api/models.py", 6),
+                ],
+            },
             {
                 "page_title": "Worker Jobs",
                 "files": [
@@ -2257,7 +2328,7 @@ async def test_select_files_enforces_ownership_after_validation(
         outline=outline,
         file_summary="files",
         dep_info=None,
-        all_files=["api/routes.py", "worker/jobs.py"],
+        all_files=["api/routes.py", "api/models.py", "worker/jobs.py"],
         file_infos={},
         dep_graph=None,
         llm=mock_llm,
@@ -2266,7 +2337,9 @@ async def test_select_files_enforces_ownership_after_validation(
         max_retries=1,
     )
 
-    assert result["API Routes"] == ["api/routes.py"]
+    # API Routes keeps both files; ownership demotion strips api/routes.py
+    # from sibling Worker Jobs (lower score on that page).
+    assert "api/routes.py" in result["API Routes"]
     assert result["Worker Jobs"] == ["worker/jobs.py"]
 
 
@@ -2389,14 +2462,19 @@ async def test_generate_wiki_plan_uses_selection_model(mock_llm):
             {"title": "Worker", "purpose": "Background jobs.", "parent": "Backend"},
         ]
     }
-    # Phase 2: selection response — tests/test_api.py intentionally omitted
+    # Phase 2: selection response — tests/test_api.py intentionally omitted.
+    # Worker page picks up worker/job.py plus a second supporting file so the
+    # adaptive ≥2 floor is satisfied for non-overview, non-parent leaves.
     selection_response = {
         "selections": [
             {
                 "page_title": "Routes",
                 "files": [_selected("api/routes.py", 8), _selected("api/models.py", 7)],
             },
-            {"page_title": "Worker", "files": [_selected("worker/job.py", 8)]},
+            {
+                "page_title": "Worker",
+                "files": [_selected("worker/job.py", 8), _selected("api/models.py", 4)],
+            },
         ]
     }
     mock_llm.generate_structured = AsyncMock(
