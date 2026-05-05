@@ -663,6 +663,7 @@ async def run_refresh_index(
                 repo_notes=plan.repo_notes or None,
                 on_progress=on_page_progress,
                 on_result=_save_regenerated_page,
+                plan=plan,
             )
 
         # Build a merged plan reflecting the full updated wiki structure.

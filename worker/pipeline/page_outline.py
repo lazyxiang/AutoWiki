@@ -226,6 +226,8 @@ def _build_outline_prompt(
     entity_summaries: str,
     dep_info: str | None,
     child_titles: list[str] | None = None,
+    sibling_titles: list[str] | None = None,
+    out_of_scope_topics: list[str] | None = None,
 ) -> list[PromptSegment]:
     """Build the outline prompt with cacheable entity context."""
     # Cacheable prefix: entity summaries + dep info (reused by fact-check)
@@ -236,6 +238,17 @@ def _build_outline_prompt(
         cached_parts.append(f"Dependencies:\n{dep_info}\n")
     if child_titles:
         cached_parts.append(f"Child pages: {', '.join(child_titles)}\n")
+    if sibling_titles:
+        siblings_block = (
+            "Sibling pages (DO NOT cover their topics; reference by name only):\n"
+            + "\n".join(f"- {t}" for t in sibling_titles)
+        )
+        cached_parts.append(siblings_block + "\n")
+    if out_of_scope_topics:
+        oos_block = "Out-of-scope (covered elsewhere):\n" + "\n".join(
+            f"- {t}" for t in out_of_scope_topics
+        )
+        cached_parts.append(oos_block + "\n")
 
     # Variable tail: schema + instructions
     schema_json = json.dumps(_OUTLINE_SCHEMA, indent=2)
@@ -263,6 +276,8 @@ async def generate_page_outline(
     max_retries: int = 2,
     child_titles: list[str] | None = None,
     wiki_language: str = "en",
+    sibling_titles: list[str] | None = None,
+    out_of_scope_topics: list[str] | None = None,
 ) -> PageOutline:
     """Generate and validate a page outline using the fast model.
 
@@ -271,7 +286,14 @@ async def generate_page_outline(
     """
     from worker.pipeline.language import get_language_instruction
 
-    segments = _build_outline_prompt(spec, entity_summaries, dep_info, child_titles)
+    segments = _build_outline_prompt(
+        spec,
+        entity_summaries,
+        dep_info,
+        child_titles,
+        sibling_titles=sibling_titles,
+        out_of_scope_topics=out_of_scope_topics,
+    )
     system = _SYSTEM + get_language_instruction(wiki_language)
 
     for attempt in range(max_retries + 1):

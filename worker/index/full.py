@@ -526,6 +526,7 @@ async def run_full_index(
                 repo_notes=plan.repo_notes or None,
                 on_progress=on_page_progress,
                 on_result=_save_generated_page,
+                plan=plan,
             )
 
         structure_data = plan.to_api_structure()

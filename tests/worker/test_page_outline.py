@@ -225,6 +225,32 @@ async def test_page_outline_logs_each_retry(caplog, mock_fast_llm):
     assert any("attempt" in r.getMessage() for r in retry_logs)
 
 
+def test_outline_prompt_includes_sibling_titles_and_out_of_scope():
+    from worker.pipeline.page_outline import _build_outline_prompt
+
+    spec = WikiPageSpec(
+        title="页面生成器",
+        purpose="负责协调多趟页面生成流水线。",
+        files=["worker/pipeline/page_generator.py"],
+    )
+    segments = _build_outline_prompt(
+        spec,
+        entity_summaries="- function generate_page()",
+        dep_info=None,
+        sibling_titles=["质量校验与修订", "Mermaid 图表优化"],
+        out_of_scope_topics=[
+            "Validates outline JSON",
+            "Sanitizes Mermaid diagrams",
+        ],
+    )
+    text = "".join(p.text for p in segments)
+    assert "Sibling pages" in text
+    assert "质量校验与修订" in text
+    assert "DO NOT cover" in text
+    assert "Out-of-scope" in text
+    assert "Validates outline JSON" in text
+
+
 async def test_generate_page_outline_retries_on_validation_error():
     from worker.pipeline.page_outline import generate_page_outline
 

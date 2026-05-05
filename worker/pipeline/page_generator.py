@@ -127,6 +127,23 @@ def _strip_preamble_and_ensure_header(content: str, title: str) -> str:
     return content
 
 
+def _first_sentence(text: str | None) -> str | None:
+    """Return the first sentence of *text*, splitting on ``.`` or ``。``.
+
+    Returns ``None`` when *text* is empty or whitespace.
+    """
+    if not text:
+        return None
+    text = text.strip()
+    if not text:
+        return None
+    cuts = [i for i in (text.find("."), text.find("。")) if i != -1]
+    if not cuts:
+        return text
+    end = min(cuts) + 1
+    return text[:end].strip()
+
+
 def compute_generation_order(plan: WikiPlan) -> list[list[WikiPageSpec]]:
     """Return pages grouped by depth level, deepest first.
 
@@ -202,6 +219,8 @@ async def generate_page(
     child_contents: list[PageResult] | None = None,
     repo_notes: list[dict] | None = None,
     on_progress: PageProgressCallback | None = None,
+    sibling_titles: list[str] | None = None,
+    out_of_scope_topics: list[str] | None = None,
 ) -> PageResult:
     """Generate a wiki page using the 4-pass pipeline.
 
@@ -272,6 +291,8 @@ async def generate_page(
         on_retry=on_retry,
         child_titles=child_titles,
         wiki_language=wiki_language,
+        sibling_titles=sibling_titles,
+        out_of_scope_topics=out_of_scope_topics,
     )
 
     # ── Pass 2: Draft (main model) ──
@@ -382,6 +403,7 @@ async def generate_page_batch(
     repo_notes: list[dict] | None = None,
     on_progress: PageProgressCallback | None = None,
     on_result: PageResultCallback | None = None,
+    plan: WikiPlan | None = None,
 ) -> list[PageResult]:
     """Generate all pages in a batch using the multi-pass pipeline."""
     import asyncio
@@ -402,6 +424,20 @@ async def generate_page_batch(
         dep_info_or_none = dep_info if any(dep_info.values()) else None
         entities_or_none = entities if entities else None
 
+        sibling_titles: list[str] | None = None
+        out_of_scope: list[str] | None = None
+        if plan is not None:
+            siblings = [
+                p
+                for p in plan.pages
+                if p.parent == spec.parent and p.title != spec.title
+            ]
+            if siblings:
+                sibling_titles = [p.title for p in siblings]
+                out_of_scope = [
+                    s for p in siblings if (s := _first_sentence(p.purpose))
+                ]
+
         return await generate_page(
             spec=spec,
             store=store,
@@ -416,6 +452,8 @@ async def generate_page_batch(
             child_contents=children,
             repo_notes=repo_notes,
             on_progress=on_progress,
+            sibling_titles=sibling_titles,
+            out_of_scope_topics=out_of_scope,
         )
 
     try:
