@@ -33,6 +33,7 @@ import logging
 import math
 import os
 import re
+import statistics
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -1152,6 +1153,26 @@ def _score_file_for_page(
     return score
 
 
+def _score_page_files(
+    page: dict,
+    all_files: list[str],
+    file_infos: dict[str, Any],
+    dep_graph: DependencyGraph | None,
+) -> list[tuple[str, float]]:
+    """Score every repo file for the given page; keep only positive scores.
+
+    Returns ``(file, score)`` pairs sorted descending by score. Centralised
+    so :func:`_prefilter_candidates` and :func:`_compute_page_budget` can
+    share a single pass over ``all_files`` instead of each scoring twice.
+    """
+    scored = [
+        (f, _score_file_for_page(f, page, file_infos, dep_graph)) for f in all_files
+    ]
+    scored = [(f, s) for f, s in scored if s > 0]
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return scored
+
+
 def _prefilter_candidates(
     page: dict,
     all_files: list[str],
@@ -1159,11 +1180,7 @@ def _prefilter_candidates(
     dep_graph: DependencyGraph | None,
     max_candidates: int = 40,
 ) -> list[str]:
-    scored = [
-        (f, _score_file_for_page(f, page, file_infos, dep_graph)) for f in all_files
-    ]
-    scored = [(f, s) for f, s in scored if s > 0]
-    scored.sort(key=lambda x: x[1], reverse=True)
+    scored = _score_page_files(page, all_files, file_infos, dep_graph)
     return [f for f, _ in scored[:max_candidates]]
 
 
@@ -1188,20 +1205,32 @@ def _compute_page_budget(
     score_threshold: float = 2.0,
 ) -> int:
     """Derive a page's adaptive file budget from positive prefilter scores."""
-    positive_scores = sorted(
-        (
-            score
-            for score in (
-                _score_file_for_page(f, page, file_infos, dep_graph) for f in all_files
-            )
-            if score > 0
-        ),
-        reverse=True,
-    )
-    if not positive_scores:
+    scored = _score_page_files(page, all_files, file_infos, dep_graph)
+    if not scored:
         return _compute_n_target(0.0, score_threshold)
-    median = positive_scores[len(positive_scores) // 2]
+    median = statistics.median(score for _path, score in scored)
     return _compute_n_target(median, score_threshold)
+
+
+def _prefilter_with_budget(
+    page: dict,
+    all_files: list[str],
+    file_infos: dict[str, Any],
+    dep_graph: DependencyGraph | None,
+    max_candidates: int = 40,
+    score_threshold: float = 2.0,
+) -> tuple[list[str], int]:
+    """One-pass scoring: returns ``(candidates, n_target)`` for a page.
+
+    Use inside batch loops so each repo file is scored once per page rather
+    than twice (once for candidate pre-filtering, once for the median budget).
+    """
+    scored = _score_page_files(page, all_files, file_infos, dep_graph)
+    candidates = [f for f, _ in scored[:max_candidates]]
+    if not scored:
+        return candidates, _compute_n_target(0.0, score_threshold)
+    median = statistics.median(score for _path, score in scored)
+    return candidates, _compute_n_target(median, score_threshold)
 
 
 def _heuristic_select_files(
@@ -1517,15 +1546,14 @@ async def _select_files_in_batches(
     system_segs: list[PromptSegment] = [stage_system_seg, *context_segs]
 
     async def _run_page_batch(batch_pages: list[dict]) -> None:
-        pages_with_candidates = [
-            (
-                p["title"],
-                p.get("purpose", ""),
-                _prefilter_candidates(p, all_files, file_infos, dep_graph),
-                _compute_page_budget(p, all_files, file_infos, dep_graph),
+        pages_with_candidates = []
+        for p in batch_pages:
+            candidates, n_target = _prefilter_with_budget(
+                p, all_files, file_infos, dep_graph
             )
-            for p in batch_pages
-        ]
+            pages_with_candidates.append(
+                (p["title"], p.get("purpose", ""), candidates, n_target)
+            )
         user_seg = _build_selection_user(pages_with_candidates, last_error)
         try:
             raw = await async_retry(
@@ -1618,7 +1646,7 @@ async def _select_files(
     attempt = 0
     allowed_attempts = max_retries
     candidate_counts = {
-        p["title"]: len(_prefilter_candidates(p, all_files, file_infos, dep_graph))
+        p["title"]: len(_score_page_files(p, all_files, file_infos, dep_graph)[:40])
         for p in outline
     }
     min_files_by_title = {
