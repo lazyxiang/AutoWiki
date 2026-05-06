@@ -249,6 +249,11 @@ def test_outline_prompt_includes_sibling_titles_and_out_of_scope():
     assert "DO NOT cover" in text
     assert "Out-of-scope" in text
     assert "Validates outline JSON" in text
+    # Pin placement: sibling block must land in the cacheable prefix
+    # (segment 0) so the Anthropic prompt cache annotation isn't drifted
+    # to a per-request tail segment in future refactors.
+    assert segments[0].cacheable is True
+    assert "Sibling pages" in segments[0].text
 
 
 async def test_generate_page_outline_retries_on_validation_error():
