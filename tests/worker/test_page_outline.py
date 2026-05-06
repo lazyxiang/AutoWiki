@@ -256,6 +256,61 @@ def test_outline_prompt_includes_sibling_titles_and_out_of_scope():
     assert "Sibling pages" in segments[0].text
 
 
+def test_outline_prompt_includes_signature_slices():
+    """A6: signature slices land in the cacheable prefix labeled by file."""
+    from worker.pipeline.page_outline import _build_outline_prompt
+
+    spec = WikiPageSpec(
+        title="Page Generator",
+        purpose="Coordinates the multi-pass page generation pipeline.",
+        files=["worker/pipeline/page_generator.py"],
+    )
+    slice_text = (
+        "def generate_page(spec, plan, ...):\n"
+        '    """Run 4-pass generation for one page."""\n'
+        "    outline = await generate_page_outline(...)\n"
+        "    draft = await generate_draft(...)"
+    )
+    segments = _build_outline_prompt(
+        spec,
+        entity_summaries="- function generate_page()",
+        dep_info=None,
+        signature_slices={
+            "worker/pipeline/page_generator.py": [slice_text],
+        },
+    )
+    text = "".join(p.text for p in segments)
+    assert "Signature slices" in text
+    assert "worker/pipeline/page_generator.py" in text
+    assert "def generate_page" in text
+    # The slice block must land in the cacheable prefix so it is reused
+    # across batched outline calls (consistent with sibling/out-of-scope).
+    assert segments[0].cacheable is True
+    assert "Signature slices" in segments[0].text
+
+
+def test_outline_prompt_omits_signature_slices_block_when_empty():
+    """No 'Signature slices' header when the dict is None or empty."""
+    from worker.pipeline.page_outline import _build_outline_prompt
+
+    spec = WikiPageSpec(title="X", purpose="y", files=["a.py"])
+    segments = _build_outline_prompt(
+        spec,
+        entity_summaries="entities",
+        dep_info=None,
+        signature_slices=None,
+    )
+    assert "Signature slices" not in "".join(p.text for p in segments)
+
+    segments_empty = _build_outline_prompt(
+        spec,
+        entity_summaries="entities",
+        dep_info=None,
+        signature_slices={},
+    )
+    assert "Signature slices" not in "".join(p.text for p in segments_empty)
+
+
 async def test_generate_page_outline_retries_on_validation_error():
     from worker.pipeline.page_outline import generate_page_outline
 

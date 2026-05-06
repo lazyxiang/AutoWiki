@@ -228,6 +228,7 @@ def _build_outline_prompt(
     child_titles: list[str] | None = None,
     sibling_titles: list[str] | None = None,
     out_of_scope_topics: list[str] | None = None,
+    signature_slices: dict[str, list[str]] | None = None,
 ) -> list[PromptSegment]:
     """Build the outline prompt with cacheable entity context."""
     # Cacheable prefix: entity summaries + dep info (reused by fact-check)
@@ -249,6 +250,13 @@ def _build_outline_prompt(
             f"- {t}" for t in out_of_scope_topics
         )
         cached_parts.append(oos_block + "\n")
+    if signature_slices:
+        slice_blocks: list[str] = []
+        for path, slices in signature_slices.items():
+            for s in slices:
+                slice_blocks.append(f"### {path}\n```\n{s}\n```")
+        if slice_blocks:
+            cached_parts.append("Signature slices:\n" + "\n".join(slice_blocks) + "\n")
 
     # Variable tail: schema + instructions
     schema_json = json.dumps(_OUTLINE_SCHEMA, indent=2)
@@ -278,6 +286,7 @@ async def generate_page_outline(
     wiki_language: str = "en",
     sibling_titles: list[str] | None = None,
     out_of_scope_topics: list[str] | None = None,
+    signature_slices: dict[str, list[str]] | None = None,
 ) -> PageOutline:
     """Generate and validate a page outline using the fast model.
 
@@ -293,6 +302,7 @@ async def generate_page_outline(
         child_titles,
         sibling_titles=sibling_titles,
         out_of_scope_topics=out_of_scope_topics,
+        signature_slices=signature_slices,
     )
     system = _SYSTEM + get_language_instruction(wiki_language)
 

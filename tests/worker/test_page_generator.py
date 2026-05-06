@@ -358,6 +358,120 @@ def test_append_source_files_table_at_end():
     assert result.endswith("| `a.py` |")
 
 
+def test_extract_signature_slices_pulls_top_entities(tmp_path):
+    """A6: helper reads source files and returns ≤2 slices × ≤4 lines per file."""
+    from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
+    from worker.pipeline.page_generator import _extract_signature_slices
+
+    src = tmp_path / "module.py"
+    src.write_text(
+        "import os\n"
+        "\n"
+        "def main():\n"
+        '    """Entry point."""\n'
+        "    setup()\n"
+        "    run()\n"
+        "    cleanup()\n"
+        "\n"
+        "class Helper:\n"
+        "    def __init__(self):\n"
+        "        self.x = 1\n"
+        "        self.y = 2\n"
+        "\n"
+        "def _internal():\n"
+        "    pass\n",
+    )
+
+    file_analysis = FileAnalysis(
+        files={
+            "module.py": FileInfo(
+                rel_path="module.py",
+                entities=[
+                    {
+                        "type": "function",
+                        "name": "main",
+                        "start_line": 3,
+                        "end_line": 7,
+                    },
+                    {
+                        "type": "class",
+                        "name": "Helper",
+                        "start_line": 9,
+                        "end_line": 12,
+                    },
+                    {
+                        "type": "function",
+                        "name": "_internal",
+                        "start_line": 14,
+                        "end_line": 15,
+                    },
+                ],
+            )
+        }
+    )
+
+    spec = WikiPageSpec(title="Module", purpose=".", files=["module.py"])
+    slices = _extract_signature_slices(spec, file_analysis, tmp_path)
+
+    assert "module.py" in slices
+    file_slices = slices["module.py"]
+    # Cap at 2 entities per file
+    assert 1 <= len(file_slices) <= 2
+    assert any("def main" in s for s in file_slices)
+    # Each slice capped at 4 lines
+    for s in file_slices:
+        assert len(s.splitlines()) <= 4
+
+
+def test_extract_signature_slices_skips_missing_files(tmp_path):
+    """Missing/unreadable files are skipped without raising."""
+    from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
+    from worker.pipeline.page_generator import _extract_signature_slices
+
+    file_analysis = FileAnalysis(
+        files={
+            "missing.py": FileInfo(
+                rel_path="missing.py",
+                entities=[
+                    {
+                        "type": "function",
+                        "name": "f",
+                        "start_line": 1,
+                        "end_line": 2,
+                    },
+                ],
+            )
+        }
+    )
+    spec = WikiPageSpec(title="X", purpose=".", files=["missing.py"])
+    slices = _extract_signature_slices(spec, file_analysis, tmp_path)
+    assert slices == {}
+
+
+def test_extract_signature_slices_empty_when_no_repo_root(tmp_path):
+    """Without repo_root, helper returns an empty dict (no extraction)."""
+    from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
+    from worker.pipeline.page_generator import _extract_signature_slices
+
+    file_analysis = FileAnalysis(
+        files={
+            "a.py": FileInfo(
+                rel_path="a.py",
+                entities=[
+                    {
+                        "type": "function",
+                        "name": "f",
+                        "start_line": 1,
+                        "end_line": 2,
+                    },
+                ],
+            )
+        }
+    )
+    spec = WikiPageSpec(title="X", purpose=".", files=["a.py"])
+    assert _extract_signature_slices(spec, file_analysis, None) == {}
+
+
 def test_source_files_table_only_includes_passed_files():
     """_append_source_files_table must only include files explicitly passed in."""
     draft = "body text"

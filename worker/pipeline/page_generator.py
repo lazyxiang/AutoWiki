@@ -25,6 +25,7 @@ import os
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from worker.embedding.base import EmbeddingProvider
@@ -221,6 +222,74 @@ def _first_sentence(text: str | None) -> str | None:
     return text[:end].strip()
 
 
+_SLICE_MAX_LINES = 4
+_SLICE_MAX_ENTITIES_PER_FILE = 2
+
+
+def _entity_importance(entity: dict[str, Any]) -> tuple[int, int]:
+    """Importance score for ranking entities within a single file.
+
+    Classes outrank functions; among same-kind entities, those with a longer
+    body (end_line - start_line) are preferred — the body length is a rough
+    proxy for "more architecturally significant".
+    """
+    kind = entity.get("type", "")
+    kind_rank = 2 if kind == "class" else (1 if kind == "function" else 0)
+    start = entity.get("start_line")
+    end = entity.get("end_line")
+    span = (end - start) if isinstance(start, int) and isinstance(end, int) else 0
+    return (kind_rank, span)
+
+
+def _extract_signature_slices(
+    spec: WikiPageSpec,
+    file_analysis: FileAnalysis,
+    repo_root: Path | None,
+) -> dict[str, list[str]]:
+    """Pull short signature slices for a page's assigned files.
+
+    For each file in *spec.files*, picks up to ``_SLICE_MAX_ENTITIES_PER_FILE``
+    of the highest-importance entities and reads the first
+    ``_SLICE_MAX_LINES`` lines of each entity's body from disk.  Failure to
+    read a file (missing, binary, decode error) skips that file silently —
+    one bad file must not fail the whole outline.
+
+    Returns an empty dict if *repo_root* is ``None`` or no slices were
+    extractable.
+    """
+    if repo_root is None:
+        return {}
+
+    result: dict[str, list[str]] = {}
+    for rel_path in spec.files or []:
+        info = file_analysis.files.get(rel_path)
+        if info is None or not info.entities:
+            continue
+        try:
+            source_path = repo_root / rel_path
+            text = source_path.read_text(encoding="utf-8", errors="replace")
+        except (OSError, UnicodeDecodeError):
+            continue
+
+        lines = text.splitlines()
+        if not lines:
+            continue
+
+        ranked = sorted(info.entities, key=_entity_importance, reverse=True)
+        slices: list[str] = []
+        for entity in ranked[:_SLICE_MAX_ENTITIES_PER_FILE]:
+            start = entity.get("start_line")
+            if not isinstance(start, int) or start < 1 or start > len(lines):
+                continue
+            end_idx = min(start - 1 + _SLICE_MAX_LINES, len(lines))
+            slice_text = "\n".join(lines[start - 1 : end_idx])
+            if slice_text.strip():
+                slices.append(slice_text)
+        if slices:
+            result[rel_path] = slices
+    return result
+
+
 def compute_generation_order(plan: WikiPlan) -> list[list[WikiPageSpec]]:
     """Return pages grouped by depth level, deepest first.
 
@@ -298,6 +367,7 @@ async def generate_page(
     on_progress: PageProgressCallback | None = None,
     sibling_titles: list[str] | None = None,
     out_of_scope_topics: list[str] | None = None,
+    signature_slices: dict[str, list[str]] | None = None,
 ) -> PageResult:
     """Generate a wiki page using the 4-pass pipeline.
 
@@ -387,6 +457,7 @@ async def generate_page(
         wiki_language=wiki_language,
         sibling_titles=sibling_titles,
         out_of_scope_topics=out_of_scope_topics,
+        signature_slices=signature_slices,
     )
 
     # ── Pass 2: Draft (main model) ──
@@ -498,6 +569,7 @@ async def generate_page_batch(
     on_progress: PageProgressCallback | None = None,
     on_result: PageResultCallback | None = None,
     plan: WikiPlan | None = None,
+    repo_root: Path | None = None,
 ) -> list[PageResult]:
     """Generate all pages in a batch using the multi-pass pipeline."""
     import asyncio
@@ -532,6 +604,8 @@ async def generate_page_batch(
                     s for p in siblings if (s := _first_sentence(p.purpose))
                 ]
 
+        slices = _extract_signature_slices(spec, file_analysis, repo_root) or None
+
         return await generate_page(
             spec=spec,
             store=store,
@@ -548,6 +622,7 @@ async def generate_page_batch(
             on_progress=on_progress,
             sibling_titles=sibling_titles,
             out_of_scope_topics=out_of_scope,
+            signature_slices=slices,
         )
 
     try:
