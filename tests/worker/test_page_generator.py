@@ -7,6 +7,8 @@ import pytest
 from worker.pipeline.page_generator import (
     PageResult,
     _append_source_files_table,
+    _balance_chunks,
+    _file_stems,
     _strip_code_blocks,
     _strip_preamble_and_ensure_header,
     compute_generation_order,
@@ -472,3 +474,49 @@ def test_compute_generation_order_handles_cycle():
     # Both pages should appear somewhere (treated as roots due to cycle)
     all_titles = {p.title for level in levels for p in level}
     assert all_titles == {"A", "B"}
+
+
+# ── A4: multi-query retrieval + rank-weighted chunk quota ────────────────
+
+
+def _chunk(file: str, idx: int = 0) -> dict:
+    """Test helper: minimal RAG chunk dict for _balance_chunks tests."""
+    return {
+        "file": file,
+        "start_line": idx,
+        "end_line": idx,
+        "text": f"chunk {idx} from {file}",
+    }
+
+
+def test_balance_chunks_rank_weighted_quota():
+    """Top-ranked file gets the largest share; every file meets the floor."""
+    files = ["a.py", "b.py", "c.py", "d.py", "e.py"]
+    chunks = [_chunk(f, i) for f in files for i in range(20)]  # 100 chunks
+    out = _balance_chunks(chunks, files=files, k=30, floor=2)
+
+    counts = {f: sum(1 for c in out if c["file"] == f) for f in files}
+    # Counts should be non-increasing by rank (top file has the most)
+    ordered = [counts[f] for f in files]
+    assert ordered == sorted(ordered, reverse=True)
+    assert all(counts[f] >= 2 for f in files)
+    assert sum(counts.values()) == 30
+
+
+def test_balance_chunks_floor_only_for_low_rank():
+    """Files at rank >= 6 receive only the floor."""
+    files = [f"f{i}.py" for i in range(8)]
+    chunks = [_chunk(f, i) for f in files for i in range(20)]
+    out = _balance_chunks(chunks, files=files, k=30, floor=2)
+    counts = {f: sum(1 for c in out if c["file"] == f) for f in files}
+    for i in range(6, 8):
+        assert counts[f"f{i}.py"] == 2
+
+
+def test_file_stems_strips_directory_and_extension():
+    """_file_stems returns the bare filename without path or extension."""
+    assert _file_stems(["worker/pipeline/foo.py", "src/bar.ts", "baz"]) == [
+        "foo",
+        "bar",
+        "baz",
+    ]

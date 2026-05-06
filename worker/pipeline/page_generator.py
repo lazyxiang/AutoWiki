@@ -127,6 +127,98 @@ def _strip_preamble_and_ensure_header(content: str, title: str) -> str:
     return content
 
 
+def _file_stems(files: list[str]) -> list[str]:
+    """Return the bare file stems (no directory, no extension).
+
+    ``"worker/pipeline/foo.py"`` → ``"foo"``;
+    ``"baz"`` (no extension) → ``"baz"``.
+    Empty / falsy entries are dropped.
+    """
+    stems: list[str] = []
+    for f in files or []:
+        if not f:
+            continue
+        # Strip directory components by splitting on both POSIX and Windows seps.
+        base = f.replace("\\", "/").rsplit("/", 1)[-1]
+        # Strip the final extension only — "foo.tar.gz" → "foo.tar".
+        stem = base.rsplit(".", 1)[0] if "." in base else base
+        if stem:
+            stems.append(stem)
+    return stems
+
+
+def _balance_chunks(
+    chunks: list[dict],
+    *,
+    files: list[str],
+    k: int,
+    floor: int = 2,
+) -> list[dict]:
+    """Allocate up to *k* chunks to *files* using a rank-weighted graduated quota.
+
+    For each file at rank ``i`` (0-indexed), the weight is
+    ``w_i = 1 / (i + 1)`` for ``i < 6`` and ``0`` otherwise.  The per-file
+    quota is ``max(floor, round(k * w_i / Σw))``.  Rounding is corrected so
+    that the quotas sum to ``k``: surplus is removed from the lowest-rank
+    files (down to the floor), deficit is added to the top-ranked file.
+
+    Chunks whose ``file`` matches one of *files* are bucketed by file in
+    input order; chunks belonging to other files are kept as leftovers and
+    used to fill any unmet quota when a bucket is short.
+
+    Args:
+        chunks: Chunks returned by :meth:`FAISSStore.search` /
+            :meth:`FAISSStore.multi_search`.  Each must have a ``"file"`` key.
+        files: Ranked list of file paths (rank 0 = most important).  When
+            empty, the first *k* chunks are returned unchanged.
+        k: Total chunk budget for the page.
+        floor: Minimum chunk count guaranteed per file (when there is enough
+            supply across all chunks combined).
+
+    Returns:
+        list[dict]: Up to *k* chunks, ordered by file rank then by input
+        order within each file.
+    """
+    if not files:
+        return chunks[:k]
+
+    weights = [1.0 / (i + 1) if i < 6 else 0.0 for i in range(len(files))]
+    total_w = sum(weights) or 1.0  # guard against pathological inputs
+    quotas = [max(floor, round(k * w / total_w)) if w > 0 else floor for w in weights]
+
+    # Adjust for rounding so sum(quotas) == k.
+    diff = k - sum(quotas)
+    if diff > 0:
+        quotas[0] += diff
+    elif diff < 0:
+        # Trim from the lowest-ranked files first, never below the floor.
+        for i in range(len(quotas) - 1, -1, -1):
+            take = min(-diff, quotas[i] - floor)
+            if take > 0:
+                quotas[i] -= take
+                diff += take
+            if diff == 0:
+                break
+
+    by_file: dict[str, list[dict]] = {f: [] for f in files}
+    leftovers: list[dict] = []
+    for c in chunks:
+        f = c.get("file") if isinstance(c, dict) else getattr(c, "file", None)
+        if f in by_file:
+            by_file[f].append(c)
+        else:
+            leftovers.append(c)
+
+    out: list[dict] = []
+    for f, q in zip(files, quotas, strict=False):
+        out.extend(by_file[f][:q])
+    # Fill any remaining budget from leftovers (chunks whose file is not in
+    # the ranked list — typically retrieved from related files).
+    while len(out) < k and leftovers:
+        out.append(leftovers.pop(0))
+    return out[:k]
+
+
 def _first_sentence(text: str | None) -> str | None:
     """Return the first sentence of *text*, splitting on ``.`` or ``。``.
 
@@ -240,14 +332,19 @@ async def generate_page(
     from worker.pipeline.page_outline import generate_page_outline
     from worker.utils.mermaid import sanitize_mermaid_blocks
 
-    # ── RAG retrieval ──
-    queries = [f"{spec.title} {' '.join((spec.files or [])[:5])}"]
-    if spec.purpose:
-        queries.append(spec.purpose)
-    if entity_details:
-        entity_names = [e.get("name", "") for e in entity_details[:5] if e.get("name")]
-        if entity_names:
-            queries.append(" ".join(entity_names))
+    # ── RAG retrieval (A4: 5 complementary queries + rank-weighted quota) ──
+    en_keywords = getattr(spec, "en_keywords", None) or []
+    top_entity_names = [
+        e.get("name", "") for e in (entity_details or [])[:5] if e.get("name")
+    ]
+    queries = [
+        spec.title,
+        spec.purpose or "",
+        " ".join(en_keywords),
+        " ".join(top_entity_names),
+        " ".join(_file_stems(spec.files or [])),
+    ]
+    queries = [q for q in queries if q.strip()]
 
     query_vecs = []
     for q in queries:
@@ -262,10 +359,20 @@ async def generate_page(
         )
         query_vecs.append(vec)
 
+    # Over-fetch (k=top_k * 2) so the rank-weighted quota has supply across
+    # the ranked file list; doc_k=1 keeps at most one documentation chunk.
     if len(query_vecs) > 1:
-        context_chunks = store.multi_search(query_vecs, k=top_k, doc_k=1)
+        raw_chunks = store.multi_search(query_vecs, k=top_k * 2, doc_k=1)
+    elif query_vecs:
+        raw_chunks = store.search(query_vecs[0], k=top_k * 2, doc_k=1)
     else:
-        context_chunks = store.search(query_vecs[0], k=top_k, doc_k=1)
+        raw_chunks = []
+    context_chunks = _balance_chunks(
+        raw_chunks,
+        files=spec.files or [],
+        k=top_k,
+        floor=2,
+    )
 
     # ── Build reusable context strings ──
     entity_cap = max(25, 8 * len(spec.files or []))
