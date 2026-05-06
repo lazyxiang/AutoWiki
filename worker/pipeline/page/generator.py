@@ -36,7 +36,8 @@ from worker.pipeline.page.formatters import (
     _rank_weighted_quotas,
 )
 from worker.pipeline.planner.wiki_planner import WikiPageSpec, WikiPlan
-from worker.pipeline.rag_indexer import FAISSStore
+from worker.pipeline.retrieval.code_slices import extract_source_slice
+from worker.pipeline.retrieval.rag_indexer import FAISSStore
 from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
 
 if TYPE_CHECKING:
@@ -265,26 +266,27 @@ def _extract_signature_slices(
         info = file_analysis.files.get(rel_path)
         if info is None or not info.entities:
             continue
-        try:
-            source_path = repo_root / rel_path
-            text = source_path.read_text(encoding="utf-8", errors="replace")
-        except (OSError, UnicodeDecodeError):
-            continue
-
-        lines = text.splitlines()
-        if not lines:
-            continue
-
         ranked = sorted(info.entities, key=_entity_importance, reverse=True)
         slices: list[str] = []
         for entity in ranked[:_SLICE_MAX_ENTITIES_PER_FILE]:
             start = entity.get("start_line")
-            if not isinstance(start, int) or start < 1 or start > len(lines):
+            end = entity.get("end_line")
+            if not isinstance(start, int) or not isinstance(end, int):
                 continue
-            end_idx = min(start - 1 + _SLICE_MAX_LINES, len(lines))
-            slice_text = "\n".join(lines[start - 1 : end_idx])
-            if slice_text.strip():
-                slices.append(slice_text)
+            source_slice = extract_source_slice(
+                clone_root=repo_root,
+                rel_path=rel_path,
+                anchor_start=start,
+                anchor_end=min(end, start + _SLICE_MAX_LINES - 1),
+                line_cap=_SLICE_MAX_LINES,
+                context_lines=0,
+            )
+            if source_slice is None or not source_slice.code.strip():
+                continue
+            slices.append(
+                f"Lines {source_slice.snippet_start}-{source_slice.snippet_end}:\n"
+                f"{source_slice.code}"
+            )
         if slices:
             result[rel_path] = slices
     return result

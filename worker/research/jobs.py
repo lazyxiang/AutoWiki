@@ -15,7 +15,7 @@ from shared.models import Job, Repository, ResearchReport
 from worker.embedding import make_embedding_provider
 from worker.llm import make_llm_provider
 from worker.pipeline.ingestion import extract_readme
-from worker.pipeline.rag_indexer import FAISSStore
+from worker.pipeline.retrieval.rag_indexer import FAISSStore
 from worker.research.service import run_deep_research_flow
 
 logger = logging.getLogger("worker.task")

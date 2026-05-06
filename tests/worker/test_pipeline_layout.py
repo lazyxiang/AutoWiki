@@ -31,10 +31,10 @@ def test_pipeline_top_level_is_only_stages_and_helpers():
         "ingestion.py",
         "ast_analysis.py",
         "dependency_graph.py",
-        "rag_indexer.py",
-        "fast_report_index.py",
     }
     deprecation_shims = {
+        "fast_report_index.py",
+        "rag_indexer.py",
         "page_generator.py",
         "page_outline.py",
         "page_draft.py",
@@ -95,6 +95,7 @@ def test_back_compat_reexports_resolve():
         "worker.pipeline.wiki_planner",
         "worker.pipeline.outline_anchors",
         "worker.pipeline.user_steering",
+        "worker.pipeline.rag_indexer",
     ],
 )
 def test_old_paths_emit_deprecation_warning(old_module):

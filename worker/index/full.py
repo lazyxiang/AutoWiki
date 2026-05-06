@@ -54,7 +54,7 @@ from worker.pipeline.planner.wiki_planner import (
     WikiPlan,
     generate_wiki_plan,
 )
-from worker.pipeline.rag_indexer import build_rag_index
+from worker.pipeline.retrieval.rag_indexer import build_rag_index
 from worker.pipeline.retrieval.repo_index import build_repo_index
 from worker.platform.registry import get_platform_by_name
 from worker.platform.token_store import get_platform_token
@@ -408,6 +408,7 @@ async def run_full_index(
                         purpose=p.get("purpose", ""),
                         parent=p.get("parent"),
                         files=p.get("files", []),
+                        en_keywords=p.get("en_keywords", []),
                         page_notes=saved_page_notes.get(p["title"], [{"content": ""}]),
                     )
                     for p in plan_data.get("pages", [])

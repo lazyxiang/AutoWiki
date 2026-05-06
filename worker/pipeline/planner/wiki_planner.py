@@ -159,6 +159,8 @@ class WikiPageSpec:
       Reserved for future Phase-4 user-steering support.
     * **files** — List of repository-relative file paths assigned to this page
       by the LLM.  Used for RAG retrieval and incremental refresh.
+    * **en_keywords** — Optional English retrieval bridge keywords from the
+      outline stage, required for non-Latin page titles / purposes.
 
     Note:
         ``slug`` and ``parent_slug`` are *derived* properties computed from
@@ -171,6 +173,7 @@ class WikiPageSpec:
     parent: str | None = None  # parent page TITLE string (not slug)
     page_notes: list[dict] = field(default_factory=lambda: [{"content": ""}])
     files: list[str] = field(default_factory=list)  # representative source files
+    en_keywords: list[str] = field(default_factory=list)
 
     @property
     def slug(self) -> str:
@@ -281,7 +284,8 @@ class WikiPlan:
 
             * ``"repo_notes"`` (list[dict]): Repository-level notes.
             * ``"pages"`` (list[dict]): Each page dict has ``"title"``,
-              ``"purpose"``, ``"files"``, and optionally ``"parent"``.
+              ``"purpose"``, ``"files"``, optional ``"en_keywords"``, and
+              optionally ``"parent"``.
 
         Example:
             >>> plan.to_internal_json()["pages"][0]["files"]
@@ -295,6 +299,7 @@ class WikiPlan:
                     "title": p.title,
                     "purpose": p.purpose,
                     "files": p.files,
+                    **({"en_keywords": p.en_keywords} if p.en_keywords else {}),
                     **({"parent": p.parent} if p.parent is not None else {}),
                 }
                 for p in self.pages
@@ -1833,6 +1838,7 @@ def validate_wiki_plan(
                 purpose=p["purpose"],
                 parent=parent,
                 files=p.get("files", []),
+                en_keywords=p.get("en_keywords", []),
             )
         )
 
@@ -2132,6 +2138,7 @@ async def generate_wiki_plan(
                 "purpose": p["purpose"],
                 "parent": p.get("parent"),
                 "files": primary_assignments.get(p["title"], []),
+                "en_keywords": p.get("en_keywords", []),
             }
             for p in outline
         ]

@@ -20,7 +20,7 @@ from worker.pipeline.planner.wiki_planner import WikiPageSpec, WikiPlan
 
 @pytest.fixture
 def page_store(tmp_path):
-    from worker.pipeline.rag_indexer import FAISSStore
+    from worker.pipeline.retrieval.rag_indexer import FAISSStore
 
     store = FAISSStore(
         dimension=1536,
@@ -418,9 +418,38 @@ def test_extract_signature_slices_pulls_top_entities(tmp_path):
     # Cap at 2 entities per file
     assert 1 <= len(file_slices) <= 2
     assert any("def main" in s for s in file_slices)
+    assert any(s.startswith("Lines ") for s in file_slices)
     # Each slice capped at 4 lines
     for s in file_slices:
-        assert len(s.splitlines()) <= 4
+        assert len(s.splitlines()[1:]) <= 4
+
+
+async def test_generate_page_uses_en_keywords_as_retrieval_query(
+    page_store, mock_embedding
+):
+    """A4: English keywords from the page spec must become a retrieval query."""
+    llm = AsyncMock()
+    llm.generate.return_value = "## Overview\n\nThe page describes the frontend.\n"
+    fast_llm = _make_mock_fast_llm()
+
+    spec = WikiPageSpec(
+        title="前端界面",
+        purpose="Frontend user interface.",
+        files=["models.py"],
+        en_keywords=["web", "components", "next"],
+    )
+
+    await generate_page(
+        spec,
+        page_store,
+        llm,
+        fast_llm,
+        mock_embedding,
+        repo_name="test",
+    )
+
+    queries = [call.args[0] for call in mock_embedding.embed.await_args_list]
+    assert "web components next" in queries
 
 
 def test_extract_signature_slices_skips_missing_files(tmp_path):

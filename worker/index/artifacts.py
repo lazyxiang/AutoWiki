@@ -6,7 +6,7 @@ import asyncio
 import shutil
 from pathlib import Path
 
-from worker.pipeline.rag_indexer import FAISSStore
+from worker.pipeline.retrieval.rag_indexer import FAISSStore
 
 
 async def _write_text_async(path: Path, content: str) -> None:

@@ -266,6 +266,7 @@ def test_outline_prompt_includes_signature_slices():
         files=["worker/pipeline/page_generator.py"],
     )
     slice_text = (
+        "Lines 12-15:\n"
         "def generate_page(spec, plan, ...):\n"
         '    """Run 4-pass generation for one page."""\n'
         "    outline = await generate_page_outline(...)\n"
@@ -282,6 +283,7 @@ def test_outline_prompt_includes_signature_slices():
     text = "".join(p.text for p in segments)
     assert "Signature slices" in text
     assert "worker/pipeline/page_generator.py" in text
+    assert "Lines 12-15" in text
     assert "def generate_page" in text
     # The slice block must land in the cacheable prefix so it is reused
     # across batched outline calls (consistent with sibling/out-of-scope).

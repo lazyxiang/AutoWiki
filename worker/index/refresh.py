@@ -48,7 +48,7 @@ from worker.pipeline.planner.wiki_planner import (
     WikiPlan,
     generate_wiki_plan,
 )
-from worker.pipeline.rag_indexer import build_rag_index
+from worker.pipeline.retrieval.rag_indexer import build_rag_index
 from worker.pipeline.retrieval.repo_index import build_repo_index
 from worker.platform.registry import get_platform_by_name
 from worker.platform.token_store import get_platform_token
@@ -331,6 +331,7 @@ async def run_refresh_index(
                     purpose=p.get("purpose", ""),
                     parent=p.get("parent"),
                     files=p.get("files", []),
+                    en_keywords=p.get("en_keywords", []),
                     # Merge saved page_notes back into the spec; default to empty note
                     page_notes=saved_page_notes.get(p["title"], [{"content": ""}]),
                 )

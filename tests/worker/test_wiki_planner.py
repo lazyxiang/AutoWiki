@@ -208,6 +208,7 @@ def test_wiki_plan_to_internal_json():
                 title="Overview",
                 purpose="Top-level page.",
                 files=["main.py", "README.md"],
+                en_keywords=["main", "readme"],
             ),
             WikiPageSpec(
                 title="Engine",
@@ -222,6 +223,7 @@ def test_wiki_plan_to_internal_json():
     assert "pages" in internal
     overview = next(p for p in internal["pages"] if p["title"] == "Overview")
     assert overview["files"] == ["main.py", "README.md"]
+    assert overview["en_keywords"] == ["main", "readme"]
     engine = next(p for p in internal["pages"] if p["title"] == "Engine")
     assert "engine/core.py" in engine["files"]
     assert engine.get("parent") == "Overview"
@@ -1418,19 +1420,39 @@ def test_build_outline_prompt_requires_en_keywords_for_cjk_with_examples():
 
 
 def test_to_internal_json_roundtrips_files():
-    plan = WikiPlan(pages=[WikiPageSpec(title="Core", purpose="p", files=["a.py"])])
+    plan = WikiPlan(
+        pages=[
+            WikiPageSpec(
+                title="Core",
+                purpose="p",
+                files=["a.py"],
+                en_keywords=["core", "service"],
+            )
+        ]
+    )
     payload = plan.to_internal_json()
     page = payload["pages"][0]
     assert page["files"] == ["a.py"]
+    assert page["en_keywords"] == ["core", "service"]
     assert "secondary_files" not in page
 
 
 def test_to_wiki_json_omits_files():
     """wiki.json is user-facing: file assignments must not appear."""
-    plan = WikiPlan(pages=[WikiPageSpec(title="Core", purpose="p", files=["a.py"])])
+    plan = WikiPlan(
+        pages=[
+            WikiPageSpec(
+                title="Core",
+                purpose="p",
+                files=["a.py"],
+                en_keywords=["core"],
+            )
+        ]
+    )
     payload = plan.to_wiki_json()
     page = payload["pages"][0]
     assert "files" not in page
+    assert "en_keywords" not in page
 
 
 def test_to_api_structure_no_secondary_file_count():

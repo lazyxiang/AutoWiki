@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock
 
 import numpy as np
 
-from worker.pipeline.rag_indexer import (
+from worker.pipeline.retrieval.rag_indexer import (
     FAISSStore,
     build_rag_index,
     chunk_file_with_entities,

@@ -154,8 +154,8 @@ def _format_context_chunks(context_chunks: list[dict]) -> str:
 
     Args:
         context_chunks: List of chunk metadata dicts as returned by
-            :meth:`~worker.pipeline.rag_indexer.FAISSStore.search` or
-            :meth:`~worker.pipeline.rag_indexer.FAISSStore.multi_search`.
+            :meth:`~worker.pipeline.retrieval.rag_indexer.FAISSStore.search` or
+            :meth:`~worker.pipeline.retrieval.rag_indexer.FAISSStore.multi_search`.
             Expected keys: ``"file"`` (str), ``"start_line"`` (int),
             ``"end_line"`` (int), ``"entity"`` (str | None),
             ``"text"`` (str).
