@@ -35,10 +35,13 @@ def test_repo_search_exports_domain_agnostic_primitives():
         assert hasattr(repo_search, symbol)
 
 
-def test_importing_repo_search_does_not_import_fast_report_modules():
-    sys.modules.pop("worker.pipeline.retrieval.repo_search", None)
-    sys.modules.pop("worker.fast_report.search", None)
-    sys.modules.pop("worker.fast_report.planning", None)
+def test_importing_repo_search_does_not_import_fast_report_modules(monkeypatch):
+    for module_name in (
+        "worker.pipeline.retrieval.repo_search",
+        "worker.fast_report.search",
+        "worker.fast_report.planning",
+    ):
+        monkeypatch.delitem(sys.modules, module_name, raising=False)
 
     importlib.import_module("worker.pipeline.retrieval.repo_search")
 
@@ -57,7 +60,7 @@ def test_expansion_profile_registry_returns_registered_config_and_raises_key_err
     register_expansion_profile("test-profile", config)
 
     assert expansion_graph_for("test-profile") == config
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="known profiles"):
         expansion_graph_for("missing-profile")
 
 

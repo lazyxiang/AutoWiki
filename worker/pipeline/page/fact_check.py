@@ -11,6 +11,7 @@ from typing import Any
 
 from worker.llm.base import LLMProvider
 from worker.llm.prompt_segment import PromptSegment
+from worker.pipeline.language import get_language_instruction
 from worker.pipeline.page.outline import PageOutline
 from worker.pipeline.pipeline_logging import log_final_failure
 from worker.utils.mermaid import sanitize_mermaid_blocks
@@ -157,8 +158,6 @@ async def run_fact_check(
     wiki_language: str = "en",
 ) -> FactCheckResult:
     """Run fact-check on a draft using the fast model. Fails open on error."""
-    from worker.pipeline.language import get_language_instruction
-
     context_segments, user_segment = _build_fact_check_prompt(
         draft, outline, entity_summaries, dep_info, targeted_chunks
     )
@@ -204,7 +203,7 @@ def _find_section_start(draft: str, section_header: str) -> int:
     Returns -1 when no heading is found.
     """
     heading_text = re.sub(r"^#+\s*", "", section_header).strip()
-    pattern = re.compile(rf"^#+\s+{re.escape(heading_text)}\s*$", re.MULTILINE)
+    pattern = re.compile(rf"^##\s+{re.escape(heading_text)}\s*$", re.MULTILINE)
     match = pattern.search(draft)
     return match.start() if match else -1
 
@@ -225,6 +224,15 @@ def _section_bounds(draft: str, section_header: str) -> tuple[int, int]:
     next_section = re.search(r"^## ", draft[heading_end:], re.MULTILINE)
     section_end = heading_end + next_section.start() if next_section else len(draft)
     return section_start, section_end
+
+
+def _trim_diagram_revision_metadata(corrected: str) -> str:
+    lines = corrected.strip().splitlines()
+    while lines and re.match(r"^\*{0,2}Diagram:.*\*{0,2}\s*$", lines[0].strip()):
+        lines.pop(0)
+    while lines and re.match(r"^\*{0,2}Source:.*\*{0,2}\s*$", lines[-1].strip()):
+        lines.pop()
+    return "\n".join(lines).strip()
 
 
 def strip_failed_claim(
@@ -331,8 +339,6 @@ async def run_targeted_revision(
     wiki_language: str = "en",
 ) -> str:
     """Apply targeted revision to fix fact-check issues."""
-    from worker.pipeline.language import get_language_instruction
-
     claim_issues = [i for i in issues if i.kind == "claim"]
     diagram_issues = [i for i in issues if i.kind == "diagram"]
 
@@ -402,6 +408,7 @@ async def run_targeted_revision(
             on_retry=on_retry,
         )
         corrected = sanitize_mermaid_blocks(corrected)
+        corrected = _trim_diagram_revision_metadata(corrected)
 
         if "```mermaid" not in corrected:
             corrected = f"```mermaid\n{corrected}\n```"

@@ -72,6 +72,9 @@ def build_directory_tree(files: list[str], max_depth: int = 3) -> str:
           jobs.py
           llm/ (2)
           pipeline/ (3)
+
+    Directories at ``max_depth`` are shown with descendant counts, but their
+    child files are omitted to keep the tree compact.
     """
     if not files:
         return ""

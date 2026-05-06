@@ -67,11 +67,19 @@ def load_user_steering(clone_root: Path) -> UserSteering | None:
         raw_pages = []
 
     pages: list[UserPageSpec] = []
-    for p in raw_pages:
+    for idx, p in enumerate(raw_pages):
         if not isinstance(p, dict):
+            logger.warning(
+                ".autowiki/wiki.json page entry %d must be an object; ignoring", idx
+            )
             continue
         title = p.get("title")
         if not isinstance(title, str) or not title.strip():
+            logger.warning(
+                ".autowiki/wiki.json page entry %d has invalid title %r; ignoring",
+                idx,
+                title,
+            )
             continue
         modules_raw = p.get("modules") or []
         if not isinstance(modules_raw, list):
@@ -122,11 +130,28 @@ def assign_by_modules(
     """
     assignments: dict[str, list[str]] = {p.title: [] for p in pages}
     unassigned: list[str] = []
-    # Sort prefixes longest-first so nested directories win.
-    prefix_owners: list[tuple[str, str]] = sorted(
-        ((prefix.rstrip("/"), p.title) for p in pages for prefix in p.modules),
-        key=lambda t: len(t[0]),
-        reverse=True,
+    prefix_owner_by_prefix: dict[str, str] = {}
+    for p in pages:
+        for raw_prefix in p.modules:
+            prefix = raw_prefix.rstrip("/")
+            if not prefix:
+                continue
+            existing_owner = prefix_owner_by_prefix.get(prefix)
+            if existing_owner is not None and existing_owner != p.title:
+                logger.warning(
+                    ".autowiki/wiki.json module prefix %r claimed by multiple "
+                    "pages (%r, %r); using %r",
+                    prefix,
+                    existing_owner,
+                    p.title,
+                    existing_owner,
+                )
+                continue
+            prefix_owner_by_prefix.setdefault(prefix, p.title)
+    # Sort prefixes longest-first, then lexicographically for deterministic ties.
+    prefix_owners = sorted(
+        prefix_owner_by_prefix.items(),
+        key=lambda t: (-len(t[0]), t[0]),
     )
     for file in all_files:
         matched = False

@@ -60,7 +60,9 @@ _EXPANSION_GRAPHS: dict[str, ExpansionGraph] = {
 }
 
 for _question_type, _expansion_graph in _EXPANSION_GRAPHS.items():
-    register_expansion_profile(_question_type, _expansion_graph)
+    register_expansion_profile(
+        _question_type, (_expansion_graph.primary, _expansion_graph.secondary)
+    )
 
 
 def profile_for_question_type(question_type: str) -> QuestionTypeProfile:

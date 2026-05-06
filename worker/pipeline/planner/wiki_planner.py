@@ -675,7 +675,9 @@ def _validate_outline_structure(
             "All pages are top-level — use exactly 2 levels: top-level subsystem "
             "pages with child topic pages"
         )
-    top_level = [p for p in pages if not p.get("parent")]
+    top_level = [
+        p for p in pages if not p.get("parent") or p.get("parent") not in known
+    ]
     if len(top_level) == 1 and len(pages) > 2:
         raise ValueError(
             "Single-root wiki plans are not allowed — top-level pages must be "
@@ -1183,7 +1185,7 @@ def _prefilter_candidates(
     all_files: list[str],
     file_infos: dict[str, Any],
     dep_graph: DependencyGraph | None,
-    max_candidates: int = 40,
+    max_candidates: int = 25,
 ) -> list[str]:
     scored = _score_page_files(page, all_files, file_infos, dep_graph)
     return [f for f, _ in scored[:max_candidates]]
@@ -1712,6 +1714,17 @@ async def _select_files(
 
                 try:
                     demoted_result = dict(last_result or {})
+                    log_validation_retry(
+                        logger,
+                        stage="wiki_planner.select_files.ordering_demotion",
+                        attempt=attempt,
+                        max_retries=allowed_attempts,
+                        exc=exc,
+                        context={
+                            "outline_pages": len(outline),
+                            "ordering_errors": len(ordering_errors),
+                        },
+                    )
                     for ordering_error in ordering_errors:
                         demoted_result.update(
                             _demote_ordering_invalid_raw_selection(ordering_error)
@@ -1725,6 +1738,16 @@ async def _select_files(
                         dep_graph=dep_graph,
                     )
                     _validate_selections(demoted_result, outline)
+                    log_final_failure(
+                        logger,
+                        stage="wiki_planner.select_files.ordering_demotion",
+                        exc=exc,
+                        context={
+                            "outline_pages": len(outline),
+                            "ordering_errors": len(ordering_errors),
+                            "recovery": "demoted_low_relevance_files",
+                        },
+                    )
                     return demoted_result
                 except ValueError as demotion_exc:
                     last_error = str(demotion_exc)
@@ -1983,12 +2006,7 @@ async def generate_wiki_plan(
     from worker.pipeline.planner.user_steering import assign_by_modules
 
     all_files = list(file_analysis.files.keys())
-    # Adaptive cap: small repos pay nothing, medium repos get full coverage,
-    # huge repos fall back to the 800-file safety cap inside to_llm_summary.
-    outline_max_files = min(800, max(500, len(all_files)))
-    file_summary = file_analysis.to_llm_summary(
-        dep_graph=dep_graph, max_files=outline_max_files
-    )
+    file_summary = file_analysis.to_llm_summary(dep_graph=dep_graph, max_files=200)
     dep_info = format_for_llm_prompt(dep_graph) if dep_graph is not None else None
     clusters = dep_graph.clusters if dep_graph is not None else None
 
@@ -2028,6 +2046,7 @@ async def generate_wiki_plan(
         return WikiPlan(
             repo_notes=repo_notes_dicts if repo_notes_dicts else [{"content": ""}],
             pages=pages,
+            all_repo_files=all_files,
         )
 
     # Build architectural anchors when a clone_root is provided.

@@ -66,7 +66,13 @@ def register_expansion_profile(name: str, config: Any) -> None:
 
 
 def expansion_graph_for(name: str) -> Any:
-    return _EXPANSION_PROFILES[name.strip().lower()]
+    key = name.strip().lower()
+    if key not in _EXPANSION_PROFILES:
+        raise KeyError(
+            f"No expansion profile registered for {key!r}; "
+            f"known profiles: {sorted(_EXPANSION_PROFILES)}"
+        )
+    return _EXPANSION_PROFILES[key]
 
 
 def score_file_for_query(
@@ -326,14 +332,14 @@ def apply_token_budget(
     if token_budget <= 0:
         return []
     kept = list(slice_candidates)
-    while (
-        kept
-        and sum(_approx_tokens(candidate.code) for candidate in kept) > token_budget
-    ):
+    token_costs = [_approx_tokens(candidate.code) for candidate in kept]
+    total = sum(token_costs)
+    while kept and total > token_budget:
         lowest = min(
             range(len(kept)),
             key=lambda idx: (kept[idx].score, -idx),
         )
+        total -= token_costs.pop(lowest)
         kept.pop(lowest)
     return kept
 

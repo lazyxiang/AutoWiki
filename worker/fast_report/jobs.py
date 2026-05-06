@@ -102,18 +102,18 @@ async def _load_fast_report_index(repo_data_dir: Path) -> dict:
         return await loop.run_in_executor(None, load_repo_index, repo_data_dir)
     except RepoIndexMissingError as exc:
         logger.warning(
-            "Ignoring missing repository index under %s: %s",
-            repo_data_dir / "ast",
-            exc,
+            "Missing repository index under %s: %s", repo_data_dir / "ast", exc
         )
-        return {}
+        raise
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         logger.warning(
-            "Ignoring unreadable repository index under %s: %s",
+            "Unreadable repository index under %s: %s",
             repo_data_dir / "ast",
             exc,
         )
-        return {}
+        raise RepoIndexOutdatedError(
+            f"Unreadable repository index under {repo_data_dir / 'ast'}"
+        ) from exc
 
 
 FastReportIndexOutdated = RepoIndexOutdatedError
@@ -134,7 +134,6 @@ async def _build_default_fast_report_retrievers(
     loop = asyncio.get_running_loop()
     readme = await loop.run_in_executor(None, extract_readme, clone_root)
     fast_report_index = await _load_fast_report_index(repo_data_dir)
-    _validate_fast_report_index_version(fast_report_index)
     wiki_pages = await _load_fast_report_wiki_pages(db_path, repo_id)
     directory_tree = str(fast_report_index.get("directory_tree") or "").rstrip()
     hub_modules = list(fast_report_index.get("hub_modules") or [])

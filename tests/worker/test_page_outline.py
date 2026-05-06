@@ -27,7 +27,7 @@ def test_valid_outline_passes_validation():
             },
             {
                 "heading": "API Surface",
-                "kind": "prose+table",
+                "kind": "prose+table+diagram",
                 "focus": "Public methods",
                 "diagram": {
                     "type": "classDiagram",
@@ -64,7 +64,7 @@ def test_invalid_diagram_type_rejected():
         "sections": [
             {
                 "heading": "X",
-                "kind": "prose",
+                "kind": "prose+diagram",
                 "focus": "f",
                 "diagram": {
                     "type": "pieDiagram",
@@ -77,6 +77,43 @@ def test_invalid_diagram_type_rejected():
     }
     with pytest.raises(ValueError, match="diagram type"):
         validate_outline(raw, page_files=["a.py"])
+
+
+@pytest.mark.parametrize("diagram", [None, {}])
+def test_diagram_kind_requires_real_diagram_object(diagram):
+    raw = {
+        "sections": [
+            {
+                "heading": "X",
+                "kind": "prose+diagram",
+                "focus": "f",
+                "diagram": diagram,
+            },
+        ],
+        "key_claims": ["claim1", "claim2", "claim3"],
+    }
+    with pytest.raises(ValueError, match="requires a diagram"):
+        validate_outline(raw, page_files=[])
+
+
+def test_non_diagram_kind_rejects_diagram_object():
+    raw = {
+        "sections": [
+            {
+                "heading": "X",
+                "kind": "prose",
+                "focus": "f",
+                "diagram": {
+                    "type": "flowchart",
+                    "purpose": "p",
+                    "source_files": [],
+                },
+            },
+        ],
+        "key_claims": ["claim1", "claim2", "claim3"],
+    }
+    with pytest.raises(ValueError, match="must not include a diagram"):
+        validate_outline(raw, page_files=[])
 
 
 def test_too_few_claims_rejected():
@@ -106,7 +143,7 @@ def test_diagram_source_files_must_be_subset():
         "sections": [
             {
                 "heading": "X",
-                "kind": "prose",
+                "kind": "prose+diagram",
                 "focus": "f",
                 "diagram": {
                     "type": "flowchart",
@@ -199,7 +236,7 @@ async def test_page_outline_logs_each_retry(caplog, mock_fast_llm):
         "sections": [
             {
                 "heading": "Intro",
-                "kind": "prose",
+                "kind": "prose+diagram",
                 "focus": "overview",
                 "diagram": {
                     "type": "flowchart",
@@ -327,7 +364,7 @@ async def test_generate_page_outline_retries_on_validation_error():
             "sections": [
                 {
                     "heading": "Overview",
-                    "kind": "prose",
+                    "kind": "prose+diagram",
                     "focus": "f",
                     "diagram": {
                         "type": "flowchart",

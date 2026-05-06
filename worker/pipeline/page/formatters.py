@@ -118,8 +118,13 @@ def _format_entity_details(
                 leftovers.append(e)
 
         selected: list[dict[str, Any]] = []
+        ranked_remaining: list[dict[str, Any]] = []
         for f, q in zip(files, quotas, strict=False):
-            selected.extend(by_file[f][:q])
+            bucket = by_file[f]
+            selected.extend(bucket[:q])
+            ranked_remaining.extend(bucket[q:])
+        while len(selected) < max_entities and ranked_remaining:
+            selected.append(ranked_remaining.pop(0))
         # Fill any remaining budget from leftovers (entities whose file is
         # not in the ranked list).
         while len(selected) < max_entities and leftovers:

@@ -348,22 +348,6 @@ def _expand_candidate_paths(
     )
 
 
-def _build_slice_candidates(
-    files: dict[str, dict[str, Any]],
-    selected: list[RankedFile],
-    profile: _RetrievalProfile,
-    *,
-    clone_root: Path | None,
-) -> list[SliceCandidate]:
-    return _repo_build_slice_candidates(
-        files,
-        selected,
-        profile,
-        clone_root=clone_root,
-        slice_extractor=_load_slice_extractor() if clone_root is not None else None,
-    )
-
-
 def _is_low_signal_entry(
     entry: dict[str, Any],
     focus_hints: list[str],

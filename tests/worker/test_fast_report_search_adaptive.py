@@ -98,8 +98,9 @@ def test_expansion_graph_for_maps_question_types():
 
 def test_build_slice_candidates_compatibility_loads_source_slices(tmp_path):
     from worker.fast_report.search import (
-        _build_slice_candidates,
+        _load_slice_extractor,
         _RankedFile,
+        _repo_build_slice_candidates,
         _ScoredEntity,
         profile_for_question_type,
     )
@@ -147,11 +148,12 @@ def test_build_slice_candidates_compatibility_loads_source_slices(tmp_path):
         )
     ]
 
-    slices = _build_slice_candidates(
+    slices = _repo_build_slice_candidates(
         files,
         selected,
         profile_for_question_type("implementation_location"),
         clone_root=tmp_path,
+        slice_extractor=_load_slice_extractor(),
     )
 
     assert slices
@@ -205,11 +207,12 @@ def test_build_slice_candidates_uses_load_slice_extractor_hook(tmp_path, monkeyp
 
     monkeypatch.setattr(search, "_load_slice_extractor", lambda: fake_slice_extractor)
 
-    slices = search._build_slice_candidates(
+    slices = search._repo_build_slice_candidates(
         files,
         selected,
         profile_for_question_type("implementation_location"),
         clone_root=tmp_path,
+        slice_extractor=search._load_slice_extractor(),
     )
 
     assert calls == ["app/service.py"]

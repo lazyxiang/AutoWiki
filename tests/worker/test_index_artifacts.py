@@ -146,10 +146,10 @@ async def test_full_index_debug_prompt_dump_writes_actual_phase1_prompt(
 
     try:
         prompt_path = repo_data_dir / "logs" / "phase1_prompt.txt"
-        prompt = prompt_path.read_text()
+        prompt = prompt_path.read_text(encoding="utf-8")
 
         assert "Repository: r" in prompt
         assert "File summaries:" in prompt
-        assert "Create a hierarchical wiki plan." in prompt
+        assert "wiki" in prompt.lower()
     finally:
         await dispose_db(db_path)

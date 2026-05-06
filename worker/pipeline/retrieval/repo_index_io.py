@@ -34,7 +34,7 @@ def load_repo_index(repo_data_dir: Path) -> dict[str, Any]:
                 f"Repository index not found at {new_path} or {legacy_path}"
             )
 
-    loaded = json.loads(new_path.read_text())
+    loaded = json.loads(new_path.read_text(encoding="utf-8"))
     if not isinstance(loaded, dict):
         raise RepoIndexOutdatedError(
             "fast_report_index_outdated: Repository index payload must be an object. "
@@ -47,8 +47,13 @@ def load_repo_index(repo_data_dir: Path) -> dict[str, Any]:
 def validate_repo_index_version(data: dict) -> None:
     """Validate that a loaded repository index matches the current schema."""
     version = data.get("index_version", 0)
-    if not isinstance(version, int) or version < REPO_INDEX_VERSION:
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or version < REPO_INDEX_VERSION
+    ):
         raise RepoIndexOutdatedError(
             "fast_report_index_outdated: Repository index is outdated for fast "
-            "reports. Run `autowiki index <repo>` to upgrade."
+            f"reports (found={version!r}, expected={REPO_INDEX_VERSION}). "
+            "Run `autowiki index <repo>` to upgrade."
         )

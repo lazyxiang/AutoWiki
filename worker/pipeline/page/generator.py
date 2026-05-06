@@ -20,6 +20,7 @@ and :func:`~worker.utils.mermaid.sanitize_mermaid_blocks` to the final draft.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -197,8 +198,13 @@ def _balance_chunks(
             leftovers.append(c)
 
     out: list[dict] = []
+    spillover: list[dict] = []
     for f, q in zip(files, quotas, strict=False):
-        out.extend(by_file[f][:q])
+        bucket = by_file[f]
+        out.extend(bucket[:q])
+        spillover.extend(bucket[q:])
+    while len(out) < k and spillover:
+        out.append(spillover.pop(0))
     # Fill any remaining budget from leftovers (chunks whose file is not in
     # the ranked list — typically retrieved from related files).
     while len(out) < k and leftovers:
@@ -242,7 +248,7 @@ def _entity_importance(entity: dict[str, Any]) -> tuple[int, int]:
     return (kind_rank, span)
 
 
-def _extract_signature_slices(
+async def _extract_signature_slices(
     spec: WikiPageSpec,
     file_analysis: FileAnalysis,
     repo_root: Path | None,
@@ -273,7 +279,8 @@ def _extract_signature_slices(
             end = entity.get("end_line")
             if not isinstance(start, int) or not isinstance(end, int):
                 continue
-            source_slice = extract_source_slice(
+            source_slice = await asyncio.to_thread(
+                extract_source_slice,
                 clone_root=repo_root,
                 rel_path=rel_path,
                 anchor_start=start,
@@ -606,7 +613,7 @@ async def generate_page_batch(
                     s for p in siblings if (s := _first_sentence(p.purpose))
                 ]
 
-        slices = _extract_signature_slices(spec, file_analysis, repo_root) or None
+        slices = await _extract_signature_slices(spec, file_analysis, repo_root) or None
 
         return await generate_page(
             spec=spec,

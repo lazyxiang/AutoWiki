@@ -361,7 +361,11 @@ def _symbol_path(rel_path: str, entity_name: str) -> str:
     if module_path.endswith("/__init__.py"):
         module_path = module_path[: -len("/__init__.py")]
     else:
-        module_path = module_path.rsplit(".", 1)[0]
+        head, sep, _tail = module_path.rpartition(".")
+        if sep and head:
+            module_path = head
+        elif module_path.startswith("."):
+            module_path = module_path.lstrip(".")
     module_path = module_path.replace("/", ".")
     return f"{module_path}.{entity_name}" if entity_name else module_path
 

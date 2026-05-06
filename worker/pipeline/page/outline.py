@@ -160,7 +160,12 @@ def validate_outline(
 
         diagram = None
         diagram_raw = s.get("diagram")
-        if diagram_raw:
+        expects_diagram = "diagram" in kind
+        if expects_diagram and not (isinstance(diagram_raw, dict) and diagram_raw):
+            raise ValueError(f"Section '{heading}' requires a diagram object")
+        if not expects_diagram and diagram_raw is not None:
+            raise ValueError(f"Section '{heading}' must not include a diagram")
+        if diagram_raw is not None:
             if not isinstance(diagram_raw, dict):
                 raise ValueError(
                     f"diagram in section '{heading}' must be a dict, "

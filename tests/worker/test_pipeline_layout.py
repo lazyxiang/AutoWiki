@@ -48,6 +48,8 @@ def test_pipeline_top_level_is_only_stages_and_helpers():
     actual = set(files)
     extra = actual - expected - deprecation_shims
     assert not extra, f"unexpected top-level files: {extra}"
+    missing = expected - actual
+    assert not missing, f"expected top-level files missing: {missing}"
 
 
 def test_back_compat_reexports_resolve():

@@ -664,7 +664,7 @@ def test_select_related_wiki_pages_matches_two_character_ascii_signal():
     assert [page.slug for page in selected] == ["ui-architecture"]
 
 
-def test_service_uses_public_tokenizer_for_wiki_ranking():
+def test_service_uses_private_tokenizer_for_wiki_ranking():
     import worker.fast_report.service as service
 
     assert service._tokenize_for_wiki_rank("UI DB S3 Go") == {

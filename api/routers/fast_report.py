@@ -21,6 +21,7 @@ from worker.fast_report.jobs import (
     _load_fast_report_index,
     _validate_fast_report_index_version,
 )
+from worker.pipeline.retrieval.repo_index_io import RepoIndexMissingError
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -92,7 +93,7 @@ async def _ensure_fast_report_index_v2(repo_id: str) -> None:
             cfg.data_dir / "repos" / repo_id
         )
         _validate_fast_report_index_version(fast_report_index)
-    except FastReportIndexOutdated as exc:
+    except (FastReportIndexOutdated, RepoIndexMissingError) as exc:
         raise HTTPException(
             status_code=409,
             detail=_outdated_index_detail(),

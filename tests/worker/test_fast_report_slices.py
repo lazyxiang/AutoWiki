@@ -112,8 +112,9 @@ def test_over_cap_appends_truncation_marker_python(tmp_path):
     assert result.truncated_lines == 15
     assert result.snippet_end == 5
     assert result.full_start == 1
-    assert result.full_end == 10
+    assert result.full_end == 6
     assert result.code.splitlines()[5] == "# ... 15 more lines truncated"
+    assert "line7" not in result.code
 
 
 @pytest.mark.parametrize(

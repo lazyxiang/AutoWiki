@@ -59,7 +59,9 @@ def extract_source_slice(
     snippet_end = min(anchor_end, anchor_start + line_cap - 1)
     truncated_lines = max(0, anchor_end - snippet_end)
     full_start = max(1, anchor_start - context_lines)
-    full_end = min(file_len, snippet_end + context_lines)
+    full_end = (
+        snippet_end if truncated_lines else min(file_len, snippet_end + context_lines)
+    )
     body_lines = lines[full_start - 1 : full_end]
     if truncated_lines:
         marker = (

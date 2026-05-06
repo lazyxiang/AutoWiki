@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,6 +19,8 @@ from worker.index.artifacts import (
     _make_faiss_store,
     _remove_path,
     _write_text_async,
+    phase1_prompt_dump_path,
+    remove_stale_ast_artifacts,
 )
 from worker.index.backup import (
     _cleanup_first_time_index_failure,
@@ -61,10 +62,6 @@ from worker.platform.token_store import get_platform_token
 
 logger = logging.getLogger("worker.task")
 
-_LEGACY_REPO_INDEX_NAME = "fast_report_index.json"
-_LEGACY_FILE_ANALYSIS_SUMMARY_NAME = "file_analysis_summary.txt"
-
-
 # ---------------------------------------------------------------------------
 # DB helpers
 # ---------------------------------------------------------------------------
@@ -81,19 +78,6 @@ def _repo_metadata_updates(meta, active_branch: str) -> dict:
             is_private=meta.is_private,
         )
     return updates
-
-
-def _remove_stale_ast_artifacts(ast_dir: Path) -> None:
-    for name in (_LEGACY_REPO_INDEX_NAME, _LEGACY_FILE_ANALYSIS_SUMMARY_NAME):
-        stale_path = ast_dir / name
-        if stale_path.exists():
-            stale_path.unlink()
-
-
-def _phase1_prompt_dump_path(repo_data_dir: Path) -> Path | None:
-    if os.environ.get("AUTOWIKI_DEBUG_DUMP_PROMPTS") == "1":
-        return repo_data_dir / "logs" / "phase1_prompt.txt"
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -426,7 +410,7 @@ async def run_full_index(
                 fast_llm=fast_llm,
                 user_steering=user_steering,
                 clone_root=clone_root,
-                debug_prompt_dump_path=_phase1_prompt_dump_path(repo_data_dir),
+                debug_prompt_dump_path=phase1_prompt_dump_path(repo_data_dir),
             )
         logger.info(
             "Wiki plan generated: %d pages planned for %s", len(plan.pages), name
@@ -537,7 +521,7 @@ async def run_full_index(
 
         structure_data = plan.to_api_structure()
         now = datetime.now(UTC)
-        await loop.run_in_executor(None, _remove_stale_ast_artifacts, ast_dir)
+        await loop.run_in_executor(None, remove_stale_ast_artifacts, ast_dir)
         logger.info("Full index job complete for %s/%s", owner, name)
         await _update_job(
             db_path,

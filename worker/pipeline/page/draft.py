@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from worker.llm.base import LLMProvider
 from worker.llm.prompt_segment import PromptSegment
+from worker.pipeline.language import get_language_instruction
 from worker.pipeline.page.formatters import (
     _format_context_chunks,
     _format_entity_details,
@@ -124,7 +125,7 @@ def _summarize_child_page(content: str, title: str) -> str:
     else:
         parts.append("Diagrams already in this page: (none)")
     parts.append(f"Sections covered: {sections_str}")
-    parts.append(f"Intro: {_clip(intro, 200)}")
+    parts.append(f"Intro: {_clip(intro, 200) if intro else '(none)'}")
 
     summary = "\n".join(parts)
     if len(summary) > 2000:
@@ -283,8 +284,6 @@ async def generate_draft(
     repo_notes: list[dict] | None = None,
 ) -> str:
     """Generate the draft Markdown for a wiki page using the main model."""
-    from worker.pipeline.language import get_language_instruction
-
     segments = build_draft_prompt(
         spec=spec,
         outline=outline,

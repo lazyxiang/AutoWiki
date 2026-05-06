@@ -119,7 +119,7 @@ async def test_generate_page_with_fact_check_fail_triggers_revision(
             "sections": [
                 {
                     "heading": "Overview",
-                    "kind": "prose",
+                    "kind": "prose+diagram",
                     "focus": "f",
                     "diagram": {
                         "type": "flowchart",
@@ -358,7 +358,7 @@ def test_append_source_files_table_at_end():
     assert result.endswith("| `a.py` |")
 
 
-def test_extract_signature_slices_pulls_top_entities(tmp_path):
+async def test_extract_signature_slices_pulls_top_entities(tmp_path):
     """A6: helper reads source files and returns ≤2 slices × ≤4 lines per file."""
     from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
     from worker.pipeline.page.generator import _extract_signature_slices
@@ -411,7 +411,7 @@ def test_extract_signature_slices_pulls_top_entities(tmp_path):
     )
 
     spec = WikiPageSpec(title="Module", purpose=".", files=["module.py"])
-    slices = _extract_signature_slices(spec, file_analysis, tmp_path)
+    slices = await _extract_signature_slices(spec, file_analysis, tmp_path)
 
     assert "module.py" in slices
     file_slices = slices["module.py"]
@@ -452,7 +452,7 @@ async def test_generate_page_uses_en_keywords_as_retrieval_query(
     assert "web components next" in queries
 
 
-def test_extract_signature_slices_skips_missing_files(tmp_path):
+async def test_extract_signature_slices_skips_missing_files(tmp_path):
     """Missing/unreadable files are skipped without raising."""
     from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
     from worker.pipeline.page.generator import _extract_signature_slices
@@ -473,11 +473,11 @@ def test_extract_signature_slices_skips_missing_files(tmp_path):
         }
     )
     spec = WikiPageSpec(title="X", purpose=".", files=["missing.py"])
-    slices = _extract_signature_slices(spec, file_analysis, tmp_path)
+    slices = await _extract_signature_slices(spec, file_analysis, tmp_path)
     assert slices == {}
 
 
-def test_extract_signature_slices_empty_when_no_repo_root(tmp_path):
+async def test_extract_signature_slices_empty_when_no_repo_root(tmp_path):
     """Without repo_root, helper returns an empty dict (no extraction)."""
     from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
     from worker.pipeline.page.generator import _extract_signature_slices
@@ -498,7 +498,7 @@ def test_extract_signature_slices_empty_when_no_repo_root(tmp_path):
         }
     )
     spec = WikiPageSpec(title="X", purpose=".", files=["a.py"])
-    assert _extract_signature_slices(spec, file_analysis, None) == {}
+    assert await _extract_signature_slices(spec, file_analysis, None) == {}
 
 
 def test_source_files_table_only_includes_passed_files():
@@ -656,6 +656,18 @@ def test_balance_chunks_floor_only_for_low_rank():
         assert counts[f"f{i}.py"] == 2
 
 
+def test_balance_chunks_reuses_unfilled_ranked_file_quota():
+    """Unused quota from sparse ranked files is reused by other assigned files."""
+    files = ["a.py", "b.py", "c.py"]
+    chunks = [_chunk("a.py", 1)] + [_chunk("b.py", i) for i in range(20)]
+
+    out = _balance_chunks(chunks, files=files, k=10, floor=1)
+
+    assert len(out) == 10
+    assert sum(1 for c in out if c["file"] == "a.py") == 1
+    assert sum(1 for c in out if c["file"] == "b.py") == 9
+
+
 # ── A5: rank-weighted entity quota ───────────────────────────────────────
 
 
@@ -705,6 +717,19 @@ def test_format_entity_details_floor_only_for_low_rank():
     counts = {f: out.count(f"Location: {f}:") for f in files}
     for i in range(6, 8):
         assert counts[f"f{i}.py"] == 2
+
+
+def test_format_entity_details_reuses_unfilled_ranked_file_quota():
+    from worker.pipeline.page.formatters import _format_entity_details
+
+    files = ["a.py", "b.py", "c.py"]
+    entities = [_entity("a.py", "a0")] + [_entity("b.py", f"b{i}") for i in range(20)]
+
+    out = _format_entity_details(entities, max_entities=10, files=files, floor=1)
+
+    assert out.count("Location: a.py:") == 1
+    assert out.count("Location: b.py:") == 9
+    assert out.count("- **function**") == 10
 
 
 def test_format_entity_details_without_files_preserves_legacy_behavior():

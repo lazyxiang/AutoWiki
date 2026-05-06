@@ -19,8 +19,10 @@ from worker.embedding import make_embedding_provider
 from worker.index.artifacts import (
     _make_faiss_store,
     _write_text_async,
+    phase1_prompt_dump_path,
+    remove_stale_ast_artifacts,
 )
-from worker.index.full import _phase1_prompt_dump_path, run_full_index
+from worker.index.full import run_full_index
 from worker.index.progress import (
     _make_on_retry,
     _make_page_progress_callback,
@@ -55,10 +57,6 @@ from worker.platform.token_store import get_platform_token
 
 logger = logging.getLogger("worker.task")
 
-_LEGACY_REPO_INDEX_NAME = "fast_report_index.json"
-_LEGACY_FILE_ANALYSIS_SUMMARY_NAME = "file_analysis_summary.txt"
-
-
 # ---------------------------------------------------------------------------
 # DB helpers
 # ---------------------------------------------------------------------------
@@ -75,13 +73,6 @@ def _repo_metadata_updates(meta, active_branch: str) -> dict:
             is_private=meta.is_private,
         )
     return updates
-
-
-def _remove_stale_ast_artifacts(ast_dir: Path) -> None:
-    for name in (_LEGACY_REPO_INDEX_NAME, _LEGACY_FILE_ANALYSIS_SUMMARY_NAME):
-        stale_path = ast_dir / name
-        if stale_path.exists():
-            stale_path.unlink()
 
 
 def _is_global_planner_input(path: str) -> bool:
@@ -563,7 +554,7 @@ async def run_refresh_index(
             fast_llm=fast_llm,
             user_steering=user_steering,
             clone_root=clone_root,
-            debug_prompt_dump_path=_phase1_prompt_dump_path(repo_data_dir),
+            debug_prompt_dump_path=phase1_prompt_dump_path(repo_data_dir),
         )
         logger.info(
             "Wiki plan generated: %d pages updated for %s", len(plan.pages), name
@@ -740,7 +731,7 @@ async def run_refresh_index(
             json.dumps(merged_plan.to_wiki_json(), indent=2, ensure_ascii=False),
         )
         await asyncio.get_running_loop().run_in_executor(
-            None, _remove_stale_ast_artifacts, ast_dir
+            None, remove_stale_ast_artifacts, ast_dir
         )
         structure_data = merged_plan.to_api_structure()
 
