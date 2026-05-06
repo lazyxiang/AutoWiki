@@ -32,6 +32,7 @@ from worker.llm.base import LLMProvider
 from worker.pipeline.page_formatters import (
     _format_context_chunks,
     _format_entity_details,
+    _rank_weighted_quotas,
 )
 from worker.pipeline.rag_indexer import FAISSStore
 from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan
@@ -182,23 +183,7 @@ def _balance_chunks(
     if not files:
         return chunks[:k]
 
-    weights = [1.0 / (i + 1) if i < 6 else 0.0 for i in range(len(files))]
-    total_w = sum(weights) or 1.0  # guard against pathological inputs
-    quotas = [max(floor, round(k * w / total_w)) if w > 0 else floor for w in weights]
-
-    # Adjust for rounding so sum(quotas) == k.
-    diff = k - sum(quotas)
-    if diff > 0:
-        quotas[0] += diff
-    elif diff < 0:
-        # Trim from the lowest-ranked files first, never below the floor.
-        for i in range(len(quotas) - 1, -1, -1):
-            take = min(-diff, quotas[i] - floor)
-            if take > 0:
-                quotas[i] -= take
-                diff += take
-            if diff == 0:
-                break
+    quotas = _rank_weighted_quotas(files, k, floor=floor)
 
     by_file: dict[str, list[dict]] = {f: [] for f in files}
     leftovers: list[dict] = []
@@ -376,7 +361,9 @@ async def generate_page(
 
     # ── Build reusable context strings ──
     entity_cap = max(25, 8 * len(spec.files or []))
-    entity_summaries = _format_entity_details(entity_details or [], entity_cap)
+    entity_summaries = _format_entity_details(
+        entity_details or [], entity_cap, files=spec.files or None
+    )
     dep_info_str = None
     if dep_info:
         dep_lines = []

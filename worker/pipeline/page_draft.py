@@ -188,9 +188,10 @@ def build_draft_prompt(
 
     if entity_details:
         entity_cap = max(25, 8 * len(spec.files or []))
-        cached_parts.append(
-            f"Key entities:\n{_format_entity_details(entity_details, entity_cap)}\n"
+        entity_block = _format_entity_details(
+            entity_details, entity_cap, files=spec.files or None
         )
+        cached_parts.append(f"Key entities:\n{entity_block}\n")
 
     context = _format_context_chunks(context_chunks)
     cached_parts.append(

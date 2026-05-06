@@ -6,14 +6,70 @@ from __future__ import annotations
 from typing import Any
 
 
+def _rank_weighted_quotas(files: list[str], k: int, floor: int = 2) -> list[int]:
+    """Compute a rank-weighted per-file quota that sums to *k*.
+
+    For each file at rank ``i`` (0-indexed), the weight is
+    ``w_i = 1 / (i + 1)`` for ``i < 6`` and ``0`` otherwise.  The per-file
+    quota is ``max(floor, round(k * w_i / Σw))``.  Rounding is corrected so
+    that the quotas sum to ``k``: surplus is added to the top-ranked file,
+    deficit is removed from the lowest-rank files (down to the floor).
+
+    Used by both :func:`_format_entity_details` (entity quota) and
+    :func:`worker.pipeline.page_generator._balance_chunks` (chunk quota) so
+    the two budgets share the same graduated allocation curve.
+
+    Args:
+        files: Ranked list of file paths (rank 0 = most important).  Must be
+            non-empty; callers should special-case the empty list.
+        k: Total budget to distribute across *files*.
+        floor: Minimum allocation guaranteed per file.
+
+    Returns:
+        list[int]: One quota per file in *files*, summing to *k* (assuming
+        ``k >= floor * len(files)``; otherwise quotas may exceed *k* to
+        respect the floor).
+    """
+    weights = [1.0 / (i + 1) if i < 6 else 0.0 for i in range(len(files))]
+    total_w = sum(weights) or 1.0  # guard against pathological inputs
+    quotas = [max(floor, round(k * w / total_w)) if w > 0 else floor for w in weights]
+
+    # Adjust for rounding so sum(quotas) == k.
+    diff = k - sum(quotas)
+    if diff > 0:
+        quotas[0] += diff
+    elif diff < 0:
+        # Trim from the lowest-ranked files first, never below the floor.
+        for i in range(len(quotas) - 1, -1, -1):
+            take = min(-diff, quotas[i] - floor)
+            if take > 0:
+                quotas[i] -= take
+                diff += take
+            if diff == 0:
+                break
+    return quotas
+
+
 def _format_entity_details(
-    entities: list[dict[str, Any]], max_entities: int = 25
+    entities: list[dict[str, Any]],
+    max_entities: int = 25,
+    *,
+    files: list[str] | None = None,
+    floor: int = 2,
 ) -> str:
     """Format a list of AST entity dicts into a Markdown bullet list for the prompt.
 
     Renders up to *max_entities* entities (to avoid excessive prompt length),
     showing each entity's type, name, signature, docstring excerpt, and
     source location.
+
+    When *files* is provided, the quota is distributed across files using a
+    rank-weighted allocation (the same curve used for chunk balancing in
+    :func:`worker.pipeline.page_generator._balance_chunks`): the top-ranked
+    file receives the lion's share of entity slots; lower-ranked files keep
+    a small visibility floor.  When *files* is ``None``, the function falls
+    back to the legacy behaviour of taking the first *max_entities* entries
+    in order.
 
     Args:
         entities: List of entity dicts as produced by the AST analysis stage.
@@ -22,6 +78,11 @@ def _format_entity_details(
         max_entities: Maximum number of entities to render. Callers with
             multi-file pages typically scale this with the file count, e.g.
             ``max(25, 8 * len(spec.files))``.
+        files: Optional ranked list of file paths (rank 0 = most important).
+            When provided, applies a rank-weighted per-file quota so the top
+            file gets the most entity detail in the prompt.
+        floor: Minimum entity count guaranteed per file when *files* is
+            provided (subject to actual entity supply per file).
 
     Returns:
         str: A multi-line Markdown bullet list where each entity occupies one
@@ -42,8 +103,33 @@ def _format_entity_details(
     """
     if not entities:
         return "No entity details available."
+
+    if files:
+        # Rank-weighted: bucket entities by file (preserving input order),
+        # then take the per-file quota from each bucket.
+        quotas = _rank_weighted_quotas(files, max_entities, floor=floor)
+        by_file: dict[str, list[dict[str, Any]]] = {f: [] for f in files}
+        leftovers: list[dict[str, Any]] = []
+        for e in entities:
+            f = e.get("file")
+            if f in by_file:
+                by_file[f].append(e)
+            else:
+                leftovers.append(e)
+
+        selected: list[dict[str, Any]] = []
+        for f, q in zip(files, quotas, strict=False):
+            selected.extend(by_file[f][:q])
+        # Fill any remaining budget from leftovers (entities whose file is
+        # not in the ranked list).
+        while len(selected) < max_entities and leftovers:
+            selected.append(leftovers.pop(0))
+        chosen = selected[:max_entities]
+    else:
+        chosen = entities[:max_entities]  # Legacy: cap to avoid prompt bloat
+
     lines = []
-    for e in entities[:max_entities]:  # Cap to avoid prompt bloat
+    for e in chosen:
         parts = [f"- **{e.get('type', 'unknown')}** `{e.get('name', '?')}`"]
         if e.get("signature"):
             parts.append(f"  Signature: `{e['signature']}`")

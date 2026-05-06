@@ -513,6 +513,67 @@ def test_balance_chunks_floor_only_for_low_rank():
         assert counts[f"f{i}.py"] == 2
 
 
+# ── A5: rank-weighted entity quota ───────────────────────────────────────
+
+
+def _entity(file: str, name: str) -> dict:
+    """Test helper: minimal AST entity dict for _format_entity_details tests."""
+    return {
+        "type": "function",
+        "name": name,
+        "signature": f"({name})",
+        "file": file,
+        "start_line": 10,
+        "end_line": 20,
+    }
+
+
+def test_format_entity_details_rank_weighted_per_file_quota():
+    """Top-ranked file gets the largest entity share; every file meets the floor."""
+    from worker.pipeline.page_formatters import _format_entity_details
+
+    files = ["a.py", "b.py", "c.py"]
+    # 20 distinct entities per file so each file has plenty of supply.
+    entities = [_entity(f, f"{f}_e{i}") for f in files for i in range(20)]
+
+    out = _format_entity_details(entities, max_entities=15, files=files)
+
+    # Count rendered entities per file by counting the unique entity-name
+    # markers — each entity renders one `Location: <file>:` line.
+    by_file = {f: out.count(f"Location: {f}:") for f in files}
+
+    # Counts non-increasing by rank — top file has the most.
+    assert by_file["a.py"] > by_file["b.py"]
+    assert by_file["b.py"] >= by_file["c.py"]
+    # Floor: every file gets at least one entity.
+    assert all(by_file[f] >= 1 for f in files)
+    # Total respects the cap.
+    assert sum(by_file.values()) <= 15
+
+
+def test_format_entity_details_floor_only_for_low_rank():
+    """Files at rank >= 6 receive only the floor."""
+    from worker.pipeline.page_formatters import _format_entity_details
+
+    files = [f"f{i}.py" for i in range(8)]
+    entities = [_entity(f, f"{f}_e{i}") for f in files for i in range(20)]
+
+    out = _format_entity_details(entities, max_entities=30, files=files, floor=2)
+    counts = {f: out.count(f"Location: {f}:") for f in files}
+    for i in range(6, 8):
+        assert counts[f"f{i}.py"] == 2
+
+
+def test_format_entity_details_without_files_preserves_legacy_behavior():
+    """Without `files`, behaviour falls back to the simple cap (back-compat)."""
+    from worker.pipeline.page_formatters import _format_entity_details
+
+    entities = [_entity("a.py", f"e{i}") for i in range(50)]
+    out = _format_entity_details(entities, max_entities=10)
+    # Back-compat: 10 entity bullets rendered.
+    assert out.count("- **function**") == 10
+
+
 def test_file_stems_strips_directory_and_extension():
     """_file_stems returns the bare filename without path or extension."""
     assert _file_stems(["worker/pipeline/foo.py", "src/bar.ts", "baz"]) == [
