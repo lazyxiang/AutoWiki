@@ -14,7 +14,7 @@ from pathlib import Path
 import typer
 
 from shared.config import Config
-from worker.pipeline.wiki_planner import (
+from worker.pipeline.planner.wiki_planner import (
     WikiPageSpec,
     WikiPlan,
     validate_wiki_plan,

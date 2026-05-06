@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 import numpy as np
 import pytest
 
-from worker.pipeline.page_generator import (
+from worker.pipeline.page.generator import (
     PageResult,
     _append_source_files_table,
     _balance_chunks,
@@ -15,7 +15,7 @@ from worker.pipeline.page_generator import (
     generate_page,
     generate_page_batch,
 )
-from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan
+from worker.pipeline.planner.wiki_planner import WikiPageSpec, WikiPlan
 
 
 @pytest.fixture
@@ -284,9 +284,9 @@ async def test_generate_page_batch_returns_all_results(page_store, mock_embeddin
 async def test_generate_page_batch_calls_on_result_as_each_page_finishes(
     page_store, mock_embedding, monkeypatch
 ):
-    from worker.pipeline import page_generator
     from worker.pipeline.ast_analysis import FileAnalysis
     from worker.pipeline.dependency_graph import DependencyGraph
+    from worker.pipeline.page import generator as page_generator
 
     slow_can_finish = asyncio.Event()
     persisted: list[str] = []
@@ -361,7 +361,7 @@ def test_append_source_files_table_at_end():
 def test_extract_signature_slices_pulls_top_entities(tmp_path):
     """A6: helper reads source files and returns ≤2 slices × ≤4 lines per file."""
     from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
-    from worker.pipeline.page_generator import _extract_signature_slices
+    from worker.pipeline.page.generator import _extract_signature_slices
 
     src = tmp_path / "module.py"
     src.write_text(
@@ -426,7 +426,7 @@ def test_extract_signature_slices_pulls_top_entities(tmp_path):
 def test_extract_signature_slices_skips_missing_files(tmp_path):
     """Missing/unreadable files are skipped without raising."""
     from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
-    from worker.pipeline.page_generator import _extract_signature_slices
+    from worker.pipeline.page.generator import _extract_signature_slices
 
     file_analysis = FileAnalysis(
         files={
@@ -451,7 +451,7 @@ def test_extract_signature_slices_skips_missing_files(tmp_path):
 def test_extract_signature_slices_empty_when_no_repo_root(tmp_path):
     """Without repo_root, helper returns an empty dict (no extraction)."""
     from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
-    from worker.pipeline.page_generator import _extract_signature_slices
+    from worker.pipeline.page.generator import _extract_signature_slices
 
     file_analysis = FileAnalysis(
         files={
@@ -644,7 +644,7 @@ def _entity(file: str, name: str) -> dict:
 
 def test_format_entity_details_rank_weighted_per_file_quota():
     """Top-ranked file gets the largest entity share; every file meets the floor."""
-    from worker.pipeline.page_formatters import _format_entity_details
+    from worker.pipeline.page.formatters import _format_entity_details
 
     files = ["a.py", "b.py", "c.py"]
     # 20 distinct entities per file so each file has plenty of supply.
@@ -667,7 +667,7 @@ def test_format_entity_details_rank_weighted_per_file_quota():
 
 def test_format_entity_details_floor_only_for_low_rank():
     """Files at rank >= 6 receive only the floor."""
-    from worker.pipeline.page_formatters import _format_entity_details
+    from worker.pipeline.page.formatters import _format_entity_details
 
     files = [f"f{i}.py" for i in range(8)]
     entities = [_entity(f, f"{f}_e{i}") for f in files for i in range(20)]
@@ -680,7 +680,7 @@ def test_format_entity_details_floor_only_for_low_rank():
 
 def test_format_entity_details_without_files_preserves_legacy_behavior():
     """Without `files`, behaviour falls back to the simple cap (back-compat)."""
-    from worker.pipeline.page_formatters import _format_entity_details
+    from worker.pipeline.page.formatters import _format_entity_details
 
     entities = [_entity("a.py", f"e{i}") for i in range(50)]
     out = _format_entity_details(entities, max_entities=10)

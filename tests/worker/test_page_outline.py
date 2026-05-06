@@ -2,8 +2,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from worker.pipeline.page_outline import PageOutline, validate_outline
-from worker.pipeline.wiki_planner import WikiPageSpec
+from worker.pipeline.page.outline import PageOutline, validate_outline
+from worker.pipeline.planner.wiki_planner import WikiPageSpec
 
 
 def test_valid_outline_passes_validation():
@@ -136,7 +136,7 @@ def test_minimum_diagram_count_enforced():
 
 
 async def test_generate_page_outline_with_mock_llm():
-    from worker.pipeline.page_outline import generate_page_outline
+    from worker.pipeline.page.outline import generate_page_outline
 
     mock_fast_llm = AsyncMock()
     mock_fast_llm.generate_structured.return_value = {
@@ -190,8 +190,8 @@ async def test_generate_page_outline_with_mock_llm():
 async def test_page_outline_logs_each_retry(caplog, mock_fast_llm):
     import logging
 
-    from worker.pipeline.page_outline import generate_page_outline
-    from worker.pipeline.wiki_planner import WikiPageSpec
+    from worker.pipeline.page.outline import generate_page_outline
+    from worker.pipeline.planner.wiki_planner import WikiPageSpec
 
     spec = WikiPageSpec(title="X", purpose="y", files=["a.py"])
     bad = {"sections": [], "key_claims": []}  # empty → validation failure
@@ -226,7 +226,7 @@ async def test_page_outline_logs_each_retry(caplog, mock_fast_llm):
 
 
 def test_outline_prompt_includes_sibling_titles_and_out_of_scope():
-    from worker.pipeline.page_outline import _build_outline_prompt
+    from worker.pipeline.page.outline import _build_outline_prompt
 
     spec = WikiPageSpec(
         title="页面生成器",
@@ -258,7 +258,7 @@ def test_outline_prompt_includes_sibling_titles_and_out_of_scope():
 
 def test_outline_prompt_includes_signature_slices():
     """A6: signature slices land in the cacheable prefix labeled by file."""
-    from worker.pipeline.page_outline import _build_outline_prompt
+    from worker.pipeline.page.outline import _build_outline_prompt
 
     spec = WikiPageSpec(
         title="Page Generator",
@@ -291,7 +291,7 @@ def test_outline_prompt_includes_signature_slices():
 
 def test_outline_prompt_omits_signature_slices_block_when_empty():
     """No 'Signature slices' header when the dict is None or empty."""
-    from worker.pipeline.page_outline import _build_outline_prompt
+    from worker.pipeline.page.outline import _build_outline_prompt
 
     spec = WikiPageSpec(title="X", purpose="y", files=["a.py"])
     segments = _build_outline_prompt(
@@ -312,7 +312,7 @@ def test_outline_prompt_omits_signature_slices_block_when_empty():
 
 
 async def test_generate_page_outline_retries_on_validation_error():
-    from worker.pipeline.page_outline import generate_page_outline
+    from worker.pipeline.page.outline import generate_page_outline
 
     call_count = 0
 

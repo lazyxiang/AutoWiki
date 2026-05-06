@@ -37,15 +37,19 @@ from worker.pipeline.ingestion import (
     get_affected_pages,
     get_changed_files,
 )
-from worker.pipeline.page_generator import (
+from worker.pipeline.page.generator import (
     PageResult,
     compute_generation_order,
     generate_page_batch,
 )
+from worker.pipeline.planner.user_steering import load_user_steering
+from worker.pipeline.planner.wiki_planner import (
+    WikiPageSpec,
+    WikiPlan,
+    generate_wiki_plan,
+)
 from worker.pipeline.rag_indexer import build_rag_index
 from worker.pipeline.retrieval.repo_index import build_repo_index
-from worker.pipeline.user_steering import load_user_steering
-from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan, generate_wiki_plan
 from worker.platform.registry import get_platform_by_name
 from worker.platform.token_store import get_platform_token
 

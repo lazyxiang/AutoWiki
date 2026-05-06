@@ -1,4 +1,4 @@
-from worker.pipeline.diagram_post_processor import ensure_diagram_headers
+from worker.pipeline.page.diagram_post_processor import ensure_diagram_headers
 
 
 def test_compliant_block_untouched():

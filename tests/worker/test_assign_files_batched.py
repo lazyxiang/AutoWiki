@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from worker.llm.prompt_segment import PromptSegment
-from worker.pipeline.wiki_planner import (
+from worker.pipeline.planner.wiki_planner import (
     _SELECTION_SCHEMA,
     MAX_FILES_PER_PAGE,
     _build_selection_system,

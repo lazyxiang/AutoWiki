@@ -1,8 +1,8 @@
 import pytest
 
-from worker.pipeline import wiki_planner as wp
 from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
-from worker.pipeline.wiki_planner import (
+from worker.pipeline.planner import wiki_planner as wp
+from worker.pipeline.planner.wiki_planner import (
     WikiPageSpec,
     WikiPlan,
     _enforce_ownership,
@@ -344,7 +344,7 @@ def test_suggest_page_range_huge_repo():
 
 async def test_generate_outline(mock_llm):
     """_generate_outline returns a list of page dicts with title/purpose/parent."""
-    from worker.pipeline.wiki_planner import _generate_outline
+    from worker.pipeline.planner.wiki_planner import _generate_outline
 
     mock_llm.generate_structured.side_effect = None
     mock_llm.generate_structured.return_value = {
@@ -373,7 +373,7 @@ async def test_generate_outline(mock_llm):
 
 async def test_assign_files(mock_llm):
     """_select_files returns a dict mapping page titles to file lists."""
-    from worker.pipeline.wiki_planner import _select_files
+    from worker.pipeline.planner.wiki_planner import _select_files
 
     mock_llm.generate_structured.side_effect = None
     mock_llm.generate_structured.return_value = {
@@ -422,7 +422,7 @@ async def test_assign_files(mock_llm):
 
 async def test_assign_files_orphans_distributed(mock_llm):
     """Files not in any valid page are silently ignored (page-centric model)."""
-    from worker.pipeline.wiki_planner import _select_files
+    from worker.pipeline.planner.wiki_planner import _select_files
 
     mock_llm.generate_structured.side_effect = None
     mock_llm.generate_structured.return_value = {
@@ -582,7 +582,7 @@ async def test_generate_outline_logs_each_validation_failure(caplog):
     import logging
     from unittest.mock import AsyncMock
 
-    from worker.pipeline.wiki_planner import _generate_outline
+    from worker.pipeline.planner.wiki_planner import _generate_outline
 
     # First two calls return an invalid outline (duplicate slug → validation fails),
     # third call returns a valid outline.
@@ -631,7 +631,7 @@ async def test_generate_outline_logs_en_keywords_required_retry(caplog):
     import logging
     from unittest.mock import AsyncMock
 
-    from worker.pipeline.wiki_planner import _generate_outline
+    from worker.pipeline.planner.wiki_planner import _generate_outline
 
     bad = {
         "pages": [
@@ -689,7 +689,7 @@ async def test_generate_outline_logs_en_keywords_required_final_failure(caplog):
     import logging
     from unittest.mock import AsyncMock
 
-    from worker.pipeline.wiki_planner import WikiPlannerError, _generate_outline
+    from worker.pipeline.planner.wiki_planner import WikiPlannerError, _generate_outline
 
     bad = {
         "pages": [
@@ -774,7 +774,7 @@ async def test_generate_wiki_plan_scales_summary_budget_for_large_repos(
     mock_llm, monkeypatch
 ):
     """Phase 1 gives larger repos a larger explicit summary budget."""
-    from worker.pipeline import wiki_planner as wp
+    from worker.pipeline.planner import wiki_planner as wp
 
     class TrackingFileAnalysis(FileAnalysis):
         def __init__(self, **kwargs):
@@ -825,7 +825,7 @@ async def test_assign_files_logs_each_validation_failure_and_feedback(caplog):
     import logging
     from unittest.mock import AsyncMock
 
-    from worker.pipeline.wiki_planner import _select_files
+    from worker.pipeline.planner.wiki_planner import _select_files
 
     outline = [
         {"title": "Overview", "purpose": "top"},
@@ -878,7 +878,7 @@ async def test_generate_wiki_plan_phase2_recovery(mock_llm):
     """When Phase 2 (assignment) fails, generate_wiki_plan must recover
     using score-based heuristic selection while maintaining the LLM outline."""
     from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
-    from worker.pipeline.wiki_planner import generate_wiki_plan
+    from worker.pipeline.planner.wiki_planner import generate_wiki_plan
 
     outline = {
         "pages": [
@@ -954,7 +954,7 @@ async def test_assign_files_uses_batched_path(monkeypatch):
     """_select_files must delegate to _select_files_in_batches."""
     from unittest.mock import AsyncMock
 
-    from worker.pipeline import wiki_planner as wp
+    from worker.pipeline.planner import wiki_planner as wp
 
     called = {}
 
@@ -996,7 +996,7 @@ async def test_select_files_preserves_partial_batches_on_raw_validation_failure(
     """Valid earlier batches should survive a later relevance/schema failure."""
     from unittest.mock import AsyncMock
 
-    from worker.pipeline import wiki_planner as wp
+    from worker.pipeline.planner import wiki_planner as wp
 
     monkeypatch.setattr(wp, "_PAGE_BATCH_SIZE", 1)
     monkeypatch.setattr(
@@ -1058,7 +1058,7 @@ async def test_select_files_retries_then_demotes_ordering_violations(
     import logging
     from unittest.mock import AsyncMock
 
-    from worker.pipeline import wiki_planner as wp
+    from worker.pipeline.planner import wiki_planner as wp
 
     monkeypatch.setattr(
         wp,
@@ -1116,7 +1116,7 @@ async def test_select_files_repeated_below_floor_only_ordering_is_salvaged(
     import logging
     from unittest.mock import AsyncMock
 
-    from worker.pipeline import wiki_planner as wp
+    from worker.pipeline.planner import wiki_planner as wp
 
     monkeypatch.setattr(
         wp,
@@ -1169,7 +1169,7 @@ async def test_select_files_mixed_provider_and_ordering_failure_is_not_salvaged(
     """Provider failure in one batch must block ordering-only salvage."""
     from unittest.mock import AsyncMock
 
-    from worker.pipeline import wiki_planner as wp
+    from worker.pipeline.planner import wiki_planner as wp
 
     monkeypatch.setattr(wp, "_PAGE_BATCH_SIZE", 1)
     monkeypatch.setattr(
@@ -1238,7 +1238,7 @@ async def test_select_files_provider_failure_preserves_successful_batch(
     """Provider errors in a parallel batch must not be masked as empty output."""
     from unittest.mock import AsyncMock
 
-    from worker.pipeline import wiki_planner as wp
+    from worker.pipeline.planner import wiki_planner as wp
 
     monkeypatch.setattr(wp, "_PAGE_BATCH_SIZE", 1)
     monkeypatch.setattr(
@@ -1301,7 +1301,7 @@ async def test_select_files_drains_parallel_batches_before_partial_failure(
     """Successful sibling batches must be captured before partial fallback."""
     from unittest.mock import AsyncMock
 
-    from worker.pipeline import wiki_planner as wp
+    from worker.pipeline.planner import wiki_planner as wp
 
     monkeypatch.setattr(wp, "_PAGE_BATCH_SIZE", 1)
     monkeypatch.setattr(
@@ -1369,7 +1369,7 @@ async def test_select_files_drains_parallel_batches_before_partial_failure(
 def test_build_outline_prompt_includes_anchors_section_when_provided():
     """When anchors are passed in, the prompt must surface them under a
     dedicated heading, not bury them in the existing sections."""
-    from worker.pipeline.wiki_planner import _build_outline_prompt
+    from worker.pipeline.planner.wiki_planner import _build_outline_prompt
 
     prompt = _build_outline_prompt(
         file_summary="one.py, two.py",
@@ -1388,7 +1388,7 @@ def test_build_outline_prompt_includes_anchors_section_when_provided():
 
 def test_build_outline_prompt_without_anchors_unchanged():
     """Call sites that do not pass anchors must not see an anchors section."""
-    from worker.pipeline.wiki_planner import _build_outline_prompt
+    from worker.pipeline.planner.wiki_planner import _build_outline_prompt
 
     prompt = _build_outline_prompt(
         file_summary="one.py, two.py",
@@ -1398,7 +1398,7 @@ def test_build_outline_prompt_without_anchors_unchanged():
 
 
 def test_build_outline_prompt_requires_en_keywords_for_cjk_with_examples():
-    from worker.pipeline.wiki_planner import _build_outline_prompt
+    from worker.pipeline.planner.wiki_planner import _build_outline_prompt
 
     prompt = _build_outline_prompt(
         file_summary="web/components/Sidebar.tsx\napi/routers/repos.py",
@@ -1863,7 +1863,7 @@ def test_validate_selections_allows_empty_parent():
 
 
 def test_n_target_clamps_between_2_and_8():
-    from worker.pipeline.wiki_planner import _compute_n_target
+    from worker.pipeline.planner.wiki_planner import _compute_n_target
 
     assert _compute_n_target(median_score=1.0, score_threshold=2.0) == 2
     assert _compute_n_target(median_score=20.0, score_threshold=2.0) == 8
@@ -1871,14 +1871,14 @@ def test_n_target_clamps_between_2_and_8():
 
 
 def test_n_target_threshold_zero_falls_back_to_default():
-    from worker.pipeline.wiki_planner import _compute_n_target
+    from worker.pipeline.planner.wiki_planner import _compute_n_target
 
     assert _compute_n_target(median_score=5.0, score_threshold=0.0) == 5
 
 
 def test_compute_page_budget_clamps_single_candidate():
     """Single positive-scoring file → budget still clamps into [2, 8]."""
-    from worker.pipeline.wiki_planner import _compute_page_budget
+    from worker.pipeline.planner.wiki_planner import _compute_page_budget
 
     page = {"title": "Auth", "purpose": "Login flow."}
     n_target = _compute_page_budget(
@@ -1892,7 +1892,7 @@ def test_compute_page_budget_clamps_single_candidate():
 
 def test_compute_page_budget_uses_true_median_for_even_count():
     """`_compute_page_budget` must use true median, not lower-half index."""
-    from worker.pipeline.wiki_planner import _compute_page_budget
+    from worker.pipeline.planner.wiki_planner import _compute_page_budget
 
     # Score distribution doesn't depend on the file path string; use a simple
     # synthetic page where _score_file_for_page returns predictable values.
@@ -2330,7 +2330,7 @@ async def test_select_files_enforces_ownership_after_validation(
     monkeypatch,
     mock_llm,
 ):
-    from worker.pipeline import wiki_planner as wp
+    from worker.pipeline.planner import wiki_planner as wp
 
     monkeypatch.setattr(
         wp,

@@ -1,9 +1,9 @@
-from worker.pipeline.page_draft import (
+from worker.pipeline.page.draft import (
     DRAFT_SYSTEM,
     build_draft_prompt,
 )
-from worker.pipeline.page_outline import DiagramPlan, PageOutline, SectionPlan
-from worker.pipeline.wiki_planner import WikiPageSpec
+from worker.pipeline.page.outline import DiagramPlan, PageOutline, SectionPlan
+from worker.pipeline.planner.wiki_planner import WikiPageSpec
 
 
 def test_draft_system_forbids_code_blocks():
@@ -102,7 +102,7 @@ def test_build_draft_prompt_returns_segments():
 
 
 def test_build_draft_prompt_for_parent_page():
-    from worker.pipeline.page_generator import PageResult
+    from worker.pipeline.page.generator import PageResult
 
     outline = PageOutline(
         sections=[

@@ -322,8 +322,8 @@ async def test_run_refresh_index_replans_all_files_for_readme_only_change(
     tmp_path, mock_llm, mock_fast_llm, mock_embedding
 ):
     """README-only changes force a global replan with the full source analysis."""
-    from worker.pipeline.page_generator import PageResult
-    from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan
+    from worker.pipeline.page.generator import PageResult
+    from worker.pipeline.planner.wiki_planner import WikiPageSpec, WikiPlan
 
     repo_id = "readme_refresh_repo"
     job_id = str(uuid.uuid4())
@@ -381,8 +381,8 @@ async def test_run_refresh_index_builds_dependency_graph_and_repo_index_in_execu
 ):
     from shared.database import dispose_db
     from worker.pipeline.dependency_graph import DependencyGraph
-    from worker.pipeline.page_generator import PageResult
-    from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan
+    from worker.pipeline.page.generator import PageResult
+    from worker.pipeline.planner.wiki_planner import WikiPageSpec, WikiPlan
 
     repo_id = "executor_refresh_repo"
     job_id = str(uuid.uuid4())
@@ -449,8 +449,8 @@ async def test_run_refresh_index_keeps_existing_pages_if_generation_fails(
 
     from shared.database import dispose_db, get_session
     from shared.models import WikiPage
-    from worker.pipeline.page_generator import PageResult
-    from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan
+    from worker.pipeline.page.generator import PageResult
+    from worker.pipeline.planner.wiki_planner import WikiPageSpec, WikiPlan
 
     repo_id = "failed_refresh_repo"
     job_id = str(uuid.uuid4())
@@ -510,7 +510,7 @@ async def test_run_refresh_index_keeps_existing_pages_if_generation_fails(
 
 def test_merge_refresh_plan_pages_preserves_old_order_and_appends_new_pages():
     from worker.index.refresh import _merge_refresh_plan_pages
-    from worker.pipeline.wiki_planner import WikiPageSpec
+    from worker.pipeline.planner.wiki_planner import WikiPageSpec
 
     old_pages = [
         WikiPageSpec(title="Overview", purpose="old", files=["main.py"]),

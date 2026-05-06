@@ -123,7 +123,7 @@ async def test_get_changed_files_returns_diff(tmp_path):
 
 def test_get_affected_pages():
     from worker.pipeline.ingestion import get_affected_pages
-    from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan
+    from worker.pipeline.planner.wiki_planner import WikiPageSpec, WikiPlan
 
     plan = WikiPlan(
         pages=[
@@ -141,7 +141,7 @@ def test_get_affected_pages():
 
 def test_get_affected_pages_returns_matching_pages():
     from worker.pipeline.ingestion import AffectedPages, get_affected_pages
-    from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan
+    from worker.pipeline.planner.wiki_planner import WikiPageSpec, WikiPlan
 
     plan = WikiPlan(
         pages=[
@@ -156,7 +156,7 @@ def test_get_affected_pages_returns_matching_pages():
 
 def test_get_affected_pages_multiple_pages_can_match():
     from worker.pipeline.ingestion import get_affected_pages
-    from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan
+    from worker.pipeline.planner.wiki_planner import WikiPageSpec, WikiPlan
 
     plan = WikiPlan(
         pages=[

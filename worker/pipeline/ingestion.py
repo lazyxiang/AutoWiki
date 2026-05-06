@@ -22,7 +22,7 @@ from urllib.parse import urlsplit, urlunsplit
 import pathspec
 
 if TYPE_CHECKING:
-    from worker.pipeline.wiki_planner import WikiPlan
+    from worker.pipeline.planner.wiki_planner import WikiPlan
 
 # Allowlist of file extensions treated as indexable source/documentation.
 # Files with extensions not in this set are silently skipped by filter_files().
@@ -329,7 +329,7 @@ def get_affected_pages(changed_files: list[str], wiki_plan: WikiPlan) -> Affecte
     Args:
         changed_files: List of relative file paths (as returned by
             :func:`get_changed_files`) that have been modified.
-        wiki_plan: The :class:`~worker.pipeline.wiki_planner.WikiPlan`
+        wiki_plan: The :class:`~worker.pipeline.planner.wiki_planner.WikiPlan`
             describing the current page-to-file assignments.
 
     Returns:

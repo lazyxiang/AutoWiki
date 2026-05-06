@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from worker.pipeline.outline_anchors import (
+from worker.pipeline.planner.outline_anchors import (
     build_directory_tree,
     extract_package_docstrings,
     extract_readme_sections,
@@ -148,7 +148,7 @@ def test_format_anchors_for_prompt_omits_empty_sections():
 
 
 def test_format_anchors_for_prompt_includes_each_section():
-    from worker.pipeline.outline_anchors import PackageDoc
+    from worker.pipeline.planner.outline_anchors import PackageDoc
 
     out = format_anchors_for_prompt(
         directory_tree="worker/ (3)\n  pipeline/ (2)",

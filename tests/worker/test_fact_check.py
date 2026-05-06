@@ -1,5 +1,5 @@
 from worker.llm.prompt_segment import PromptSegment
-from worker.pipeline.fact_check import (
+from worker.pipeline.page.fact_check import (
     FactCheckIssue,
     parse_fact_check_result,
     run_fact_check,
@@ -7,7 +7,7 @@ from worker.pipeline.fact_check import (
     strip_failed_claim,
     strip_failed_diagram,
 )
-from worker.pipeline.page_outline import DiagramPlan, PageOutline, SectionPlan
+from worker.pipeline.page.outline import DiagramPlan, PageOutline, SectionPlan
 
 
 def test_parse_pass_verdict():
@@ -189,8 +189,8 @@ async def test_run_fact_check_fails_open_on_error(mock_fast_llm):
 async def test_fact_check_logs_failure_with_context(caplog, mock_fast_llm):
     import logging
 
-    from worker.pipeline.fact_check import run_fact_check
-    from worker.pipeline.page_outline import PageOutline, SectionPlan
+    from worker.pipeline.page.fact_check import run_fact_check
+    from worker.pipeline.page.outline import PageOutline, SectionPlan
 
     mock_fast_llm.generate_structured.side_effect = RuntimeError("boom")
 
@@ -239,7 +239,7 @@ async def test_run_targeted_revision_fixes_claims(mock_llm):
 
 
 async def test_run_targeted_revision_fixes_diagram(mock_llm):
-    from worker.pipeline.fact_check import FactCheckIssue, run_targeted_revision
+    from worker.pipeline.page.fact_check import FactCheckIssue, run_targeted_revision
 
     mock_llm.generate.return_value = "```mermaid\nflowchart TD\n  A-->C\n```"
 
