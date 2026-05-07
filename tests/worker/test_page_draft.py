@@ -1,9 +1,9 @@
-from worker.pipeline.page_draft import (
+from worker.pipeline.page.draft import (
     DRAFT_SYSTEM,
     build_draft_prompt,
 )
-from worker.pipeline.page_outline import DiagramPlan, PageOutline, SectionPlan
-from worker.pipeline.wiki_planner import WikiPageSpec
+from worker.pipeline.page.outline import DiagramPlan, PageOutline, SectionPlan
+from worker.pipeline.planner.wiki_planner import WikiPageSpec
 
 
 def test_draft_system_forbids_code_blocks():
@@ -36,6 +36,23 @@ def test_draft_system_mentions_source_of_truth():
     assert (
         "canonical" in DRAFT_SYSTEM.lower() or "source of truth" in DRAFT_SYSTEM.lower()
     )
+
+
+def test_draft_system_has_scope_discipline_rule():
+    """A3: draft prompt must instruct the LLM to stay within assigned files
+    and refer to siblings only by title with at most one sentence each."""
+    from worker.llm.prompt_segment import PromptSegment
+
+    if isinstance(DRAFT_SYSTEM, list):
+        assert all(isinstance(s, PromptSegment) for s in DRAFT_SYSTEM)
+        text = "".join(s.text for s in DRAFT_SYSTEM)
+    else:
+        text = DRAFT_SYSTEM
+
+    lower = text.lower()
+    assert "scope" in lower
+    assert "sibling" in lower
+    assert "≤ 1 sentence" in lower or "one sentence" in lower
 
 
 def test_build_draft_prompt_returns_segments():
@@ -85,7 +102,7 @@ def test_build_draft_prompt_returns_segments():
 
 
 def test_build_draft_prompt_for_parent_page():
-    from worker.pipeline.page_generator import PageResult
+    from worker.pipeline.page.generator import PageResult
 
     outline = PageOutline(
         sections=[

@@ -32,6 +32,12 @@ from worker.fast_report import (
 from worker.fast_report.search import retrieve_code_evidence
 from worker.llm import make_llm_provider
 from worker.pipeline.ingestion import extract_readme
+from worker.pipeline.retrieval.repo_index_io import (
+    RepoIndexMissingError,
+    RepoIndexOutdatedError,
+    load_repo_index,
+    validate_repo_index_version,
+)
 
 logger = logging.getLogger("worker.task")
 
@@ -91,41 +97,30 @@ async def _load_fast_report_wiki_pages(
 
 
 async def _load_fast_report_index(repo_data_dir: Path) -> dict:
-    index_path = repo_data_dir / "ast" / "fast_report_index.json"
-    if not index_path.exists():
-        return {}
     loop = asyncio.get_running_loop()
     try:
-        raw = await loop.run_in_executor(None, index_path.read_text)
-        loaded = json.loads(raw)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return await loop.run_in_executor(None, load_repo_index, repo_data_dir)
+    except RepoIndexMissingError as exc:
         logger.warning(
-            "Ignoring unreadable fast report index at %s: %s",
-            index_path,
+            "Missing repository index under %s: %s", repo_data_dir / "ast", exc
+        )
+        raise
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        logger.warning(
+            "Unreadable repository index under %s: %s",
+            repo_data_dir / "ast",
             exc,
         )
-        return {}
-    if not isinstance(loaded, dict):
-        logger.warning(
-            "Ignoring unexpected fast report index payload at %s: %s",
-            index_path,
-            type(loaded).__name__,
-        )
-        return {}
-    return loaded
+        raise RepoIndexOutdatedError(
+            f"Unreadable repository index under {repo_data_dir / 'ast'}"
+        ) from exc
 
 
-class FastReportIndexOutdated(RuntimeError):
-    """Raised when fast_report_index.json is missing or below v2."""
+FastReportIndexOutdated = RepoIndexOutdatedError
 
 
 def _validate_fast_report_index_version(index: dict) -> None:
-    version = index.get("index_version")
-    if not isinstance(version, int) or version < 2:
-        raise FastReportIndexOutdated(
-            "fast_report_index_outdated: Repository index is outdated for fast "
-            "reports. Run `autowiki index <repo>` to upgrade."
-        )
+    validate_repo_index_version(index)
 
 
 async def _build_default_fast_report_retrievers(
@@ -139,7 +134,6 @@ async def _build_default_fast_report_retrievers(
     loop = asyncio.get_running_loop()
     readme = await loop.run_in_executor(None, extract_readme, clone_root)
     fast_report_index = await _load_fast_report_index(repo_data_dir)
-    _validate_fast_report_index_version(fast_report_index)
     wiki_pages = await _load_fast_report_wiki_pages(db_path, repo_id)
     directory_tree = str(fast_report_index.get("directory_tree") or "").rstrip()
     hub_modules = list(fast_report_index.get("hub_modules") or [])

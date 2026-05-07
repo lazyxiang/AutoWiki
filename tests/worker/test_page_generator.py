@@ -4,21 +4,23 @@ from unittest.mock import AsyncMock
 import numpy as np
 import pytest
 
-from worker.pipeline.page_generator import (
+from worker.pipeline.page.generator import (
     PageResult,
     _append_source_files_table,
+    _balance_chunks,
+    _file_stems,
     _strip_code_blocks,
     _strip_preamble_and_ensure_header,
     compute_generation_order,
     generate_page,
     generate_page_batch,
 )
-from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan
+from worker.pipeline.planner.wiki_planner import WikiPageSpec, WikiPlan
 
 
 @pytest.fixture
 def page_store(tmp_path):
-    from worker.pipeline.rag_indexer import FAISSStore
+    from worker.pipeline.retrieval.rag_indexer import FAISSStore
 
     store = FAISSStore(
         dimension=1536,
@@ -117,7 +119,7 @@ async def test_generate_page_with_fact_check_fail_triggers_revision(
             "sections": [
                 {
                     "heading": "Overview",
-                    "kind": "prose",
+                    "kind": "prose+diagram",
                     "focus": "f",
                     "diagram": {
                         "type": "flowchart",
@@ -282,9 +284,9 @@ async def test_generate_page_batch_returns_all_results(page_store, mock_embeddin
 async def test_generate_page_batch_calls_on_result_as_each_page_finishes(
     page_store, mock_embedding, monkeypatch
 ):
-    from worker.pipeline import page_generator
     from worker.pipeline.ast_analysis import FileAnalysis
     from worker.pipeline.dependency_graph import DependencyGraph
+    from worker.pipeline.page import generator as page_generator
 
     slow_can_finish = asyncio.Event()
     persisted: list[str] = []
@@ -354,6 +356,149 @@ def test_append_source_files_table_at_end():
     content = "# My Page\n\nContent."
     result = _append_source_files_table(content, ["a.py"])
     assert result.endswith("| `a.py` |")
+
+
+async def test_extract_signature_slices_pulls_top_entities(tmp_path):
+    """A6: helper reads source files and returns ≤2 slices × ≤4 lines per file."""
+    from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
+    from worker.pipeline.page.generator import _extract_signature_slices
+
+    src = tmp_path / "module.py"
+    src.write_text(
+        "import os\n"
+        "\n"
+        "def main():\n"
+        '    """Entry point."""\n'
+        "    setup()\n"
+        "    run()\n"
+        "    cleanup()\n"
+        "\n"
+        "class Helper:\n"
+        "    def __init__(self):\n"
+        "        self.x = 1\n"
+        "        self.y = 2\n"
+        "\n"
+        "def _internal():\n"
+        "    pass\n",
+    )
+
+    file_analysis = FileAnalysis(
+        files={
+            "module.py": FileInfo(
+                rel_path="module.py",
+                entities=[
+                    {
+                        "type": "function",
+                        "name": "main",
+                        "start_line": 3,
+                        "end_line": 7,
+                    },
+                    {
+                        "type": "class",
+                        "name": "Helper",
+                        "start_line": 9,
+                        "end_line": 12,
+                    },
+                    {
+                        "type": "function",
+                        "name": "_internal",
+                        "start_line": 14,
+                        "end_line": 15,
+                    },
+                ],
+            )
+        }
+    )
+
+    spec = WikiPageSpec(title="Module", purpose=".", files=["module.py"])
+    slices = await _extract_signature_slices(spec, file_analysis, tmp_path)
+
+    assert "module.py" in slices
+    file_slices = slices["module.py"]
+    # Cap at 2 entities per file
+    assert 1 <= len(file_slices) <= 2
+    assert any("def main" in s for s in file_slices)
+    assert any(s.startswith("Lines ") for s in file_slices)
+    # Each slice capped at 4 lines
+    for s in file_slices:
+        assert len(s.splitlines()[1:]) <= 4
+
+
+async def test_generate_page_uses_en_keywords_as_retrieval_query(
+    page_store, mock_embedding
+):
+    """A4: English keywords from the page spec must become a retrieval query."""
+    llm = AsyncMock()
+    llm.generate.return_value = "## Overview\n\nThe page describes the frontend.\n"
+    fast_llm = _make_mock_fast_llm()
+
+    spec = WikiPageSpec(
+        title="前端界面",
+        purpose="Frontend user interface.",
+        files=["models.py"],
+        en_keywords=["web", "components", "next"],
+    )
+
+    await generate_page(
+        spec,
+        page_store,
+        llm,
+        fast_llm,
+        mock_embedding,
+        repo_name="test",
+    )
+
+    queries = [call.args[0] for call in mock_embedding.embed.await_args_list]
+    assert "web components next" in queries
+
+
+async def test_extract_signature_slices_skips_missing_files(tmp_path):
+    """Missing/unreadable files are skipped without raising."""
+    from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
+    from worker.pipeline.page.generator import _extract_signature_slices
+
+    file_analysis = FileAnalysis(
+        files={
+            "missing.py": FileInfo(
+                rel_path="missing.py",
+                entities=[
+                    {
+                        "type": "function",
+                        "name": "f",
+                        "start_line": 1,
+                        "end_line": 2,
+                    },
+                ],
+            )
+        }
+    )
+    spec = WikiPageSpec(title="X", purpose=".", files=["missing.py"])
+    slices = await _extract_signature_slices(spec, file_analysis, tmp_path)
+    assert slices == {}
+
+
+async def test_extract_signature_slices_empty_when_no_repo_root(tmp_path):
+    """Without repo_root, helper returns an empty dict (no extraction)."""
+    from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
+    from worker.pipeline.page.generator import _extract_signature_slices
+
+    file_analysis = FileAnalysis(
+        files={
+            "a.py": FileInfo(
+                rel_path="a.py",
+                entities=[
+                    {
+                        "type": "function",
+                        "name": "f",
+                        "start_line": 1,
+                        "end_line": 2,
+                    },
+                ],
+            )
+        }
+    )
+    spec = WikiPageSpec(title="X", purpose=".", files=["a.py"])
+    assert await _extract_signature_slices(spec, file_analysis, None) == {}
 
 
 def test_source_files_table_only_includes_passed_files():
@@ -472,3 +617,135 @@ def test_compute_generation_order_handles_cycle():
     # Both pages should appear somewhere (treated as roots due to cycle)
     all_titles = {p.title for level in levels for p in level}
     assert all_titles == {"A", "B"}
+
+
+# ── A4: multi-query retrieval + rank-weighted chunk quota ────────────────
+
+
+def _chunk(file: str, idx: int = 0) -> dict:
+    """Test helper: minimal RAG chunk dict for _balance_chunks tests."""
+    return {
+        "file": file,
+        "start_line": idx,
+        "end_line": idx,
+        "text": f"chunk {idx} from {file}",
+    }
+
+
+def test_balance_chunks_rank_weighted_quota():
+    """Top-ranked file gets the largest share; every file meets the floor."""
+    files = ["a.py", "b.py", "c.py", "d.py", "e.py"]
+    chunks = [_chunk(f, i) for f in files for i in range(20)]  # 100 chunks
+    out = _balance_chunks(chunks, files=files, k=30, floor=2)
+
+    counts = {f: sum(1 for c in out if c["file"] == f) for f in files}
+    # Counts should be non-increasing by rank (top file has the most)
+    ordered = [counts[f] for f in files]
+    assert ordered == sorted(ordered, reverse=True)
+    assert all(counts[f] >= 2 for f in files)
+    assert sum(counts.values()) == 30
+
+
+def test_balance_chunks_floor_only_for_low_rank():
+    """Files at rank >= 6 receive only the floor."""
+    files = [f"f{i}.py" for i in range(8)]
+    chunks = [_chunk(f, i) for f in files for i in range(20)]
+    out = _balance_chunks(chunks, files=files, k=30, floor=2)
+    counts = {f: sum(1 for c in out if c["file"] == f) for f in files}
+    for i in range(6, 8):
+        assert counts[f"f{i}.py"] == 2
+
+
+def test_balance_chunks_reuses_unfilled_ranked_file_quota():
+    """Unused quota from sparse ranked files is reused by other assigned files."""
+    files = ["a.py", "b.py", "c.py"]
+    chunks = [_chunk("a.py", 1)] + [_chunk("b.py", i) for i in range(20)]
+
+    out = _balance_chunks(chunks, files=files, k=10, floor=1)
+
+    assert len(out) == 10
+    assert sum(1 for c in out if c["file"] == "a.py") == 1
+    assert sum(1 for c in out if c["file"] == "b.py") == 9
+
+
+# ── A5: rank-weighted entity quota ───────────────────────────────────────
+
+
+def _entity(file: str, name: str) -> dict:
+    """Test helper: minimal AST entity dict for _format_entity_details tests."""
+    return {
+        "type": "function",
+        "name": name,
+        "signature": f"({name})",
+        "file": file,
+        "start_line": 10,
+        "end_line": 20,
+    }
+
+
+def test_format_entity_details_rank_weighted_per_file_quota():
+    """Top-ranked file gets the largest entity share; every file meets the floor."""
+    from worker.pipeline.page.formatters import _format_entity_details
+
+    files = ["a.py", "b.py", "c.py"]
+    # 20 distinct entities per file so each file has plenty of supply.
+    entities = [_entity(f, f"{f}_e{i}") for f in files for i in range(20)]
+
+    out = _format_entity_details(entities, max_entities=15, files=files)
+
+    # Count rendered entities per file by counting the unique entity-name
+    # markers — each entity renders one `Location: <file>:` line.
+    by_file = {f: out.count(f"Location: {f}:") for f in files}
+
+    # Counts non-increasing by rank — top file has the most.
+    assert by_file["a.py"] > by_file["b.py"]
+    assert by_file["b.py"] >= by_file["c.py"]
+    # Floor: every file gets at least one entity.
+    assert all(by_file[f] >= 1 for f in files)
+    # Total respects the cap.
+    assert sum(by_file.values()) <= 15
+
+
+def test_format_entity_details_floor_only_for_low_rank():
+    """Files at rank >= 6 receive only the floor."""
+    from worker.pipeline.page.formatters import _format_entity_details
+
+    files = [f"f{i}.py" for i in range(8)]
+    entities = [_entity(f, f"{f}_e{i}") for f in files for i in range(20)]
+
+    out = _format_entity_details(entities, max_entities=30, files=files, floor=2)
+    counts = {f: out.count(f"Location: {f}:") for f in files}
+    for i in range(6, 8):
+        assert counts[f"f{i}.py"] == 2
+
+
+def test_format_entity_details_reuses_unfilled_ranked_file_quota():
+    from worker.pipeline.page.formatters import _format_entity_details
+
+    files = ["a.py", "b.py", "c.py"]
+    entities = [_entity("a.py", "a0")] + [_entity("b.py", f"b{i}") for i in range(20)]
+
+    out = _format_entity_details(entities, max_entities=10, files=files, floor=1)
+
+    assert out.count("Location: a.py:") == 1
+    assert out.count("Location: b.py:") == 9
+    assert out.count("- **function**") == 10
+
+
+def test_format_entity_details_without_files_preserves_legacy_behavior():
+    """Without `files`, behaviour falls back to the simple cap (back-compat)."""
+    from worker.pipeline.page.formatters import _format_entity_details
+
+    entities = [_entity("a.py", f"e{i}") for i in range(50)]
+    out = _format_entity_details(entities, max_entities=10)
+    # Back-compat: 10 entity bullets rendered.
+    assert out.count("- **function**") == 10
+
+
+def test_file_stems_strips_directory_and_extension():
+    """_file_stems returns the bare filename without path or extension."""
+    assert _file_stems(["worker/pipeline/foo.py", "src/bar.ts", "baz"]) == [
+        "foo",
+        "bar",
+        "baz",
+    ]

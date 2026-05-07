@@ -28,7 +28,7 @@ class _FakeSliceResult:
 
 def _install_fake_slice_extractor(monkeypatch, *, fail_paths: set[str] | None = None):
     fail_paths = fail_paths or set()
-    module = types.ModuleType("worker.fast_report.slices")
+    module = types.ModuleType("worker.pipeline.retrieval.code_slices")
 
     def extract_source_slice(
         *,
@@ -57,7 +57,7 @@ def _install_fake_slice_extractor(monkeypatch, *, fail_paths: set[str] | None = 
         )
 
     module.extract_source_slice = extract_source_slice
-    monkeypatch.setitem(sys.modules, "worker.fast_report.slices", module)
+    monkeypatch.setitem(sys.modules, "worker.pipeline.retrieval.code_slices", module)
 
 
 def test_profile_for_question_type_uses_adaptive_budgets():
@@ -94,6 +94,174 @@ def test_expansion_graph_for_maps_question_types():
     assert expansion_graph_for("testing") == ("sibling_token_overlap", "imports")
     assert expansion_graph_for("implementation_location") == ("imports", None)
     assert expansion_graph_for("other") == ("imports_and_imported_by", None)
+
+
+def test_build_slice_candidates_compatibility_loads_source_slices(tmp_path):
+    from worker.fast_report.search import (
+        _load_slice_extractor,
+        _RankedFile,
+        _repo_build_slice_candidates,
+        _ScoredEntity,
+        profile_for_question_type,
+    )
+
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "service.py").write_text(
+        "\n".join(
+            [
+                "def helper():",
+                "    return 'helper'",
+                "",
+                "def build_service():",
+                "    value = helper()",
+                "    return value",
+                "",
+                "def other():",
+                "    return None",
+            ]
+        )
+    )
+    entity = {
+        "name": "build_service",
+        "start_line": 4,
+        "end_line": 6,
+        "symbol_path": "app.service.build_service",
+    }
+    files = {
+        "app/service.py": {
+            "path": "app/service.py",
+            "tokens": ["service"],
+            "imports": [],
+            "imported_by": [],
+            "external_deps": [],
+            "entities": [entity],
+            "is_test": False,
+            "is_config": False,
+        }
+    }
+    selected = [
+        _RankedFile(
+            path="app/service.py",
+            score=3.0,
+            matched_entity=entity,
+            matched_entities=[_ScoredEntity(entity=entity, score=3.0)],
+        )
+    ]
+
+    slices = _repo_build_slice_candidates(
+        files,
+        selected,
+        profile_for_question_type("implementation_location"),
+        clone_root=tmp_path,
+        slice_extractor=_load_slice_extractor(),
+    )
+
+    assert slices
+    assert "def build_service():" in slices[0].code
+    assert "return value" in slices[0].code
+
+
+def test_repo_build_slice_candidates_uses_injected_extractor(tmp_path):
+    """``build_slice_candidates`` invokes the injected ``slice_extractor``.
+
+    The production caller in ``_search_for_question_evidence`` resolves the
+    extractor via ``_load_slice_extractor()`` and passes it down; this test
+    only verifies that an injected extractor is actually consulted for the
+    matched entity span.
+    """
+    from worker.fast_report import search
+    from worker.fast_report.search import (
+        _RankedFile,
+        _ScoredEntity,
+        profile_for_question_type,
+    )
+
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "service.py").write_text("def build_service():\n    pass\n")
+    entity = {
+        "name": "build_service",
+        "start_line": 1,
+        "end_line": 2,
+        "symbol_path": "app.service.build_service",
+    }
+    files = {
+        "app/service.py": {
+            "path": "app/service.py",
+            "tokens": ["service"],
+            "entities": [entity],
+        }
+    }
+    selected = [
+        _RankedFile(
+            path="app/service.py",
+            score=3.0,
+            matched_entity=entity,
+            matched_entities=[_ScoredEntity(entity=entity, score=3.0)],
+        )
+    ]
+    calls = []
+
+    def fake_slice_extractor(**kwargs):
+        calls.append(kwargs["rel_path"])
+        return _FakeSliceResult(
+            snippet_start=1,
+            snippet_end=2,
+            full_start=1,
+            full_end=2,
+            code="hooked source slice",
+            truncated_lines=0,
+        )
+
+    slices = search._repo_build_slice_candidates(
+        files,
+        selected,
+        profile_for_question_type("implementation_location"),
+        clone_root=tmp_path,
+        slice_extractor=fake_slice_extractor,
+    )
+
+    assert calls == ["app/service.py"]
+    assert slices[0].code == "hooked source slice"
+
+
+def test_fast_report_tokenize_preserves_two_character_ascii_tokens():
+    from worker.fast_report.search import _tokenize
+
+    assert {"ui", "db", "s3", "go"} <= _tokenize("UI DB S3 Go")
+
+
+def test_fast_report_retrieval_scores_two_character_query_tokens():
+    from worker.fast_report.search import retrieve_code_evidence
+
+    index = {
+        "files": {
+            "app/ui.py": {
+                "path": "app/ui.py",
+                "tokens": [],
+                "imports": [],
+                "imported_by": [],
+                "external_deps": [],
+                "entities": [
+                    {
+                        "name": "UI",
+                        "type": "class",
+                        "start_line": 1,
+                        "end_line": 5,
+                        "signature": "class UI",
+                        "docstring": "UI composition root.",
+                        "symbol_path": "app.ui.UI",
+                    }
+                ],
+                "is_test": False,
+                "is_config": False,
+            }
+        }
+    }
+    plan = _Plan(question_type="architecture", search_terms=["UI"])
+
+    layer = retrieve_code_evidence(index, plan, "How does UI work?")
+
+    assert [snippet["file"] for snippet in layer.snippets] == ["app/ui.py"]
 
 
 def test_architecture_retrieval_emits_top_k_multi_slice_source_citations(

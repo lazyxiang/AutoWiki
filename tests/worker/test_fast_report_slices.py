@@ -1,8 +1,11 @@
+import importlib
+import sys
+import types
 from pathlib import Path
 
 import pytest
 
-from worker.fast_report.slices import SliceResult, extract_source_slice
+from worker.pipeline.retrieval.code_slices import SliceResult, extract_source_slice
 
 
 def _write(tmp_path: Path, name: str, content: str) -> Path:
@@ -109,8 +112,9 @@ def test_over_cap_appends_truncation_marker_python(tmp_path):
     assert result.truncated_lines == 15
     assert result.snippet_end == 5
     assert result.full_start == 1
-    assert result.full_end == 10
+    assert result.full_end == 6
     assert result.code.splitlines()[5] == "# ... 15 more lines truncated"
+    assert "line7" not in result.code
 
 
 @pytest.mark.parametrize(
@@ -151,3 +155,19 @@ def test_truncation_marker_per_language(tmp_path, ext, marker_prefix):
     assert result.code.splitlines()[3] == (
         f"{marker_prefix} ... 7 more lines truncated"
     )
+
+
+def test_old_fast_report_slices_module_warns_and_reexports(monkeypatch):
+    package = types.ModuleType("worker.fast_report")
+    package.__path__ = [str(Path(__file__).parents[2] / "worker" / "fast_report")]
+    monkeypatch.setitem(sys.modules, "worker.fast_report", package)
+    monkeypatch.delitem(sys.modules, "worker.fast_report.slices", raising=False)
+
+    with pytest.warns(
+        DeprecationWarning,
+        match="worker.fast_report.slices is deprecated",
+    ):
+        module = importlib.import_module("worker.fast_report.slices")
+
+    assert module.extract_source_slice is extract_source_slice
+    assert module.SliceResult is SliceResult

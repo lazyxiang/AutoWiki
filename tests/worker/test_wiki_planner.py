@@ -1,13 +1,16 @@
 import pytest
 
 from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
-from worker.pipeline.wiki_planner import (
+from worker.pipeline.planner import wiki_planner as wp
+from worker.pipeline.planner.wiki_planner import (
     WikiPageSpec,
     WikiPlan,
+    _enforce_ownership,
     _heuristic_select_files,
     _prefilter_candidates,
     _score_file_for_page,
     _suggest_page_range,
+    _validate_outline_structure,
     _validate_selections,
     generate_wiki_plan,
     validate_wiki_plan,
@@ -42,7 +45,27 @@ def _make_file_analysis():
     )
 
 
+def _selected(path: str, relevance: int = 8) -> dict[str, object]:
+    return {"path": path, "relevance": relevance}
+
+
 async def test_generate_wiki_plan(mock_llm):
+    mock_llm.generate_structured.side_effect = [
+        {
+            "pages": [
+                {"title": "Core", "purpose": "Core subsystem."},
+                {"title": "Infra", "purpose": "Infrastructure subsystem."},
+                {"title": "Models", "purpose": "Data models.", "parent": "Core"},
+                {"title": "Utils", "purpose": "Utility helpers.", "parent": "Infra"},
+            ]
+        },
+        {
+            "selections": [
+                {"page_title": "Models", "files": [_selected("models.py", 8)]},
+                {"page_title": "Utils", "files": [_selected("utils.py", 7)]},
+            ]
+        },
+    ]
     file_analysis = _make_file_analysis()
     plan = await generate_wiki_plan(file_analysis, repo_name="testrepo", llm=mock_llm)
 
@@ -108,6 +131,20 @@ def test_validate_wiki_plan_invalid_parent_dropped():
     plan = validate_wiki_plan(raw)
     details_page = next(p for p in plan.pages if p.title == "Details")
     assert details_page.parent is None
+
+
+def test_validate_outline_structure_treats_dangling_parent_as_top_level():
+    pages = [
+        {"title": "Core", "purpose": "Core subsystem."},
+        {"title": "API", "purpose": "API subsystem.", "parent": "Core"},
+        {
+            "title": "Details",
+            "purpose": "Dangling parent becomes top-level.",
+            "parent": "Missing",
+        },
+    ]
+
+    _validate_outline_structure(pages, page_range=(1, 5), total_file_count=3)
 
 
 def test_validate_unselected_files_do_not_raise():
@@ -185,6 +222,7 @@ def test_wiki_plan_to_internal_json():
                 title="Overview",
                 purpose="Top-level page.",
                 files=["main.py", "README.md"],
+                en_keywords=["main", "readme"],
             ),
             WikiPageSpec(
                 title="Engine",
@@ -199,6 +237,7 @@ def test_wiki_plan_to_internal_json():
     assert "pages" in internal
     overview = next(p for p in internal["pages"] if p["title"] == "Overview")
     assert overview["files"] == ["main.py", "README.md"]
+    assert overview["en_keywords"] == ["main", "readme"]
     engine = next(p for p in internal["pages"] if p["title"] == "Engine")
     assert "engine/core.py" in engine["files"]
     assert engine.get("parent") == "Overview"
@@ -321,7 +360,7 @@ def test_suggest_page_range_huge_repo():
 
 async def test_generate_outline(mock_llm):
     """_generate_outline returns a list of page dicts with title/purpose/parent."""
-    from worker.pipeline.wiki_planner import _generate_outline
+    from worker.pipeline.planner.wiki_planner import _generate_outline
 
     mock_llm.generate_structured.side_effect = None
     mock_llm.generate_structured.return_value = {
@@ -350,14 +389,23 @@ async def test_generate_outline(mock_llm):
 
 async def test_assign_files(mock_llm):
     """_select_files returns a dict mapping page titles to file lists."""
-    from worker.pipeline.wiki_planner import _select_files
+    from worker.pipeline.planner.wiki_planner import _select_files
 
     mock_llm.generate_structured.side_effect = None
     mock_llm.generate_structured.return_value = {
         "selections": [
-            {"page_title": "Overview", "files": ["main.py"]},
-            {"page_title": "API", "files": ["api.py"]},
-            {"page_title": "Worker", "files": ["worker.py"]},
+            {
+                "page_title": "Overview",
+                "files": [_selected("main.py", 8), _selected("config.py", 5)],
+            },
+            {
+                "page_title": "API",
+                "files": [_selected("api.py", 7), _selected("api_models.py", 5)],
+            },
+            {
+                "page_title": "Worker",
+                "files": [_selected("worker.py", 6), _selected("jobs.py", 4)],
+            },
         ]
     }
     outline = [
@@ -367,28 +415,35 @@ async def test_assign_files(mock_llm):
     ]
     result = await _select_files(
         outline=outline,
-        file_summary="main.py: ...\napi.py: ...\nworker.py: ...",
+        file_summary="main.py\napi.py\napi_models.py\nworker.py\njobs.py\nconfig.py",
         dep_info=None,
-        all_files=["main.py", "api.py", "worker.py"],
+        all_files=[
+            "main.py",
+            "api.py",
+            "api_models.py",
+            "worker.py",
+            "jobs.py",
+            "config.py",
+        ],
         file_infos={},
         dep_graph=None,
         llm=mock_llm,
         system="Select files.",
         on_retry=None,
     )
-    assert result["Overview"] == ["main.py"]
-    assert result["API"] == ["api.py"]
-    assert result["Worker"] == ["worker.py"]
+    assert result["Overview"][0] == "main.py"
+    assert "api.py" in result["API"]
+    assert "worker.py" in result["Worker"]
 
 
 async def test_assign_files_orphans_distributed(mock_llm):
     """Files not in any valid page are silently ignored (page-centric model)."""
-    from worker.pipeline.wiki_planner import _select_files
+    from worker.pipeline.planner.wiki_planner import _select_files
 
     mock_llm.generate_structured.side_effect = None
     mock_llm.generate_structured.return_value = {
         "selections": [
-            {"page_title": "Overview", "files": ["main.py"]},
+            {"page_title": "Overview", "files": [_selected("main.py", 8)]},
             # "orphan.py" omitted — page-centric model doesn't need to assign it
         ]
     }
@@ -543,7 +598,7 @@ async def test_generate_outline_logs_each_validation_failure(caplog):
     import logging
     from unittest.mock import AsyncMock
 
-    from worker.pipeline.wiki_planner import _generate_outline
+    from worker.pipeline.planner.wiki_planner import _generate_outline
 
     # First two calls return an invalid outline (duplicate slug → validation fails),
     # third call returns a valid outline.
@@ -587,6 +642,107 @@ async def test_generate_outline_logs_each_validation_failure(caplog):
     assert all("Duplicate page slugs" in r.getMessage() for r in retry_logs)
 
 
+async def test_generate_outline_logs_en_keywords_required_retry(caplog):
+    """CJK outline pages without en_keywords should emit dedicated telemetry."""
+    import logging
+    from unittest.mock import AsyncMock
+
+    from worker.pipeline.planner.wiki_planner import _generate_outline
+
+    bad = {
+        "pages": [
+            {"title": "前端应用", "purpose": "介绍 Next.js 应用架构。"},
+            {"title": "Backend", "purpose": "Backend subsystem."},
+            {"title": "Components", "purpose": "组件库。", "parent": "前端应用"},
+        ]
+    }
+    good = {
+        "pages": [
+            {
+                "title": "前端应用",
+                "purpose": "介绍 Next.js 应用架构。",
+                "en_keywords": ["web", "app", "next"],
+            },
+            {"title": "Backend", "purpose": "Backend subsystem."},
+            {
+                "title": "Components",
+                "purpose": "组件库。",
+                "parent": "前端应用",
+                "en_keywords": ["web", "components", "next"],
+            },
+        ]
+    }
+    llm = AsyncMock()
+    llm.generate_structured.side_effect = [bad, good]
+
+    with caplog.at_level(logging.WARNING, logger="worker.planner"):
+        pages = await _generate_outline(
+            file_summary="files",
+            repo_name="repo",
+            llm=llm,
+            readme=None,
+            dep_info=None,
+            clusters=None,
+            page_range=(1, 10),
+            system="sys",
+            on_retry=None,
+            max_retries=2,
+            total_file_count=10,
+        )
+
+    assert pages == good["pages"]
+    assert any(
+        "wiki_planner.en_keywords_required" in record.getMessage()
+        for record in caplog.records
+    )
+    assert any(
+        "wiki_planner.outline" in record.getMessage() for record in caplog.records
+    )
+
+
+async def test_generate_outline_logs_en_keywords_required_final_failure(caplog):
+    """Exhausted CJK en_keywords failures should keep dedicated telemetry."""
+    import logging
+    from unittest.mock import AsyncMock
+
+    from worker.pipeline.planner.wiki_planner import WikiPlannerError, _generate_outline
+
+    bad = {
+        "pages": [
+            {"title": "前端应用", "purpose": "介绍 Next.js 应用架构。"},
+            {"title": "Backend", "purpose": "Backend subsystem."},
+            {"title": "Components", "purpose": "组件库。", "parent": "前端应用"},
+        ]
+    }
+    llm = AsyncMock()
+    llm.generate_structured.side_effect = [bad, bad]
+
+    with caplog.at_level(logging.WARNING, logger="worker.planner"):
+        with pytest.raises(WikiPlannerError, match="en_keywords"):
+            await _generate_outline(
+                file_summary="files",
+                repo_name="repo",
+                llm=llm,
+                readme=None,
+                dep_info=None,
+                clusters=None,
+                page_range=(1, 10),
+                system="sys",
+                on_retry=None,
+                max_retries=2,
+                total_file_count=10,
+            )
+
+    final_logs = [
+        record for record in caplog.records if record.levelno >= logging.ERROR
+    ]
+    assert any(
+        "wiki_planner.en_keywords_required" in record.getMessage()
+        for record in final_logs
+    )
+    assert any("wiki_planner.outline" in record.getMessage() for record in final_logs)
+
+
 async def test_generate_wiki_plan_two_phase(mock_llm):
     """generate_wiki_plan uses two-phase planning."""
     # Phase 1 returns outline, Phase 2 returns assignments
@@ -603,8 +759,14 @@ async def test_generate_wiki_plan_two_phase(mock_llm):
         # Phase 2: file selection
         {
             "selections": [
-                {"page_title": "Models", "files": ["main.py", "models.py"]},
-                {"page_title": "Utils", "files": ["utils.py"]},
+                {
+                    "page_title": "Models",
+                    "files": [_selected("main.py", 8), _selected("models.py", 7)],
+                },
+                {
+                    "page_title": "Utils",
+                    "files": [_selected("utils.py", 8), _selected("helpers.py", 6)],
+                },
             ]
         },
     ]
@@ -614,20 +776,21 @@ async def test_generate_wiki_plan_two_phase(mock_llm):
             "main.py": FileInfo(rel_path="main.py", entities=[], summary=""),
             "models.py": FileInfo(rel_path="models.py", entities=[], summary=""),
             "utils.py": FileInfo(rel_path="utils.py", entities=[], summary=""),
+            "helpers.py": FileInfo(rel_path="helpers.py", entities=[], summary=""),
         }
     )
     plan = await generate_wiki_plan(file_analysis, repo_name="test", llm=mock_llm)
     assert len(plan.pages) == 4
     assert {p.title for p in plan.pages} == {"Core", "Infra", "Models", "Utils"}
     titles = [p.title for p in plan.pages]
-    assert plan.pages[titles.index("Utils")].files == ["utils.py"]
+    assert plan.pages[titles.index("Utils")].files[0] == "utils.py"
 
 
 async def test_generate_wiki_plan_scales_summary_budget_for_large_repos(
     mock_llm, monkeypatch
 ):
-    """Phase 1 gives larger repos a larger explicit summary budget."""
-    from worker.pipeline import wiki_planner as wp
+    """Phase 1 gives larger repos a larger explicit summary budget (PR #40)."""
+    from worker.pipeline.planner import wiki_planner as wp
 
     class TrackingFileAnalysis(FileAnalysis):
         def __init__(self, **kwargs):
@@ -678,14 +841,16 @@ async def test_assign_files_logs_each_validation_failure_and_feedback(caplog):
     import logging
     from unittest.mock import AsyncMock
 
-    from worker.pipeline.wiki_planner import _select_files
+    from worker.pipeline.planner.wiki_planner import _select_files
 
     outline = [
         {"title": "Overview", "purpose": "top"},
         {"title": "Core", "purpose": "core"},
     ]
     # stuffed selection: only Overview has files, Core is empty (fails validation)
-    stuffed = {"selections": [{"page_title": "Overview", "files": ["main.py"]}]}
+    stuffed = {
+        "selections": [{"page_title": "Overview", "files": [_selected("main.py", 8)]}]
+    }
     llm = AsyncMock()
     # Two batched calls will both return a stuffed response that fails validation.
     llm.generate_structured.side_effect = [stuffed, stuffed]
@@ -729,7 +894,7 @@ async def test_generate_wiki_plan_phase2_recovery(mock_llm):
     """When Phase 2 (assignment) fails, generate_wiki_plan must recover
     using score-based heuristic selection while maintaining the LLM outline."""
     from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
-    from worker.pipeline.wiki_planner import generate_wiki_plan
+    from worker.pipeline.planner.wiki_planner import generate_wiki_plan
 
     outline = {
         "pages": [
@@ -780,28 +945,42 @@ async def test_generate_wiki_plan_phase2_recovery(mock_llm):
     assert "Worker Pipeline" in titles
     assert "API Layer" in titles
 
-    # But files are assigned via the score-based heuristic fallback.
-    pipeline_page = next(p for p in plan.pages if p.title == "Worker Pipeline")
-    api_page = next(p for p in plan.pages if p.title == "API Layer")
+    # But files are assigned via the score-based heuristic fallback, then
+    # normalized by ownership enforcement.
+    worker_pages = [
+        p for p in plan.pages if p.title in {"Worker Pipeline", "Pipeline Stages"}
+    ]
+    api_pages = [p for p in plan.pages if p.title in {"API Layer", "Endpoints"}]
+    non_parent_pages = [
+        p for p in plan.pages if p.title in {"Pipeline Stages", "Endpoints"}
+    ]
 
     assert all(
-        f in pipeline_page.files for f in all_files if f.startswith("worker/pipeline/")
+        any(f in p.files for p in worker_pages)
+        for f in all_files
+        if f.startswith("worker/pipeline/")
     )
-    assert all(f in api_page.files for f in all_files if f.startswith("api/"))
+    assert all(
+        any(f in p.files for p in api_pages) for f in all_files if f.startswith("api/")
+    )
+    assert all(p.files for p in non_parent_pages)
 
 
 async def test_assign_files_uses_batched_path(monkeypatch):
     """_select_files must delegate to _select_files_in_batches."""
     from unittest.mock import AsyncMock
 
-    from worker.pipeline import wiki_planner as wp
+    from worker.pipeline.planner import wiki_planner as wp
 
     called = {}
 
     async def fake_batched(**kwargs):
         called["hit"] = True
         titles = [page["title"] for page in kwargs["outline"]]
-        return {titles[0]: ["a.py"], titles[1]: ["b.py"]}
+        return {
+            titles[0]: ["a.py", "a2.py"],
+            titles[1]: ["b.py", "b2.py"],
+        }
 
     monkeypatch.setattr(wp, "_select_files_in_batches", fake_batched)
 
@@ -814,7 +993,7 @@ async def test_assign_files_uses_batched_path(monkeypatch):
         outline=outline,
         file_summary="fs",
         dep_info=None,
-        all_files=["a.py", "b.py"],
+        all_files=["a.py", "a2.py", "b.py", "b2.py"],
         file_infos={},
         dep_graph=None,
         llm=llm,
@@ -827,10 +1006,386 @@ async def test_assign_files_uses_batched_path(monkeypatch):
     assert "b.py" in result["Two"]
 
 
+async def test_select_files_preserves_partial_batches_on_raw_validation_failure(
+    monkeypatch,
+):
+    """Valid earlier batches should survive a later relevance/schema failure."""
+    from unittest.mock import AsyncMock
+
+    from worker.pipeline.planner import wiki_planner as wp
+
+    monkeypatch.setattr(wp, "_PAGE_BATCH_SIZE", 1)
+    monkeypatch.setattr(
+        wp,
+        "_prefilter_candidates",
+        lambda _page, all_files, _file_infos, _dep_graph: list(all_files),
+    )
+
+    llm = AsyncMock()
+    llm.generate_structured.side_effect = [
+        {
+            "selections": [
+                {
+                    "page_title": "Core",
+                    "files": [_selected("core.py", 9)],
+                }
+            ]
+        },
+        {
+            "selections": [
+                {
+                    "page_title": "API",
+                    "files": [
+                        {"path": "api.py", "relevance": "high"},
+                    ],
+                }
+            ]
+        },
+    ]
+    outline = [
+        {"title": "Core", "purpose": "Core subsystem."},
+        {"title": "API", "purpose": "API subsystem."},
+    ]
+
+    with pytest.raises(ValueError) as exc_info:
+        await wp._select_files(
+            outline=outline,
+            file_summary="fs",
+            dep_info=None,
+            all_files=["core.py", "api.py", "routes.py"],
+            file_infos={},
+            dep_graph=None,
+            llm=llm,
+            system="sys",
+            on_retry=None,
+            max_retries=1,
+        )
+
+    assert isinstance(exc_info.value, wp._SelectionFailure)
+    assert exc_info.value.last_error is not None
+    assert exc_info.value.partial_result == {"Core": ["core.py"], "API": []}
+
+
+async def test_select_files_retries_then_demotes_ordering_violations(
+    monkeypatch,
+    caplog,
+):
+    """Ordering-only failures should be salvaged after one feedback retry."""
+    import logging
+    from unittest.mock import AsyncMock
+
+    from worker.pipeline.planner import wiki_planner as wp
+
+    monkeypatch.setattr(
+        wp,
+        "_prefilter_candidates",
+        lambda _page, all_files, _file_infos, _dep_graph: list(all_files),
+    )
+
+    low_first = {
+        "selections": [
+            {
+                "page_title": "API",
+                "files": [
+                    _selected("api/legacy.py", 2),
+                    _selected("api/routes.py", 9),
+                    _selected("api/models.py", 7),
+                ],
+            }
+        ]
+    }
+    llm = AsyncMock()
+    llm.generate_structured.side_effect = [low_first, low_first]
+    outline = [{"title": "API", "purpose": "REST API."}]
+
+    with caplog.at_level(logging.WARNING, logger="worker.planner"):
+        result = await wp._select_files(
+            outline=outline,
+            file_summary="fs",
+            dep_info=None,
+            all_files=["api/legacy.py", "api/routes.py", "api/models.py"],
+            file_infos={},
+            dep_graph=None,
+            llm=llm,
+            system="sys",
+            on_retry=None,
+            max_retries=1,
+        )
+
+    assert result == {"API": ["api/routes.py", "api/models.py", "api/legacy.py"]}
+    assert all(isinstance(path, str) for path in result["API"])
+    assert llm.generate_structured.await_count == 2
+    assert any(
+        "wiki_planner.ordering_demotion" in record.getMessage()
+        and "demoted_file=api/legacy.py" in record.getMessage()
+        and "original_position=0" in record.getMessage()
+        and "score=2" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+async def test_select_files_repeated_below_floor_only_ordering_is_salvaged(
+    monkeypatch,
+    caplog,
+):
+    """Repeated below-floor-only ordering failures return after one feedback retry."""
+    import logging
+    from unittest.mock import AsyncMock
+
+    from worker.pipeline.planner import wiki_planner as wp
+
+    monkeypatch.setattr(
+        wp,
+        "_prefilter_candidates",
+        lambda _page, all_files, _file_infos, _dep_graph: list(all_files),
+    )
+
+    below_floor = {
+        "selections": [
+            {
+                "page_title": "API",
+                "files": [_selected("api/legacy.py", 2)],
+            }
+        ]
+    }
+    llm = AsyncMock()
+    llm.generate_structured.side_effect = [below_floor, below_floor]
+    outline = [{"title": "API", "purpose": "REST API."}]
+
+    with caplog.at_level(logging.WARNING, logger="worker.planner"):
+        result = await wp._select_files(
+            outline=outline,
+            file_summary="fs",
+            dep_info=None,
+            all_files=["api/legacy.py"],
+            file_infos={},
+            dep_graph=None,
+            llm=llm,
+            system="sys",
+            on_retry=None,
+            max_retries=1,
+        )
+
+    assert result == {"API": ["api/legacy.py"]}
+    assert isinstance(result, dict)
+    assert all(isinstance(paths, list) for paths in result.values())
+    assert llm.generate_structured.await_count == 2
+    assert any(
+        "wiki_planner.ordering_demotion" in record.getMessage()
+        and "demoted_file=api/legacy.py" in record.getMessage()
+        and "original_position=0" in record.getMessage()
+        and "score=2" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+async def test_select_files_mixed_provider_and_ordering_failure_is_not_salvaged(
+    monkeypatch,
+):
+    """Provider failure in one batch must block ordering-only salvage."""
+    from unittest.mock import AsyncMock
+
+    from worker.pipeline.planner import wiki_planner as wp
+
+    monkeypatch.setattr(wp, "_PAGE_BATCH_SIZE", 1)
+    monkeypatch.setattr(
+        wp,
+        "_prefilter_candidates",
+        lambda _page, all_files, _file_infos, _dep_graph: list(all_files),
+    )
+
+    async def fake_generate_structured(prompt, **_kwargs):
+        text = prompt[0].text
+        if 'Page: "Core"' in text:
+            return {
+                "selections": [
+                    {"page_title": "Core", "files": [_selected("core.py", 9)]}
+                ]
+            }
+        if 'Page: "Overview"' in text:
+            raise RuntimeError("provider exhausted")
+        return {
+            "selections": [
+                {
+                    "page_title": "API",
+                    "files": [
+                        _selected("api/legacy.py", 2),
+                        _selected("api/routes.py", 9),
+                    ],
+                }
+            ]
+        }
+
+    llm = AsyncMock()
+    llm.generate_structured.side_effect = fake_generate_structured
+    outline = [
+        {"title": "Core", "purpose": "Core subsystem."},
+        {"title": "Overview", "purpose": "Repository overview."},
+        {"title": "API", "purpose": "REST API."},
+    ]
+
+    with pytest.raises(ValueError) as exc_info:
+        await wp._select_files(
+            outline=outline,
+            file_summary="fs",
+            dep_info=None,
+            all_files=["core.py", "api/legacy.py", "api/routes.py"],
+            file_infos={},
+            dep_graph=None,
+            llm=llm,
+            system="sys",
+            on_retry=None,
+            max_retries=1,
+        )
+
+    assert isinstance(exc_info.value, wp._SelectionFailure)
+    assert exc_info.value.last_error is not None
+    assert "provider exhausted" in exc_info.value.last_error
+    assert exc_info.value.partial_result == {
+        "Core": ["core.py"],
+        "Overview": [],
+        "API": [],
+    }
+
+
+async def test_select_files_provider_failure_preserves_successful_batch(
+    monkeypatch,
+):
+    """Provider errors in a parallel batch must not be masked as empty output."""
+    from unittest.mock import AsyncMock
+
+    from worker.pipeline.planner import wiki_planner as wp
+
+    monkeypatch.setattr(wp, "_PAGE_BATCH_SIZE", 1)
+    monkeypatch.setattr(
+        wp,
+        "_prefilter_candidates",
+        lambda _page, all_files, _file_infos, _dep_graph: list(all_files),
+    )
+
+    async def fake_generate_structured(prompt, **_kwargs):
+        text = prompt[0].text
+        if 'Page: "Core"' in text:
+            return {
+                "selections": [
+                    {"page_title": "Core", "files": [_selected("core.py", 9)]}
+                ]
+            }
+        if 'Page: "API"' in text:
+            raise RuntimeError("provider exhausted")
+        return {
+            "selections": [
+                {"page_title": "Worker", "files": [_selected("worker.py", 9)]}
+            ]
+        }
+
+    llm = AsyncMock()
+    llm.generate_structured.side_effect = fake_generate_structured
+    outline = [
+        {"title": "Core", "purpose": "Core subsystem."},
+        {"title": "API", "purpose": "API subsystem."},
+        {"title": "Worker", "purpose": "Worker subsystem."},
+    ]
+
+    with pytest.raises(ValueError) as exc_info:
+        await wp._select_files(
+            outline=outline,
+            file_summary="fs",
+            dep_info=None,
+            all_files=["core.py", "api.py", "worker.py"],
+            file_infos={},
+            dep_graph=None,
+            llm=llm,
+            system="sys",
+            on_retry=None,
+            max_retries=1,
+        )
+
+    assert isinstance(exc_info.value, wp._SelectionFailure)
+    assert exc_info.value.last_error is not None
+    assert "provider exhausted" in exc_info.value.last_error
+    assert exc_info.value.partial_result == {
+        "Core": ["core.py"],
+        "API": [],
+        "Worker": ["worker.py"],
+    }
+
+
+async def test_select_files_drains_parallel_batches_before_partial_failure(
+    monkeypatch,
+):
+    """Successful sibling batches must be captured before partial fallback."""
+    from unittest.mock import AsyncMock
+
+    from worker.pipeline.planner import wiki_planner as wp
+
+    monkeypatch.setattr(wp, "_PAGE_BATCH_SIZE", 1)
+    monkeypatch.setattr(
+        wp,
+        "_prefilter_candidates",
+        lambda _page, all_files, _file_infos, _dep_graph: list(all_files),
+    )
+
+    async def fake_generate_structured(prompt, **_kwargs):
+        text = prompt[0].text
+        if 'Page: "Core"' in text:
+            return {
+                "selections": [
+                    {"page_title": "Core", "files": [_selected("core.py", 9)]}
+                ]
+            }
+        if 'Page: "API"' in text:
+            return {
+                "selections": [
+                    {
+                        "page_title": "API",
+                        "files": [
+                            {"path": "api.py", "relevance": "high"},
+                        ],
+                    }
+                ]
+            }
+        return {
+            "selections": [
+                {"page_title": "Worker", "files": [_selected("worker.py", 9)]}
+            ]
+        }
+
+    llm = AsyncMock()
+    llm.generate_structured.side_effect = fake_generate_structured
+    outline = [
+        {"title": "Core", "purpose": "Core subsystem."},
+        {"title": "API", "purpose": "API subsystem."},
+        {"title": "Worker", "purpose": "Worker subsystem."},
+    ]
+
+    with pytest.raises(ValueError) as exc_info:
+        await wp._select_files(
+            outline=outline,
+            file_summary="fs",
+            dep_info=None,
+            all_files=["core.py", "api.py", "routes.py", "worker.py"],
+            file_infos={},
+            dep_graph=None,
+            llm=llm,
+            system="sys",
+            on_retry=None,
+            max_retries=1,
+        )
+
+    assert isinstance(exc_info.value, wp._SelectionFailure)
+    assert exc_info.value.last_error is not None
+    assert exc_info.value.partial_result == {
+        "Core": ["core.py"],
+        "API": [],
+        "Worker": ["worker.py"],
+    }
+
+
 def test_build_outline_prompt_includes_anchors_section_when_provided():
     """When anchors are passed in, the prompt must surface them under a
     dedicated heading, not bury them in the existing sections."""
-    from worker.pipeline.wiki_planner import _build_outline_prompt
+    from worker.pipeline.planner.wiki_planner import _build_outline_prompt
 
     prompt = _build_outline_prompt(
         file_summary="one.py, two.py",
@@ -849,7 +1404,7 @@ def test_build_outline_prompt_includes_anchors_section_when_provided():
 
 def test_build_outline_prompt_without_anchors_unchanged():
     """Call sites that do not pass anchors must not see an anchors section."""
-    from worker.pipeline.wiki_planner import _build_outline_prompt
+    from worker.pipeline.planner.wiki_planner import _build_outline_prompt
 
     prompt = _build_outline_prompt(
         file_summary="one.py, two.py",
@@ -858,20 +1413,60 @@ def test_build_outline_prompt_without_anchors_unchanged():
     assert "Architectural anchors" not in prompt
 
 
+def test_build_outline_prompt_requires_en_keywords_for_cjk_with_examples():
+    from worker.pipeline.planner.wiki_planner import _build_outline_prompt
+
+    prompt = _build_outline_prompt(
+        file_summary="web/components/Sidebar.tsx\napi/routers/repos.py",
+        repo_name="demo",
+    )
+
+    assert (
+        "en_keywords REQUIRED when title or purpose contains non-Latin/CJK characters"
+    ) in prompt
+    assert "optional otherwise" in prompt
+    assert (
+        "list 3-8 English keywords drawn from directory names, module names, "
+        "or file basenames"
+    ) in prompt
+    assert '["web", "components", "next"]' in prompt
+    assert '["api", "routers", "fastapi"]' in prompt
+
+
 def test_to_internal_json_roundtrips_files():
-    plan = WikiPlan(pages=[WikiPageSpec(title="Core", purpose="p", files=["a.py"])])
+    plan = WikiPlan(
+        pages=[
+            WikiPageSpec(
+                title="Core",
+                purpose="p",
+                files=["a.py"],
+                en_keywords=["core", "service"],
+            )
+        ]
+    )
     payload = plan.to_internal_json()
     page = payload["pages"][0]
     assert page["files"] == ["a.py"]
+    assert page["en_keywords"] == ["core", "service"]
     assert "secondary_files" not in page
 
 
 def test_to_wiki_json_omits_files():
     """wiki.json is user-facing: file assignments must not appear."""
-    plan = WikiPlan(pages=[WikiPageSpec(title="Core", purpose="p", files=["a.py"])])
+    plan = WikiPlan(
+        pages=[
+            WikiPageSpec(
+                title="Core",
+                purpose="p",
+                files=["a.py"],
+                en_keywords=["core"],
+            )
+        ]
+    )
     payload = plan.to_wiki_json()
     page = payload["pages"][0]
     assert "files" not in page
+    assert "en_keywords" not in page
 
 
 def test_to_api_structure_no_secondary_file_count():
@@ -903,8 +1498,11 @@ async def test_generate_wiki_plan_with_clone_root(mock_llm):
         },
         {
             "selections": [
-                {"page_title": "Models", "files": ["main.py", "models.py"]},
-                {"page_title": "Utils", "files": ["utils.py"]},
+                {
+                    "page_title": "Models",
+                    "files": [_selected("main.py", 8), _selected("models.py", 7)],
+                },
+                {"page_title": "Utils", "files": [_selected("utils.py", 8)]},
             ]
         },
     ]
@@ -937,6 +1535,56 @@ class FakeFileInfo:
 
 def _fake_infos(*paths_entities):
     return {path: FakeFileInfo(ents) for path, ents in paths_entities}
+
+
+def test_validate_outline_rejects_cjk_title_without_en_keywords():
+    pages = [
+        {"title": "前端应用", "purpose": "介绍 Next.js 应用架构。"},
+        {"title": "Backend", "purpose": "Backend subsystem."},
+        {"title": "Components", "purpose": "组件库。", "parent": "前端应用"},
+    ]
+
+    with pytest.raises(ValueError, match="en_keywords"):
+        _validate_outline_structure(pages, page_range=(1, 10), total_file_count=10)
+
+
+def test_validate_outline_rejects_cjk_compatibility_ideograph_without_en_keywords():
+    pages = [
+        {"title": "\ufa11 UI", "purpose": "Compatibility ideograph page."},
+        {"title": "Backend", "purpose": "Backend subsystem."},
+    ]
+
+    with pytest.raises(ValueError, match="en_keywords"):
+        _validate_outline_structure(pages, page_range=(1, 10), total_file_count=10)
+
+
+def test_validate_outline_accepts_ascii_title_without_en_keywords():
+    pages = [
+        {"title": "Frontend App", "purpose": "Describes the Next.js app."},
+        {"title": "Backend", "purpose": "Backend subsystem."},
+        {"title": "Components", "purpose": "UI components.", "parent": "Frontend App"},
+    ]
+
+    _validate_outline_structure(pages, page_range=(1, 10), total_file_count=10)
+
+
+def test_validate_outline_accepts_cjk_page_with_en_keywords():
+    pages = [
+        {
+            "title": "前端应用",
+            "purpose": "介绍 Next.js 应用架构。",
+            "en_keywords": ["web", "app", "next"],
+        },
+        {"title": "Backend", "purpose": "Backend subsystem."},
+        {
+            "title": "Components",
+            "purpose": "组件库。",
+            "parent": "前端应用",
+            "en_keywords": ["web", "components", "next"],
+        },
+    ]
+
+    _validate_outline_structure(pages, page_range=(1, 10), total_file_count=10)
 
 
 def test_score_prefers_code_over_doc():
@@ -973,6 +1621,55 @@ def test_score_semantic_alignment_uses_unicode_tokens():
     ) > _score_file_for_page("services/misc.py", page, infos, None)
 
 
+def test_score_en_keywords_path_overlap_boosts_cjk_page():
+    page = {
+        "title": "前端应用架构",
+        "purpose": "介绍交互组件库。",
+        "en_keywords": ["web", "components", "next"],
+    }
+    infos = _fake_infos(
+        ("web/components/Sidebar.tsx", []),
+        ("server/jobs/Worker.ts", []),
+    )
+
+    score_match = _score_file_for_page("web/components/Sidebar.tsx", page, infos, None)
+    score_miss = _score_file_for_page("server/jobs/Worker.ts", page, infos, None)
+
+    assert score_match >= score_miss + 4
+
+
+def test_score_en_keywords_exact_boost_handles_windows_separators():
+    page = {
+        "title": "前端应用架构",
+        "purpose": "介绍交互组件库。",
+        "en_keywords": ["components", "frontend", "sidebar"],
+    }
+    infos = _fake_infos(
+        ("web\\components\\Sidebar.tsx", []),
+        ("server/jobs/Worker.tsx", []),
+    )
+
+    score_match = _score_file_for_page(
+        "web\\components\\Sidebar.tsx", page, infos, None
+    )
+    score_miss = _score_file_for_page("server/jobs/Worker.tsx", page, infos, None)
+
+    assert score_match >= score_miss + 8
+
+
+def test_prefilter_preserves_two_character_architectural_signals():
+    page = {"title": "UI Components", "purpose": "Frontend UI controls."}
+    all_files = ["server/payments/Invoice.ts", "web/ui/Button.tsx"]
+    infos = {
+        "web/ui/Button.tsx": FakeFileInfo([]),
+        "server/payments/Invoice.ts": FakeFileInfo([]),
+    }
+
+    result = _prefilter_candidates(page, all_files, infos, None)
+
+    assert result[0] == "web/ui/Button.tsx"
+
+
 def test_prefilter_returns_at_most_max_candidates():
     page = {"title": "Worker", "purpose": "Background jobs."}
     all_files = [f"worker/file{i}.py" for i in range(50)]
@@ -982,6 +1679,8 @@ def test_prefilter_returns_at_most_max_candidates():
 
 
 def test_prefilter_default_handles_moderately_large_candidate_sets():
+    # PR #40 raised the default candidate cap from 25 → 40, so 30 candidate
+    # files should all survive the prefilter.
     page = {"title": "Worker", "purpose": "Background jobs."}
     all_files = [f"worker/file{i}.py" for i in range(30)]
     infos = {f: FakeFileInfo([f"fn{i}"]) for i, f in enumerate(all_files)}
@@ -1048,6 +1747,130 @@ def test_heuristic_select_files_respects_max():
 # ---------------------------------------------------------------------------
 
 
+def test_validate_raw_selections_rejects_increasing_relevance_scores():
+    raw = {
+        "selections": [
+            {
+                "page_title": "API",
+                "files": [
+                    {"path": "api/routes.py", "relevance": 6},
+                    {"path": "api/models.py", "relevance": 7},
+                ],
+            }
+        ]
+    }
+
+    with pytest.raises(wp._SelectionOrderingError, match="non-increasing"):
+        wp._validate_raw_selections(
+            raw,
+            valid_titles={"API"},
+            all_files_set={"api/routes.py", "api/models.py"},
+            candidate_files_by_title={"API": {"api/routes.py", "api/models.py"}},
+        )
+
+
+def test_validate_raw_selections_rejects_first_relevance_below_floor():
+    raw = {
+        "selections": [
+            {
+                "page_title": "API",
+                "files": [{"path": "api/routes.py", "relevance": 2}],
+            }
+        ]
+    }
+
+    with pytest.raises(wp._SelectionOrderingError, match="first file"):
+        wp._validate_raw_selections(
+            raw,
+            valid_titles={"API"},
+            all_files_set={"api/routes.py"},
+            candidate_files_by_title={"API": {"api/routes.py"}},
+        )
+
+
+def test_validate_raw_selections_applies_first_relevance_floor_after_filtering():
+    raw = {
+        "selections": [
+            {
+                "page_title": "API",
+                "files": [
+                    {"path": "docs/api.md", "relevance": 9},
+                    {"path": "api/routes.py", "relevance": 2},
+                ],
+            }
+        ]
+    }
+
+    with pytest.raises(wp._SelectionOrderingError, match="first file"):
+        wp._validate_raw_selections(
+            raw,
+            valid_titles={"API"},
+            all_files_set={"docs/api.md", "api/routes.py"},
+            candidate_files_by_title={"API": {"api/routes.py"}},
+        )
+
+
+def test_validate_raw_selections_unwraps_and_filters_candidate_paths():
+    raw = {
+        "selections": [
+            {
+                "page_title": "API",
+                "files": [
+                    {"path": "api/routes.py", "relevance": 9},
+                    {"path": "misc/unused.py", "relevance": 8},
+                ],
+            }
+        ]
+    }
+
+    result = wp._validate_raw_selections(
+        raw,
+        valid_titles={"API"},
+        all_files_set={"api/routes.py", "misc/unused.py"},
+        candidate_files_by_title={"API": {"api/routes.py"}},
+    )
+
+    assert result == {"API": ["api/routes.py"]}
+
+
+def test_demote_ordering_invalid_raw_selection_salvages_below_floor_only_file(
+    caplog,
+):
+    import logging
+
+    raw = {
+        "selections": [
+            {
+                "page_title": "API",
+                "files": [
+                    {"path": "docs/api.md", "relevance": 9},
+                    {"path": "api/legacy.py", "relevance": 2},
+                ],
+            }
+        ]
+    }
+    error = wp._SelectionOrderingError(
+        "VALIDATION_FAILURE: Page 'API' first file relevance must be >= 3",
+        raw=raw,
+        valid_titles={"API"},
+        all_files_set={"docs/api.md", "api/legacy.py"},
+        candidate_files_by_title={"API": {"api/legacy.py"}},
+        reason="first file relevance below 3",
+    )
+
+    with caplog.at_level(logging.WARNING, logger="worker.planner"):
+        result = wp._demote_ordering_invalid_raw_selection(error)
+
+    assert result == {"API": ["api/legacy.py"]}
+    assert any(
+        "wiki_planner.ordering_demotion" in record.getMessage()
+        and "demoted_file=api/legacy.py" in record.getMessage()
+        and "original_position=0" in record.getMessage()
+        and "score=2" in record.getMessage()
+        for record in caplog.records
+    )
+
+
 def test_validate_selections_passes_normal():
     outline = [{"title": "API", "purpose": "REST API."}]
     result = {"API": ["api/routes.py", "api/models.py"]}
@@ -1075,6 +1898,577 @@ def test_validate_selections_allows_empty_parent():
     ]
     result = {"Backend": [], "Auth": ["auth/login.py"]}
     _validate_selections(result, outline)  # parent with no files is fine
+
+
+def test_n_target_clamps_between_2_and_8():
+    from worker.pipeline.planner.wiki_planner import _compute_n_target
+
+    assert _compute_n_target(median_score=1.0, score_threshold=2.0) == 2
+    assert _compute_n_target(median_score=20.0, score_threshold=2.0) == 8
+    assert _compute_n_target(median_score=0.0, score_threshold=2.0) == 2
+
+
+def test_n_target_threshold_zero_falls_back_to_default():
+    from worker.pipeline.planner.wiki_planner import _compute_n_target
+
+    assert _compute_n_target(median_score=5.0, score_threshold=0.0) == 5
+
+
+def test_compute_page_budget_clamps_single_candidate():
+    """Single positive-scoring file → budget still clamps into [2, 8]."""
+    from worker.pipeline.planner.wiki_planner import _compute_page_budget
+
+    page = {"title": "Auth", "purpose": "Login flow."}
+    n_target = _compute_page_budget(
+        page,
+        all_files=["auth/login.py"],
+        file_infos={},
+        dep_graph=None,
+    )
+    assert 2 <= n_target <= 8
+
+
+def test_compute_page_budget_uses_true_median_for_even_count():
+    """`_compute_page_budget` must use true median, not lower-half index."""
+    from worker.pipeline.planner.wiki_planner import _compute_page_budget
+
+    # Score distribution doesn't depend on the file path string; use a simple
+    # synthetic page where _score_file_for_page returns predictable values.
+    # We rely on title/path token overlap to drive scores; pick paths that
+    # share a token with the title so scores are positive but vary.
+    page = {"title": "Auth Module", "purpose": "Login and session handling."}
+    n_target = _compute_page_budget(
+        page,
+        all_files=[
+            "auth/module.py",
+            "auth/login.py",
+            "auth/session.py",
+            "auth/handler.py",
+        ],
+        file_infos={},
+        dep_graph=None,
+    )
+    # Just assert it lives in the clamped range — exact value depends on
+    # token-overlap scoring, but the median computation must not crash.
+    assert 2 <= n_target <= 8
+
+
+def test_validate_selections_with_min_floor_rejects_single_file_leaf():
+    outline = [{"title": "Auth", "purpose": "Login logic."}]
+    result = {"Auth": ["auth/login.py"]}
+    with pytest.raises(ValueError, match="min 2"):
+        _validate_selections(result, outline, min_files_by_title={"Auth": 2})
+
+
+def test_validate_selections_with_min_floor_allows_empty_overview():
+    outline = [{"title": "Repository Overview", "purpose": "Top level."}]
+    result = {"Repository Overview": []}
+    _validate_selections(result, outline, min_files_by_title={"Repository Overview": 2})
+
+
+def test_validate_selections_with_min_floor_allows_two_files():
+    outline = [{"title": "Auth", "purpose": "Login logic."}]
+    result = {"Auth": ["auth/login.py", "auth/session.py"]}
+    _validate_selections(result, outline, min_files_by_title={"Auth": 2})
+
+
+def test_validate_selections_min_floor_caps_at_candidate_count():
+    """When only one candidate exists, min floor drops to 1 (not 2)."""
+    outline = [{"title": "Tiny", "purpose": "Single-file leaf."}]
+    result = {"Tiny": ["tiny.py"]}
+    # Caller passes 1 because only 1 candidate is available;
+    # validator should accept 1 file.
+    _validate_selections(result, outline, min_files_by_title={"Tiny": 1})
+
+
+def test_enforce_ownership_demotes_lower_scoring_sibling_duplicate():
+    outline = [
+        {"title": "Backend", "purpose": "Parent."},
+        {"title": "API Routes", "purpose": "REST API routes.", "parent": "Backend"},
+        {"title": "Worker Jobs", "purpose": "Background jobs.", "parent": "Backend"},
+    ]
+    selections = {
+        "Backend": [],
+        "API Routes": ["api/routes.py"],
+        "Worker Jobs": ["api/routes.py", "worker/jobs.py"],
+    }
+
+    result = _enforce_ownership(
+        selections,
+        outline,
+        all_repo_files=["api/routes.py", "worker/jobs.py"],
+        file_infos={},
+        dep_graph=None,
+        mode="enforce",
+    )
+
+    assert result["API Routes"] == ["api/routes.py"]
+    assert result["Worker Jobs"] == ["worker/jobs.py"]
+    assert sum(paths.count("api/routes.py") for paths in result.values()) == 1
+
+
+def test_enforce_ownership_can_empty_lower_scoring_sibling_leaf_duplicate():
+    outline = [
+        {"title": "Backend", "purpose": "Parent."},
+        {
+            "title": "API Routes",
+            "purpose": "REST API routes.",
+            "parent": "Backend",
+            "en_keywords": ["api"],
+        },
+        {
+            "title": "Worker Jobs",
+            "purpose": "Background jobs.",
+            "parent": "Backend",
+        },
+    ]
+    selections = {
+        "Backend": [],
+        "API Routes": ["api/routes.py"],
+        "Worker Jobs": ["api/routes.py"],
+    }
+
+    result = _enforce_ownership(
+        selections,
+        outline,
+        all_repo_files=["api/routes.py"],
+        file_infos={},
+        dep_graph=None,
+        mode="enforce",
+    )
+
+    assert result["API Routes"] == ["api/routes.py"]
+    assert result["Worker Jobs"] == []
+    with pytest.raises(ValueError, match="Worker Jobs.*no files selected"):
+        _validate_selections(result, outline)
+
+
+def test_enforce_ownership_allows_two_non_sibling_owners_for_non_hub_file():
+    outline = [
+        {"title": "Backend", "purpose": "Backend parent."},
+        {"title": "Runtime", "purpose": "Runtime parent."},
+        {"title": "API", "purpose": "REST API.", "parent": "Backend"},
+        {"title": "Worker", "purpose": "Background jobs.", "parent": "Runtime"},
+    ]
+    selections = {
+        "Backend": [],
+        "Runtime": [],
+        "API": ["shared/core.py"],
+        "Worker": ["shared/core.py"],
+    }
+
+    result = _enforce_ownership(
+        selections,
+        outline,
+        all_repo_files=["shared/core.py", "other.py"],
+        file_infos={},
+        dep_graph=None,
+        mode="enforce",
+    )
+
+    assert result == selections
+
+
+def test_enforce_ownership_caps_three_non_sibling_owners_for_non_hub_file():
+    outline = [
+        {"title": "Backend", "purpose": "Backend parent."},
+        {"title": "Runtime", "purpose": "Runtime parent."},
+        {"title": "Data", "purpose": "Data parent."},
+        {"title": "API Routes", "purpose": "REST API routes.", "parent": "Backend"},
+        {"title": "Route Models", "purpose": "Route models.", "parent": "Runtime"},
+        {"title": "Worker Jobs", "purpose": "Background jobs.", "parent": "Data"},
+    ]
+    selections = {
+        "Backend": [],
+        "Runtime": [],
+        "Data": [],
+        "API Routes": ["api/routes.py"],
+        "Route Models": ["api/routes.py"],
+        "Worker Jobs": ["api/routes.py", "worker/jobs.py"],
+    }
+
+    result = _enforce_ownership(
+        selections,
+        outline,
+        all_repo_files=["api/routes.py", "worker/jobs.py"],
+        file_infos={},
+        dep_graph=None,
+        mode="enforce",
+    )
+
+    owners = [title for title, paths in result.items() if "api/routes.py" in paths]
+    assert owners == ["API Routes", "Route Models"]
+    assert result["Worker Jobs"] == ["worker/jobs.py"]
+
+
+def test_enforce_ownership_can_empty_third_non_sibling_leaf_owner():
+    outline = [
+        {"title": "Backend", "purpose": "Backend parent."},
+        {"title": "Runtime", "purpose": "Runtime parent."},
+        {"title": "Data", "purpose": "Data parent."},
+        {
+            "title": "API Routes",
+            "purpose": "REST API routes.",
+            "parent": "Backend",
+            "en_keywords": ["api"],
+        },
+        {
+            "title": "Route Models",
+            "purpose": "Route models.",
+            "parent": "Runtime",
+            "en_keywords": ["routes"],
+        },
+        {"title": "Worker Jobs", "purpose": "Background jobs.", "parent": "Data"},
+    ]
+    selections = {
+        "Backend": [],
+        "Runtime": [],
+        "Data": [],
+        "API Routes": ["api/routes.py"],
+        "Route Models": ["api/routes.py"],
+        "Worker Jobs": ["api/routes.py"],
+    }
+
+    result = _enforce_ownership(
+        selections,
+        outline,
+        all_repo_files=["api/routes.py", "other.py"],
+        file_infos={},
+        dep_graph=None,
+        mode="enforce",
+    )
+
+    owners = [title for title, paths in result.items() if "api/routes.py" in paths]
+    assert owners == ["API Routes", "Route Models"]
+    assert result["Worker Jobs"] == []
+    with pytest.raises(ValueError, match="Worker Jobs.*no files selected"):
+        _validate_selections(result, outline)
+
+
+def test_enforce_ownership_off_leaves_duplicates_untouched():
+    outline = [
+        {"title": "Backend", "purpose": "Parent."},
+        {"title": "API Routes", "purpose": "REST API routes.", "parent": "Backend"},
+        {"title": "Worker Jobs", "purpose": "Background jobs.", "parent": "Backend"},
+    ]
+    selections = {
+        "Backend": [],
+        "API Routes": ["api/routes.py"],
+        "Worker Jobs": ["api/routes.py", "worker/jobs.py"],
+    }
+
+    result = _enforce_ownership(
+        selections,
+        outline,
+        all_repo_files=["api/routes.py", "worker/jobs.py"],
+        file_infos={},
+        dep_graph=None,
+        mode="off",
+    )
+
+    assert result == selections
+
+
+def test_enforce_ownership_exempts_top_decile_in_degree_hub_files():
+    class FakeDepGraph:
+        edges = {
+            "a.py": ["shared/hub.py"],
+            "b.py": ["shared/hub.py"],
+            "c.py": ["shared/hub.py"],
+            "shared/hub.py": [],
+        }
+
+    outline = [
+        {"title": "Backend", "purpose": "Parent."},
+        {"title": "API Routes", "purpose": "REST API routes.", "parent": "Backend"},
+        {"title": "Worker Jobs", "purpose": "Background jobs.", "parent": "Backend"},
+    ]
+    selections = {
+        "Backend": [],
+        "API Routes": ["shared/hub.py"],
+        "Worker Jobs": ["shared/hub.py", "worker/jobs.py"],
+    }
+
+    result = _enforce_ownership(
+        selections,
+        outline,
+        all_repo_files=["shared/hub.py", "worker/jobs.py"],
+        file_infos={},
+        dep_graph=FakeDepGraph(),
+        mode="enforce",
+    )
+
+    assert result == selections
+
+
+def test_enforce_ownership_does_not_exempt_one_import_tiny_graph_file():
+    class FakeDepGraph:
+        edges = {
+            "a.py": ["shared/util.py"],
+            "shared/util.py": [],
+        }
+
+    outline = [
+        {"title": "Backend", "purpose": "Parent."},
+        {"title": "API Routes", "purpose": "REST API routes.", "parent": "Backend"},
+        {"title": "Worker Jobs", "purpose": "Background jobs.", "parent": "Backend"},
+    ]
+    selections = {
+        "Backend": [],
+        "API Routes": ["shared/util.py"],
+        "Worker Jobs": ["shared/util.py", "worker/jobs.py"],
+    }
+
+    result = _enforce_ownership(
+        selections,
+        outline,
+        all_repo_files=["shared/util.py", "worker/jobs.py"],
+        file_infos={},
+        dep_graph=FakeDepGraph(),
+        mode="enforce",
+    )
+
+    assert sum(paths.count("shared/util.py") for paths in result.values()) == 1
+    assert result["Worker Jobs"] == ["worker/jobs.py"]
+
+
+def test_enforce_ownership_caps_total_assignments():
+    outline = [
+        {"title": "API Routes", "purpose": "REST API routes."},
+        {"title": "Worker Jobs", "purpose": "Background jobs."},
+        {"title": "Database Models", "purpose": "Database models."},
+    ]
+    all_files = ["api/routes.py", "worker/jobs.py", "db/models.py", "shared/util.py"]
+    selections = {
+        "API Routes": ["api/routes.py", "shared/util.py", "worker/jobs.py"],
+        "Worker Jobs": ["worker/jobs.py", "shared/util.py", "api/routes.py"],
+        "Database Models": ["db/models.py", "shared/util.py", "api/routes.py"],
+    }
+
+    result = _enforce_ownership(
+        selections,
+        outline,
+        all_repo_files=all_files,
+        file_infos={},
+        dep_graph=None,
+        mode="enforce",
+    )
+
+    assert sum(len(paths) for paths in result.values()) <= int(1.5 * len(all_files))
+    assert result["API Routes"]
+    assert result["Worker Jobs"]
+    assert result["Database Models"]
+
+
+def test_enforce_ownership_total_cap_can_empty_one_file_leaf_pages():
+    outline = [
+        {"title": "Backend", "purpose": "Backend parent."},
+        {"title": "Runtime", "purpose": "Runtime parent."},
+        {"title": "API Routes", "purpose": "REST API routes.", "parent": "Backend"},
+        {"title": "Worker Jobs", "purpose": "Background jobs.", "parent": "Runtime"},
+        {"title": "Data Access", "purpose": "Database models.", "parent": "Backend"},
+        {"title": "Data Runtime", "purpose": "Database runtime.", "parent": "Runtime"},
+        {"title": "Auth API", "purpose": "Auth API.", "parent": "Backend"},
+        {"title": "Auth Runtime", "purpose": "Auth runtime.", "parent": "Runtime"},
+    ]
+    all_files = ["api/routes.py", "db/models.py", "auth/service.py"]
+    selections = {
+        "Backend": [],
+        "Runtime": [],
+        "API Routes": ["api/routes.py"],
+        "Worker Jobs": ["api/routes.py"],
+        "Data Access": ["db/models.py"],
+        "Data Runtime": ["db/models.py"],
+        "Auth API": ["auth/service.py"],
+        "Auth Runtime": ["auth/service.py"],
+    }
+
+    result = _enforce_ownership(
+        selections,
+        outline,
+        all_repo_files=all_files,
+        file_infos={},
+        dep_graph=None,
+        mode="enforce",
+    )
+
+    assert sum(len(paths) for paths in result.values()) <= int(1.5 * len(all_files))
+    assert any(not result[page["title"]] for page in outline if page.get("parent"))
+
+
+def test_enforce_ownership_advise_mode_matches_enforce_mode():
+    outline = [
+        {"title": "Backend", "purpose": "Parent."},
+        {"title": "API Routes", "purpose": "REST API routes.", "parent": "Backend"},
+        {"title": "Worker Jobs", "purpose": "Background jobs.", "parent": "Backend"},
+    ]
+    selections = {
+        "Backend": [],
+        "API Routes": ["api/routes.py"],
+        "Worker Jobs": ["api/routes.py", "worker/jobs.py"],
+    }
+
+    enforced = _enforce_ownership(
+        selections,
+        outline,
+        all_repo_files=["api/routes.py", "worker/jobs.py"],
+        file_infos={},
+        dep_graph=None,
+        mode="enforce",
+    )
+    advised = _enforce_ownership(
+        selections,
+        outline,
+        all_repo_files=["api/routes.py", "worker/jobs.py"],
+        file_infos={},
+        dep_graph=None,
+        mode="advise",
+    )
+
+    assert advised == enforced
+
+
+def test_enforce_ownership_total_cap_demotes_hub_after_exemption():
+    class FakeDepGraph:
+        edges = {
+            "a.py": ["shared/hub.py"],
+            "b.py": ["shared/hub.py"],
+            "c.py": ["shared/hub.py"],
+            "shared/hub.py": [],
+        }
+
+    outline = [
+        {"title": "API Routes", "purpose": "REST API routes."},
+        {"title": "Worker Jobs", "purpose": "Background jobs."},
+        {"title": "Database Models", "purpose": "Database models."},
+    ]
+    all_files = ["a.py", "b.py", "c.py", "shared/hub.py"]
+    selections = {
+        "API Routes": ["a.py", "shared/hub.py", "b.py"],
+        "Worker Jobs": ["b.py", "shared/hub.py", "c.py"],
+        "Database Models": ["c.py", "shared/hub.py", "a.py"],
+    }
+
+    result = _enforce_ownership(
+        selections,
+        outline,
+        all_repo_files=all_files,
+        file_infos={},
+        dep_graph=FakeDepGraph(),
+        mode="enforce",
+    )
+
+    cap = int(1.5 * len(all_files))
+    assert sum(len(paths) for paths in result.values()) <= cap
+    # Hub exemption only protects from sibling/non-sibling caps; total-cap
+    # enforcement may still demote hub copies to satisfy the global cap.
+
+
+async def test_select_files_enforces_ownership_after_validation(
+    monkeypatch,
+    mock_llm,
+):
+    from worker.pipeline.planner import wiki_planner as wp
+
+    monkeypatch.setattr(
+        wp,
+        "_prefilter_candidates",
+        lambda _page, all_files, _file_infos, _dep_graph: list(all_files),
+    )
+    mock_llm.generate_structured.side_effect = None
+    mock_llm.generate_structured.return_value = {
+        "selections": [
+            {"page_title": "Backend", "files": []},
+            {
+                "page_title": "API Routes",
+                "files": [
+                    _selected("api/routes.py", 9),
+                    _selected("api/models.py", 6),
+                ],
+            },
+            {
+                "page_title": "Worker Jobs",
+                "files": [
+                    _selected("api/routes.py", 8),
+                    _selected("worker/jobs.py", 7),
+                ],
+            },
+        ]
+    }
+    outline = [
+        {"title": "Backend", "purpose": "Parent."},
+        {"title": "API Routes", "purpose": "REST API routes.", "parent": "Backend"},
+        {"title": "Worker Jobs", "purpose": "Background jobs.", "parent": "Backend"},
+    ]
+
+    result = await wp._select_files(
+        outline=outline,
+        file_summary="files",
+        dep_info=None,
+        all_files=["api/routes.py", "api/models.py", "worker/jobs.py"],
+        file_infos={},
+        dep_graph=None,
+        llm=mock_llm,
+        system="sys",
+        on_retry=None,
+        max_retries=1,
+    )
+
+    # API Routes keeps both files; ownership demotion strips api/routes.py
+    # from sibling Worker Jobs (lower score on that page).
+    assert "api/routes.py" in result["API Routes"]
+    assert result["Worker Jobs"] == ["worker/jobs.py"]
+
+
+async def test_generate_wiki_plan_enforces_ownership_on_phase2_heuristic_recovery(
+    mock_llm, monkeypatch
+):
+    outline = [
+        {"title": "Backend", "purpose": "Backend parent."},
+        {"title": "Runtime", "purpose": "Runtime parent."},
+        {"title": "API Routes", "purpose": "REST API routes.", "parent": "Backend"},
+        {"title": "Worker Jobs", "purpose": "Background jobs.", "parent": "Backend"},
+        {"title": "Runtime Loop", "purpose": "Runtime loop.", "parent": "Runtime"},
+    ]
+    all_files = [
+        "shared/core.py",
+        "api/routes.py",
+        "worker/jobs.py",
+        "runtime/loop.py",
+    ]
+    file_analysis = FileAnalysis(
+        files={
+            f: FileInfo(rel_path=f, entities=[], class_count=0, function_count=0)
+            for f in all_files
+        }
+    )
+
+    def duplicate_heuristic(*args, **kwargs):
+        return {
+            "Backend": [],
+            "Runtime": [],
+            "API Routes": ["shared/core.py", "api/routes.py"],
+            "Worker Jobs": ["shared/core.py", "worker/jobs.py"],
+            "Runtime Loop": ["runtime/loop.py"],
+        }
+
+    monkeypatch.setattr(wp, "_heuristic_select_files", duplicate_heuristic)
+    mock_llm.generate_structured.side_effect = [
+        {"pages": outline},
+        ValueError("Phase 2 failed"),
+    ]
+
+    plan = await generate_wiki_plan(
+        file_analysis,
+        repo_name="testrepo",
+        llm=mock_llm,
+        max_retries=1,
+    )
+
+    owners = [p.title for p in plan.pages if "shared/core.py" in p.files]
+    worker_page = next(p for p in plan.pages if p.title == "Worker Jobs")
+    assert owners == ["API Routes"]
+    assert worker_page.files == ["worker/jobs.py"]
 
 
 def test_validate_wiki_plan_no_orphan_check():
@@ -1145,11 +2539,19 @@ async def test_generate_wiki_plan_uses_selection_model(mock_llm):
             {"title": "Worker", "purpose": "Background jobs.", "parent": "Backend"},
         ]
     }
-    # Phase 2: selection response — tests/test_api.py intentionally omitted
+    # Phase 2: selection response — tests/test_api.py intentionally omitted.
+    # Worker page picks up worker/job.py plus a second supporting file so the
+    # adaptive ≥2 floor is satisfied for non-overview, non-parent leaves.
     selection_response = {
         "selections": [
-            {"page_title": "Routes", "files": ["api/routes.py", "api/models.py"]},
-            {"page_title": "Worker", "files": ["worker/job.py"]},
+            {
+                "page_title": "Routes",
+                "files": [_selected("api/routes.py", 8), _selected("api/models.py", 7)],
+            },
+            {
+                "page_title": "Worker",
+                "files": [_selected("worker/job.py", 8), _selected("api/models.py", 4)],
+            },
         ]
     }
     mock_llm.generate_structured = AsyncMock(

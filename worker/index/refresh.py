@@ -19,6 +19,8 @@ from worker.embedding import make_embedding_provider
 from worker.index.artifacts import (
     _make_faiss_store,
     _write_text_async,
+    phase1_prompt_dump_path,
+    remove_stale_ast_artifacts,
 )
 from worker.index.full import run_full_index
 from worker.index.progress import (
@@ -30,7 +32,6 @@ from worker.index.progress import (
 from worker.llm import make_fast_llm_provider, make_llm_provider
 from worker.pipeline.ast_analysis import FileAnalysis, analyze_all_files
 from worker.pipeline.dependency_graph import build_dependency_graph
-from worker.pipeline.fast_report_index import build_fast_report_index
 from worker.pipeline.ingestion import (
     clone_or_fetch,
     extract_readme,
@@ -38,19 +39,23 @@ from worker.pipeline.ingestion import (
     get_affected_pages,
     get_changed_files,
 )
-from worker.pipeline.page_generator import (
+from worker.pipeline.page.generator import (
     PageResult,
     compute_generation_order,
     generate_page_batch,
 )
-from worker.pipeline.rag_indexer import build_rag_index
-from worker.pipeline.user_steering import load_user_steering
-from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan, generate_wiki_plan
+from worker.pipeline.planner.user_steering import load_user_steering
+from worker.pipeline.planner.wiki_planner import (
+    WikiPageSpec,
+    WikiPlan,
+    generate_wiki_plan,
+)
+from worker.pipeline.retrieval.rag_indexer import build_rag_index
+from worker.pipeline.retrieval.repo_index import build_repo_index
 from worker.platform.registry import get_platform_by_name
 from worker.platform.token_store import get_platform_token
 
 logger = logging.getLogger("worker.task")
-
 
 # ---------------------------------------------------------------------------
 # DB helpers
@@ -317,6 +322,7 @@ async def run_refresh_index(
                     purpose=p.get("purpose", ""),
                     parent=p.get("parent"),
                     files=p.get("files", []),
+                    en_keywords=p.get("en_keywords", []),
                     # Merge saved page_notes back into the spec; default to empty note
                     page_notes=saved_page_notes.get(p["title"], [{"content": ""}]),
                 )
@@ -396,9 +402,6 @@ async def run_refresh_index(
             "AST analysis complete: %d files analyzed", len(file_analysis.files)
         )
         ast_dir.mkdir(parents=True, exist_ok=True)
-        await _write_text_async(
-            ast_dir / "file_analysis_summary.txt", file_analysis.to_llm_summary()
-        )
 
         # Detect structural changes: added or removed files relative to the old plan
         old_all_files = (
@@ -453,22 +456,27 @@ async def run_refresh_index(
 
         # Stage 3: Dependency Graph
         logger.info("Stage 3: Dependency Graph starting")
-        dep_graph = build_dependency_graph(files, clone_root)
+        dep_graph = await loop.run_in_executor(
+            None, build_dependency_graph, files, clone_root
+        )
         logger.info(
             "Dependency graph built: %d nodes, %d edges",
             sum(len(c) for c in dep_graph.clusters),
             sum(len(e) for e in dep_graph.edges.values()),
         )
-        fast_report_index = build_fast_report_index(
-            root=clone_root,
-            files=files,
-            file_analysis=file_analysis,
-            dep_graph=dep_graph,
-            readme=readme,
+        repo_index = await loop.run_in_executor(
+            None,
+            lambda: build_repo_index(
+                root=clone_root,
+                files=files,
+                file_analysis=file_analysis,
+                dep_graph=dep_graph,
+                readme=readme,
+            ),
         )
         await _write_text_async(
-            ast_dir / "fast_report_index.json",
-            json.dumps(fast_report_index, indent=2, ensure_ascii=False),
+            ast_dir / "repo_index.json",
+            json.dumps(repo_index, indent=2, ensure_ascii=False),
         )
         await _update_job(
             db_path, job_id, progress=30, status_description="Rebuilding RAG index..."
@@ -546,6 +554,7 @@ async def run_refresh_index(
             fast_llm=fast_llm,
             user_steering=user_steering,
             clone_root=clone_root,
+            debug_prompt_dump_path=phase1_prompt_dump_path(repo_data_dir),
         )
         logger.info(
             "Wiki plan generated: %d pages updated for %s", len(plan.pages), name
@@ -650,6 +659,8 @@ async def run_refresh_index(
                 repo_notes=plan.repo_notes or None,
                 on_progress=on_page_progress,
                 on_result=_save_regenerated_page,
+                plan=plan,
+                repo_root=clone_root,
             )
 
         # Build a merged plan reflecting the full updated wiki structure.
@@ -718,6 +729,9 @@ async def run_refresh_index(
         await _write_text_async(
             wiki_dir / "wiki.json",
             json.dumps(merged_plan.to_wiki_json(), indent=2, ensure_ascii=False),
+        )
+        await asyncio.get_running_loop().run_in_executor(
+            None, remove_stale_ast_artifacts, ast_dir
         )
         structure_data = merged_plan.to_api_structure()
 

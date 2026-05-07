@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from worker.pipeline.retrieval.repo_search import register_expansion_profile
+
 QUESTION_TYPES = (
     "architecture",
     "execution_flow",
@@ -56,6 +58,11 @@ _EXPANSION_GRAPHS: dict[str, ExpansionGraph] = {
     "implementation_location": ExpansionGraph("imports", None),
     "unknown": ExpansionGraph("imports_and_imported_by", None),
 }
+
+for _question_type, _expansion_graph in _EXPANSION_GRAPHS.items():
+    register_expansion_profile(
+        _question_type, (_expansion_graph.primary, _expansion_graph.secondary)
+    )
 
 
 def profile_for_question_type(question_type: str) -> QuestionTypeProfile:

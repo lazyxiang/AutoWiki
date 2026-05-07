@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 from pathlib import Path
 
-from worker.pipeline.rag_indexer import FAISSStore
+from worker.pipeline.retrieval.rag_indexer import FAISSStore
+
+LEGACY_REPO_INDEX_NAME = "fast_report_index.json"
+LEGACY_FILE_ANALYSIS_SUMMARY_NAME = "file_analysis_summary.txt"
 
 
 async def _write_text_async(path: Path, content: str) -> None:
@@ -28,6 +32,19 @@ async def _load_faiss_for_research(repo_data_dir: Path, embedding) -> FAISSStore
     store = _make_faiss_store(repo_data_dir, embedding)
     await asyncio.get_running_loop().run_in_executor(None, store.load)
     return store
+
+
+def remove_stale_ast_artifacts(ast_dir: Path) -> None:
+    for name in (LEGACY_REPO_INDEX_NAME, LEGACY_FILE_ANALYSIS_SUMMARY_NAME):
+        stale_path = ast_dir / name
+        if stale_path.exists():
+            stale_path.unlink()
+
+
+def phase1_prompt_dump_path(repo_data_dir: Path) -> Path | None:
+    if os.environ.get("AUTOWIKI_DEBUG_DUMP_PROMPTS") == "1":
+        return repo_data_dir / "logs" / "phase1_prompt.txt"
+    return None
 
 
 def _remove_path(path: Path) -> None:

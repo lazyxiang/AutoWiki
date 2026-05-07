@@ -6,13 +6,13 @@ import json
 
 
 def test_load_returns_none_when_missing(tmp_path):
-    from worker.pipeline.user_steering import load_user_steering
+    from worker.pipeline.planner.user_steering import load_user_steering
 
     assert load_user_steering(tmp_path) is None
 
 
 def test_load_parses_full_schema(tmp_path):
-    from worker.pipeline.user_steering import load_user_steering
+    from worker.pipeline.planner.user_steering import load_user_steering
 
     cfg_dir = tmp_path / ".autowiki"
     cfg_dir.mkdir()
@@ -44,7 +44,7 @@ def test_load_parses_full_schema(tmp_path):
 
 
 def test_load_tolerates_partial_page(tmp_path):
-    from worker.pipeline.user_steering import load_user_steering
+    from worker.pipeline.planner.user_steering import load_user_steering
 
     cfg_dir = tmp_path / ".autowiki"
     cfg_dir.mkdir()
@@ -58,8 +58,24 @@ def test_load_tolerates_partial_page(tmp_path):
     assert steering.pages[0].page_notes == []
 
 
+def test_load_warns_when_page_title_is_invalid(tmp_path, caplog):
+    from worker.pipeline.planner.user_steering import load_user_steering
+
+    cfg_dir = tmp_path / ".autowiki"
+    cfg_dir.mkdir()
+    (cfg_dir / "wiki.json").write_text(
+        json.dumps({"pages": [{"purpose": "Missing title."}, {"title": ""}]})
+    )
+
+    steering = load_user_steering(tmp_path)
+
+    assert steering is not None
+    assert steering.pages == []
+    assert any("invalid title" in rec.message for rec in caplog.records)
+
+
 def test_load_returns_none_on_invalid_json(tmp_path, caplog):
-    from worker.pipeline.user_steering import load_user_steering
+    from worker.pipeline.planner.user_steering import load_user_steering
 
     cfg_dir = tmp_path / ".autowiki"
     cfg_dir.mkdir()
@@ -70,7 +86,7 @@ def test_load_returns_none_on_invalid_json(tmp_path, caplog):
 
 
 def test_assign_by_modules_groups_files_by_prefix():
-    from worker.pipeline.user_steering import UserPageSpec, assign_by_modules
+    from worker.pipeline.planner.user_steering import UserPageSpec, assign_by_modules
 
     pages = [
         UserPageSpec(title="Core", modules=["src/core"]),
@@ -87,6 +103,25 @@ def test_assign_by_modules_groups_files_by_prefix():
     assert assignments["Core"] == ["src/core/bus.ts", "src/core/util.ts"]
     assert assignments["API"] == ["src/api/server.ts", "src/routes/index.ts"]
     assert unassigned == ["src/misc/other.ts"]
+
+
+def test_assign_by_modules_warns_on_duplicate_prefix_and_sorts_deterministically(
+    caplog,
+):
+    from worker.pipeline.planner.user_steering import UserPageSpec, assign_by_modules
+
+    pages = [
+        UserPageSpec(title="B", modules=["src/bb", "src/shared"]),
+        UserPageSpec(title="A", modules=["src/aa", "src/shared"]),
+    ]
+    assignments, unassigned = assign_by_modules(
+        pages, ["src/aa/a.py", "src/bb/b.py", "src/shared/x.py"]
+    )
+
+    assert assignments["A"] == ["src/aa/a.py"]
+    assert assignments["B"] == ["src/bb/b.py", "src/shared/x.py"]
+    assert unassigned == []
+    assert any("claimed by multiple pages" in rec.message for rec in caplog.records)
 
 
 async def test_full_index_reads_autowiki_wiki_json(tmp_path, monkeypatch):
@@ -121,7 +156,7 @@ async def test_full_index_reads_autowiki_wiki_json(tmp_path, monkeypatch):
 
     async def _fake_plan(*args, **kwargs):
         captured["user_steering"] = kwargs.get("user_steering")
-        from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan
+        from worker.pipeline.planner.wiki_planner import WikiPageSpec, WikiPlan
 
         return WikiPlan(pages=[WikiPageSpec(title="Overview", purpose="Test")])
 
@@ -186,8 +221,8 @@ async def test_planner_skips_phase1_when_user_provides_pages(mock_llm):
     from unittest.mock import MagicMock
 
     from worker.pipeline.ast_analysis import FileAnalysis
-    from worker.pipeline.user_steering import UserPageSpec, UserSteering
-    from worker.pipeline.wiki_planner import generate_wiki_plan
+    from worker.pipeline.planner.user_steering import UserPageSpec, UserSteering
+    from worker.pipeline.planner.wiki_planner import generate_wiki_plan
 
     steering = UserSteering(
         repo_notes=["Focus on the core module."],
@@ -214,14 +249,15 @@ async def test_planner_skips_phase1_when_user_provides_pages(mock_llm):
     assert any(
         "Focus on the core module" in (n.get("content") or "") for n in plan.repo_notes
     )
+    assert plan.all_repo_files == ["src/core/main.py"]
     mock_llm.generate_structured.assert_not_called()
 
 
 async def test_planner_injects_page_notes_from_user_steering(mock_llm):
     """page_notes from user_steering are merged onto the matching WikiPageSpec."""
     from worker.pipeline.ast_analysis import FileAnalysis
-    from worker.pipeline.user_steering import UserPageSpec, UserSteering
-    from worker.pipeline.wiki_planner import generate_wiki_plan
+    from worker.pipeline.planner.user_steering import UserPageSpec, UserSteering
+    from worker.pipeline.planner.wiki_planner import generate_wiki_plan
 
     steering = UserSteering(
         pages=[
@@ -247,7 +283,7 @@ async def test_planner_injects_page_notes_from_user_steering(mock_llm):
 
 def test_to_api_structure_includes_has_user_notes():
     """WikiPageSpec with non-empty page_notes has has_user_notes=True in API."""
-    from worker.pipeline.wiki_planner import WikiPageSpec, WikiPlan
+    from worker.pipeline.planner.wiki_planner import WikiPageSpec, WikiPlan
 
     plan = WikiPlan(
         pages=[

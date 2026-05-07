@@ -79,3 +79,28 @@ def log_final_failure(
         exc_info=exc_info,
         stack_info=exc_info is None,
     )
+
+
+def log_structured_event(
+    logger: logging.Logger,
+    *,
+    event: str,
+    context: dict[str, Any] | None = None,
+    level: int = logging.INFO,
+) -> None:
+    """Log a structured pipeline event (non-error) using the shared format.
+
+    Use for telemetry events where the pipeline is not failing or retrying
+    but is recording a notable normalization step (e.g. ownership demotion).
+    Renders ``context`` via the same ``key=value`` formatting as the
+    retry/failure helpers so downstream log parsing stays uniform. Levels at
+    ``logging.ERROR`` or above are reserved for :func:`log_final_failure`.
+    """
+    if level >= logging.ERROR:
+        raise ValueError(
+            "log_structured_event is for non-error events; use log_final_failure "
+            "for ERROR-level fallback logs"
+        )
+    ctx = _format_context(context)
+    suffix = f" | {ctx}" if ctx else ""
+    logger.log(level, "%s%s", event, suffix)

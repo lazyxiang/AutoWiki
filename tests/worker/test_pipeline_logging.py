@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import logging
 
+import pytest
+
 from worker.pipeline.pipeline_logging import (
     log_final_failure,
+    log_structured_event,
     log_validation_retry,
 )
 
@@ -69,3 +72,12 @@ def test_log_validation_retry_truncates_long_response(caplog):
     # The response should be truncated with an ellipsis marker.
     assert "..." in rec.message
     assert len(rec.message) < 3000
+
+
+def test_log_structured_event_rejects_error_levels():
+    logger = logging.getLogger("test.pipeline")
+
+    with pytest.raises(ValueError, match="log_final_failure"):
+        log_structured_event(
+            logger, event="wiki_planner.recovered", level=logging.ERROR
+        )

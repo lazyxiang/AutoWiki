@@ -2,8 +2,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from worker.pipeline.page_outline import PageOutline, validate_outline
-from worker.pipeline.wiki_planner import WikiPageSpec
+from worker.pipeline.page.outline import PageOutline, validate_outline
+from worker.pipeline.planner.wiki_planner import WikiPageSpec
 
 
 def test_valid_outline_passes_validation():
@@ -27,7 +27,7 @@ def test_valid_outline_passes_validation():
             },
             {
                 "heading": "API Surface",
-                "kind": "prose+table",
+                "kind": "prose+table+diagram",
                 "focus": "Public methods",
                 "diagram": {
                     "type": "classDiagram",
@@ -64,7 +64,7 @@ def test_invalid_diagram_type_rejected():
         "sections": [
             {
                 "heading": "X",
-                "kind": "prose",
+                "kind": "prose+diagram",
                 "focus": "f",
                 "diagram": {
                     "type": "pieDiagram",
@@ -77,6 +77,43 @@ def test_invalid_diagram_type_rejected():
     }
     with pytest.raises(ValueError, match="diagram type"):
         validate_outline(raw, page_files=["a.py"])
+
+
+@pytest.mark.parametrize("diagram", [None, {}])
+def test_diagram_kind_requires_real_diagram_object(diagram):
+    raw = {
+        "sections": [
+            {
+                "heading": "X",
+                "kind": "prose+diagram",
+                "focus": "f",
+                "diagram": diagram,
+            },
+        ],
+        "key_claims": ["claim1", "claim2", "claim3"],
+    }
+    with pytest.raises(ValueError, match="requires a diagram"):
+        validate_outline(raw, page_files=[])
+
+
+def test_non_diagram_kind_rejects_diagram_object():
+    raw = {
+        "sections": [
+            {
+                "heading": "X",
+                "kind": "prose",
+                "focus": "f",
+                "diagram": {
+                    "type": "flowchart",
+                    "purpose": "p",
+                    "source_files": [],
+                },
+            },
+        ],
+        "key_claims": ["claim1", "claim2", "claim3"],
+    }
+    with pytest.raises(ValueError, match="must not include a diagram"):
+        validate_outline(raw, page_files=[])
 
 
 def test_too_few_claims_rejected():
@@ -106,7 +143,7 @@ def test_diagram_source_files_must_be_subset():
         "sections": [
             {
                 "heading": "X",
-                "kind": "prose",
+                "kind": "prose+diagram",
                 "focus": "f",
                 "diagram": {
                     "type": "flowchart",
@@ -136,7 +173,7 @@ def test_minimum_diagram_count_enforced():
 
 
 async def test_generate_page_outline_with_mock_llm():
-    from worker.pipeline.page_outline import generate_page_outline
+    from worker.pipeline.page.outline import generate_page_outline
 
     mock_fast_llm = AsyncMock()
     mock_fast_llm.generate_structured.return_value = {
@@ -190,8 +227,8 @@ async def test_generate_page_outline_with_mock_llm():
 async def test_page_outline_logs_each_retry(caplog, mock_fast_llm):
     import logging
 
-    from worker.pipeline.page_outline import generate_page_outline
-    from worker.pipeline.wiki_planner import WikiPageSpec
+    from worker.pipeline.page.outline import generate_page_outline
+    from worker.pipeline.planner.wiki_planner import WikiPageSpec
 
     spec = WikiPageSpec(title="X", purpose="y", files=["a.py"])
     bad = {"sections": [], "key_claims": []}  # empty → validation failure
@@ -199,7 +236,7 @@ async def test_page_outline_logs_each_retry(caplog, mock_fast_llm):
         "sections": [
             {
                 "heading": "Intro",
-                "kind": "prose",
+                "kind": "prose+diagram",
                 "focus": "overview",
                 "diagram": {
                     "type": "flowchart",
@@ -225,8 +262,96 @@ async def test_page_outline_logs_each_retry(caplog, mock_fast_llm):
     assert any("attempt" in r.getMessage() for r in retry_logs)
 
 
+def test_outline_prompt_includes_sibling_titles_and_out_of_scope():
+    from worker.pipeline.page.outline import _build_outline_prompt
+
+    spec = WikiPageSpec(
+        title="页面生成器",
+        purpose="负责协调多趟页面生成流水线。",
+        files=["worker/pipeline/page_generator.py"],
+    )
+    segments = _build_outline_prompt(
+        spec,
+        entity_summaries="- function generate_page()",
+        dep_info=None,
+        sibling_titles=["质量校验与修订", "Mermaid 图表优化"],
+        out_of_scope_topics=[
+            "Validates outline JSON",
+            "Sanitizes Mermaid diagrams",
+        ],
+    )
+    text = "".join(p.text for p in segments)
+    assert "Sibling pages" in text
+    assert "质量校验与修订" in text
+    assert "DO NOT cover" in text
+    assert "Out-of-scope" in text
+    assert "Validates outline JSON" in text
+    # Pin placement: sibling block must land in the cacheable prefix
+    # (segment 0) so the Anthropic prompt cache annotation isn't drifted
+    # to a per-request tail segment in future refactors.
+    assert segments[0].cacheable is True
+    assert "Sibling pages" in segments[0].text
+
+
+def test_outline_prompt_includes_signature_slices():
+    """A6: signature slices land in the cacheable prefix labeled by file."""
+    from worker.pipeline.page.outline import _build_outline_prompt
+
+    spec = WikiPageSpec(
+        title="Page Generator",
+        purpose="Coordinates the multi-pass page generation pipeline.",
+        files=["worker/pipeline/page_generator.py"],
+    )
+    slice_text = (
+        "Lines 12-15:\n"
+        "def generate_page(spec, plan, ...):\n"
+        '    """Run 4-pass generation for one page."""\n'
+        "    outline = await generate_page_outline(...)\n"
+        "    draft = await generate_draft(...)"
+    )
+    segments = _build_outline_prompt(
+        spec,
+        entity_summaries="- function generate_page()",
+        dep_info=None,
+        signature_slices={
+            "worker/pipeline/page_generator.py": [slice_text],
+        },
+    )
+    text = "".join(p.text for p in segments)
+    assert "Signature slices" in text
+    assert "worker/pipeline/page_generator.py" in text
+    assert "Lines 12-15" in text
+    assert "def generate_page" in text
+    # The slice block must land in the cacheable prefix so it is reused
+    # across batched outline calls (consistent with sibling/out-of-scope).
+    assert segments[0].cacheable is True
+    assert "Signature slices" in segments[0].text
+
+
+def test_outline_prompt_omits_signature_slices_block_when_empty():
+    """No 'Signature slices' header when the dict is None or empty."""
+    from worker.pipeline.page.outline import _build_outline_prompt
+
+    spec = WikiPageSpec(title="X", purpose="y", files=["a.py"])
+    segments = _build_outline_prompt(
+        spec,
+        entity_summaries="entities",
+        dep_info=None,
+        signature_slices=None,
+    )
+    assert "Signature slices" not in "".join(p.text for p in segments)
+
+    segments_empty = _build_outline_prompt(
+        spec,
+        entity_summaries="entities",
+        dep_info=None,
+        signature_slices={},
+    )
+    assert "Signature slices" not in "".join(p.text for p in segments_empty)
+
+
 async def test_generate_page_outline_retries_on_validation_error():
-    from worker.pipeline.page_outline import generate_page_outline
+    from worker.pipeline.page.outline import generate_page_outline
 
     call_count = 0
 
@@ -239,7 +364,7 @@ async def test_generate_page_outline_retries_on_validation_error():
             "sections": [
                 {
                     "heading": "Overview",
-                    "kind": "prose",
+                    "kind": "prose+diagram",
                     "focus": "f",
                     "diagram": {
                         "type": "flowchart",

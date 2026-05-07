@@ -26,7 +26,7 @@ from typing import Any
 
 from worker.embedding.base import EmbeddingProvider
 from worker.llm.base import LLMProvider
-from worker.pipeline.rag_indexer import FAISSStore
+from worker.pipeline.retrieval.rag_indexer import FAISSStore
 
 # Event payload emitted to WebSocket / CLI consumers.
 ResearchEvent = dict[str, Any]

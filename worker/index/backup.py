@@ -127,8 +127,8 @@ async def _snapshot_full_index_state(
                 backup_dir / "ast" / "wiki_plan.json",
             )
         _copy_file_if_exists(
-            repo_data_dir / "ast" / "fast_report_index.json",
-            backup_dir / "ast" / "fast_report_index.json",
+            repo_data_dir / "ast" / "repo_index.json",
+            backup_dir / "ast" / "repo_index.json",
         )
         return had_wiki_dir, snapshot_faiss, snapshot_plan
 
@@ -203,8 +203,8 @@ async def _restore_full_index_state(
                 repo_data_dir / "ast" / "wiki_plan.json",
             )
         _restore_file_from_backup(
-            backup.backup_dir / "ast" / "fast_report_index.json",
-            repo_data_dir / "ast" / "fast_report_index.json",
+            backup.backup_dir / "ast" / "repo_index.json",
+            repo_data_dir / "ast" / "repo_index.json",
         )
 
     await asyncio.get_running_loop().run_in_executor(None, _restore_files)
@@ -240,7 +240,7 @@ async def _cleanup_first_time_index_failure(
             _remove_path(repo_data_dir / "faiss.meta.pkl")
         if not reuse_plan:
             _remove_path(repo_data_dir / "ast" / "wiki_plan.json")
-        _remove_path(repo_data_dir / "ast" / "fast_report_index.json")
+        _remove_path(repo_data_dir / "ast" / "repo_index.json")
 
     await asyncio.get_running_loop().run_in_executor(None, _cleanup_files)
     async with get_session(db_path) as s:
