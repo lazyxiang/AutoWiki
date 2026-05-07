@@ -1185,8 +1185,12 @@ def _prefilter_candidates(
     all_files: list[str],
     file_infos: dict[str, Any],
     dep_graph: DependencyGraph | None,
-    max_candidates: int = 25,
+    max_candidates: int = 40,
 ) -> list[str]:
+    # PR #40 raised the prefilter from 25 → 40 to give Phase 2 enough
+    # candidate breadth on medium/large repos; see
+    # docs/spec/claude/2026-04-29-wiki-page-quality-redesign.md:37 and the
+    # PR #40 description (issue #39).
     scored = _score_page_files(page, all_files, file_infos, dep_graph)
     return [f for f, _ in scored[:max_candidates]]
 
@@ -2006,7 +2010,15 @@ async def generate_wiki_plan(
     from worker.pipeline.planner.user_steering import assign_by_modules
 
     all_files = list(file_analysis.files.keys())
-    file_summary = file_analysis.to_llm_summary(dep_graph=dep_graph, max_files=200)
+    # Adaptive cap (PR #40, issue #39): small repos pay nothing, medium repos
+    # get full coverage, huge repos fall back to the 800-file safety cap inside
+    # to_llm_summary. The previous 200-file bound was raised here intentionally
+    # to fix structural regressions on 500+ file projects; see
+    # docs/spec/claude/2026-04-29-wiki-page-quality-redesign.md:122.
+    outline_max_files = min(800, max(500, len(all_files)))
+    file_summary = file_analysis.to_llm_summary(
+        dep_graph=dep_graph, max_files=outline_max_files
+    )
     dep_info = format_for_llm_prompt(dep_graph) if dep_graph is not None else None
     clusters = dep_graph.clusters if dep_graph is not None else None
 

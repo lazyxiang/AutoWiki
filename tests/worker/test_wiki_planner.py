@@ -786,8 +786,10 @@ async def test_generate_wiki_plan_two_phase(mock_llm):
     assert plan.pages[titles.index("Utils")].files[0] == "utils.py"
 
 
-async def test_generate_wiki_plan_uses_bounded_summary_budget(mock_llm, monkeypatch):
-    """Phase 1 keeps the file summary bounded for all repo sizes."""
+async def test_generate_wiki_plan_scales_summary_budget_for_large_repos(
+    mock_llm, monkeypatch
+):
+    """Phase 1 gives larger repos a larger explicit summary budget (PR #40)."""
     from worker.pipeline.planner import wiki_planner as wp
 
     class TrackingFileAnalysis(FileAnalysis):
@@ -825,8 +827,10 @@ async def test_generate_wiki_plan_uses_bounded_summary_budget(mock_llm, monkeypa
     await generate_wiki_plan(small_repo, repo_name="small", llm=mock_llm)
     await generate_wiki_plan(large_repo, repo_name="large", llm=mock_llm)
 
-    assert small_repo.summary_kwargs["max_files"] == 200
-    assert large_repo.summary_kwargs["max_files"] == 200
+    assert small_repo.summary_kwargs["max_files"] >= len(small_repo.files)
+    assert (
+        large_repo.summary_kwargs["max_files"] > small_repo.summary_kwargs["max_files"]
+    )
 
 
 async def test_assign_files_logs_each_validation_failure_and_feedback(caplog):
@@ -1675,11 +1679,13 @@ def test_prefilter_returns_at_most_max_candidates():
 
 
 def test_prefilter_default_handles_moderately_large_candidate_sets():
+    # PR #40 raised the default candidate cap from 25 → 40, so 30 candidate
+    # files should all survive the prefilter.
     page = {"title": "Worker", "purpose": "Background jobs."}
     all_files = [f"worker/file{i}.py" for i in range(30)]
     infos = {f: FakeFileInfo([f"fn{i}"]) for i, f in enumerate(all_files)}
     result = _prefilter_candidates(page, all_files, infos, None)
-    assert len(result) == 25
+    assert set(result) == set(all_files)
 
 
 def test_prefilter_prefers_code_files():
