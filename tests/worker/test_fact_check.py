@@ -55,6 +55,109 @@ def test_parse_fail_verdict_with_diagram_issue():
     assert result.issues[0].diagram_index == 0
 
 
+def test_parse_drops_claim_issue_without_claim_text():
+    """``parse_fact_check_result`` enforces the kind-specific contract.
+
+    JSON Schema ``if``/``then``/``else`` is silently ignored by Anthropic's
+    structured-output API, so the parser is the contract enforcement point:
+    a ``"claim"`` issue with an empty/missing claim is dropped rather than
+    flowing into ``strip_failed_claim`` as a no-op.
+    """
+    raw = {
+        "verdict": "fail",
+        "issues": [
+            {
+                "kind": "claim",
+                "section": "## Architecture",
+                "reason": "no claim provided",
+                "suggested_fix": "fix it",
+            },
+            {
+                "kind": "claim",
+                "claim": "valid claim",
+                "section": "## Architecture",
+                "reason": "fine",
+                "suggested_fix": "fix",
+            },
+        ],
+    }
+    result = parse_fact_check_result(raw)
+    assert len(result.issues) == 1
+    assert result.issues[0].claim == "valid claim"
+
+
+def test_parse_drops_diagram_issue_without_index():
+    raw = {
+        "verdict": "fail",
+        "issues": [
+            {
+                "kind": "diagram",
+                "section": "## Flow",
+                "reason": "no index",
+                "suggested_fix": "fix",
+            },
+            {
+                "kind": "diagram",
+                "diagram_index": -1,
+                "section": "## Flow",
+                "reason": "negative index",
+                "suggested_fix": "fix",
+            },
+            {
+                "kind": "diagram",
+                "diagram_index": 2,
+                "section": "## Flow",
+                "reason": "ok",
+                "suggested_fix": "fix",
+            },
+        ],
+    }
+    result = parse_fact_check_result(raw)
+    assert len(result.issues) == 1
+    assert result.issues[0].diagram_index == 2
+
+
+def test_parse_drops_unknown_kind():
+    raw = {
+        "verdict": "fail",
+        "issues": [
+            {
+                "kind": "mystery",
+                "section": "## X",
+                "reason": "r",
+                "suggested_fix": "f",
+            }
+        ],
+    }
+    assert parse_fact_check_result(raw).issues == []
+
+
+def test_strip_failed_claim_neutralizes_html_comment_terminator():
+    """``reason`` from the LLM must not be able to close the HTML comment.
+
+    A ``-->`` in the reason would otherwise terminate
+    ``<!-- removed: ... -->`` early, leaking the trailing text into the
+    rendered Markdown.
+    """
+    draft = "## X\n\nFoo bar baz.\n"
+    out = strip_failed_claim(draft, "Foo bar baz", "broken --> attack <script>")
+    # The injected terminator must be neutralised; no second ``-->`` may appear
+    # before the legitimate one that closes the comment we wrote.
+    body = out.split("<!-- removed:", 1)[1]
+    closing = body.index("-->")
+    assert "-->" not in body[:closing]
+
+
+def test_strip_failed_diagram_neutralizes_html_comment_terminator():
+    draft = "## Flow\n\n```mermaid\nflowchart TD\n  A-->B\n```\n"
+    out = strip_failed_diagram(
+        draft, section="## Flow", diagram_index=0, reason="-- xss --> bad"
+    )
+    body = out.split("<!-- diagram removed:", 1)[1]
+    closing = body.index("-->")
+    assert "-->" not in body[:closing]
+
+
 def test_strip_failed_claim_removes_sentence():
     draft = (
         "## Architecture\n\n"

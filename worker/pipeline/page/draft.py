@@ -294,7 +294,14 @@ async def generate_draft(
         child_contents=child_contents,
         repo_notes=repo_notes,
     )
-    system = DRAFT_SYSTEM + get_language_instruction(wiki_language)
+    # Wrap DRAFT_SYSTEM as a cacheable segment so Anthropic prompt caching can
+    # apply ``cache_control`` to the system turn across the per-level page batch.
+    # The language instruction is short and varies infrequently; appending it as
+    # a non-cacheable trailer keeps the cacheable prefix stable.
+    system: list[PromptSegment] = [
+        PromptSegment(text=DRAFT_SYSTEM, cacheable=True),
+        PromptSegment(text=get_language_instruction(wiki_language)),
+    ]
 
     try:
         content = await async_retry(

@@ -161,7 +161,14 @@ def test_build_slice_candidates_compatibility_loads_source_slices(tmp_path):
     assert "return value" in slices[0].code
 
 
-def test_build_slice_candidates_uses_load_slice_extractor_hook(tmp_path, monkeypatch):
+def test_repo_build_slice_candidates_uses_injected_extractor(tmp_path):
+    """``build_slice_candidates`` invokes the injected ``slice_extractor``.
+
+    The production caller in ``_search_for_question_evidence`` resolves the
+    extractor via ``_load_slice_extractor()`` and passes it down; this test
+    only verifies that an injected extractor is actually consulted for the
+    matched entity span.
+    """
     from worker.fast_report import search
     from worker.fast_report.search import (
         _RankedFile,
@@ -205,14 +212,12 @@ def test_build_slice_candidates_uses_load_slice_extractor_hook(tmp_path, monkeyp
             truncated_lines=0,
         )
 
-    monkeypatch.setattr(search, "_load_slice_extractor", lambda: fake_slice_extractor)
-
     slices = search._repo_build_slice_candidates(
         files,
         selected,
         profile_for_question_type("implementation_location"),
         clone_root=tmp_path,
-        slice_extractor=search._load_slice_extractor(),
+        slice_extractor=fake_slice_extractor,
     )
 
     assert calls == ["app/service.py"]

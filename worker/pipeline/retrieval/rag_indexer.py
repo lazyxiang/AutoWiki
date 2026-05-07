@@ -44,6 +44,48 @@ def _is_doc_chunk(meta: dict[str, Any]) -> bool:
     return Path(file_path).suffix.lower() in _DOC_EXTENSIONS
 
 
+def _partition_with_doc_cap(
+    chunks: list[dict[str, Any]], *, k: int, doc_k: int
+) -> list[dict[str, Any]]:
+    """Return up to *k* chunks with **at most** *doc_k* doc chunks.
+
+    ``doc_k`` is a strict upper bound on the number of documentation chunks
+    in the result (callers rely on this to keep docs from dominating
+    code-heavy queries).  When fewer than ``doc_k`` doc chunks are
+    available, the empty doc slots are back-filled with extra code chunks
+    so the caller still receives ``k`` results when the index has enough
+    candidates.  Excess doc chunks beyond ``doc_k`` are dropped — they are
+    never used to back-fill the code bucket, since that would silently
+    exceed the doc cap.
+
+    The ordering of *chunks* is preserved within each bucket, so results
+    remain sorted by relevance.
+    """
+
+    code_k = k - doc_k
+    code_chunks: list[dict[str, Any]] = []
+    doc_chunks: list[dict[str, Any]] = []
+    extra_code: list[dict[str, Any]] = []
+    for meta in chunks:
+        if _is_doc_chunk(meta):
+            if len(doc_chunks) < doc_k:
+                doc_chunks.append(meta)
+            # else: drop — would violate the doc_k cap
+        else:
+            if len(code_chunks) < code_k:
+                code_chunks.append(meta)
+            else:
+                extra_code.append(meta)
+
+    merged = code_chunks + doc_chunks
+    # Back-fill empty doc slots with extra code so we still hit ``k`` when
+    # the index has more code than ``code_k`` but fewer docs than ``doc_k``.
+    deficit = doc_k - len(doc_chunks)
+    if deficit > 0 and extra_code:
+        merged.extend(extra_code[:deficit])
+    return merged[:k]
+
+
 def chunk_file_with_lines(
     path: Path,
     chunk_size: int = 1000,
@@ -398,20 +440,7 @@ class FAISSStore:
         if doc_k is None:
             return all_results[:k]
 
-        code_k = k - doc_k
-        code_chunks: list[dict[str, Any]] = []
-        doc_chunks: list[dict[str, Any]] = []
-        for meta in all_results:
-            if _is_doc_chunk(meta):
-                if len(doc_chunks) < doc_k:
-                    doc_chunks.append(meta)
-            else:
-                if len(code_chunks) < code_k:
-                    code_chunks.append(meta)
-            if len(code_chunks) >= code_k and len(doc_chunks) >= doc_k:
-                break
-
-        return code_chunks + doc_chunks
+        return _partition_with_doc_cap(all_results, k=k, doc_k=doc_k)
 
     def multi_search(
         self, queries: list[np.ndarray], k: int = 5, doc_k: int | None = None
@@ -478,18 +507,7 @@ class FAISSStore:
         if doc_k is None:
             return results
 
-        code_k = k - doc_k
-        code_chunks: list[dict[str, Any]] = []
-        doc_chunks: list[dict[str, Any]] = []
-        for meta in results:
-            if _is_doc_chunk(meta):
-                if len(doc_chunks) < doc_k:
-                    doc_chunks.append(meta)
-            else:
-                if len(code_chunks) < code_k:
-                    code_chunks.append(meta)
-
-        return code_chunks + doc_chunks
+        return _partition_with_doc_cap(results, k=k, doc_k=doc_k)
 
     def save(self) -> None:
         """Persist the FAISS index and metadata list to disk.

@@ -35,15 +35,12 @@ _FACT_CHECK_SCHEMA = {
                     "reason": {"type": "string"},
                     "suggested_fix": {"type": "string"},
                 },
+                # Note: Anthropic's structured-output schema does not honour
+                # JSON Schema ``if``/``then``/``else``, so kind-specific
+                # required fields (``claim`` for "claim" issues,
+                # ``diagram_index`` for "diagram" issues) are enforced at
+                # parse time in :func:`parse_fact_check_result`.
                 "required": ["kind", "section", "reason", "suggested_fix"],
-                # kind-specific required fields: "claim" issues must have "claim",
-                # "diagram" issues must have "diagram_index"
-                "if": {
-                    "properties": {"kind": {"const": "claim"}},
-                    "required": ["kind"],
-                },
-                "then": {"required": ["claim"]},
-                "else": {"required": ["diagram_index"]},
             },
         },
     },
@@ -68,17 +65,54 @@ class FactCheckResult:
 
 
 def parse_fact_check_result(raw: dict[str, Any]) -> FactCheckResult:
+    """Parse an LLM-produced fact-check payload, dropping malformed issues.
+
+    Centralizes kind-specific contract enforcement that JSON Schema
+    ``if``/``then``/``else`` cannot reliably express in the Anthropic
+    structured-output API:
+
+    * ``kind == "claim"`` requires a non-empty ``claim`` string.
+    * ``kind == "diagram"`` requires a non-negative integer ``diagram_index``.
+
+    Issues that fail these checks (or carry an unknown ``kind``) are skipped
+    so downstream callers never have to re-validate.
+    """
+
     verdict = raw.get("verdict", "pass")
-    issues = []
+    issues: list[FactCheckIssue] = []
     for issue_raw in raw.get("issues", []):
+        kind = issue_raw.get("kind", "claim")
+        section = issue_raw.get("section", "")
+        reason = issue_raw.get("reason", "")
+        suggested_fix = issue_raw.get("suggested_fix", "")
+        claim = issue_raw.get("claim")
+        diagram_index = issue_raw.get("diagram_index")
+
+        if kind == "claim":
+            if not isinstance(claim, str) or not claim.strip():
+                logger.debug(
+                    "fact_check: dropping 'claim' issue with empty/missing claim"
+                )
+                continue
+        elif kind == "diagram":
+            if not isinstance(diagram_index, int) or diagram_index < 0:
+                logger.debug(
+                    "fact_check: dropping 'diagram' issue with invalid index=%r",
+                    diagram_index,
+                )
+                continue
+        else:
+            logger.debug("fact_check: dropping issue with unknown kind=%r", kind)
+            continue
+
         issues.append(
             FactCheckIssue(
-                kind=issue_raw.get("kind", "claim"),
-                section=issue_raw.get("section", ""),
-                reason=issue_raw.get("reason", ""),
-                suggested_fix=issue_raw.get("suggested_fix", ""),
-                claim=issue_raw.get("claim"),
-                diagram_index=issue_raw.get("diagram_index"),
+                kind=kind,
+                section=section,
+                reason=reason,
+                suggested_fix=suggested_fix,
+                claim=claim,
+                diagram_index=diagram_index,
             )
         )
     return FactCheckResult(verdict=verdict, issues=issues)
@@ -226,6 +260,21 @@ def _section_bounds(draft: str, section_header: str) -> tuple[int, int]:
     return section_start, section_end
 
 
+def _safe_comment_text(text: str) -> str:
+    """Neutralise HTML-comment terminator sequences in *text*.
+
+    The fact-check ``reason`` is interpolated into ``<!-- removed: ... -->`` /
+    ``<!-- diagram removed: ... -->`` markers.  An LLM-produced ``-->`` (or
+    even a stray ``--``) would close the comment early and leak content into
+    the rendered Markdown.  Replacing both sequences is enough: ``-->`` is
+    matched first (because ``--`` is a substring), and the replacement
+    ``--&gt;`` cannot accidentally re-form a terminator after the second
+    pass.
+    """
+
+    return text.replace("-->", "--&gt;").replace("--", "—")
+
+
 def _trim_diagram_revision_metadata(corrected: str) -> str:
     lines = corrected.strip().splitlines()
     while lines and re.match(r"^\*{0,2}Diagram:.*\*{0,2}\s*$", lines[0].strip()):
@@ -263,7 +312,9 @@ def strip_failed_claim(
                     replacement = " ".join(kept)
                     if replacement:
                         result_lines.append(replacement)
-                    result_lines.append(f"<!-- removed: {reason} -->")
+                    result_lines.append(
+                        f"<!-- removed: {_safe_comment_text(reason)} -->"
+                    )
                 else:
                     result_lines.append(line)
             else:
@@ -301,7 +352,7 @@ def strip_failed_diagram(
 
     if diagram_index < len(matches):
         match = matches[diagram_index]
-        replacement = f"<!-- diagram removed: {reason} -->"
+        replacement = f"<!-- diagram removed: {_safe_comment_text(reason)} -->"
         new_section = (
             section_text[: match.start()] + replacement + section_text[match.end() :]
         )

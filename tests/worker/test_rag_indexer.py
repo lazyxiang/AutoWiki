@@ -276,7 +276,7 @@ def test_multi_search_with_doc_k(tmp_path):
 
 
 def test_search_doc_k_with_no_doc_chunks_in_index(tmp_path):
-    """When doc_k > 0 but index has no doc chunks, should return code chunks."""
+    """When doc_k > 0 but the index has no doc chunks, fill all slots with code."""
     store = FAISSStore(
         dimension=4,
         index_path=tmp_path / "idx",
@@ -300,5 +300,38 @@ def test_search_doc_k_with_no_doc_chunks_in_index(tmp_path):
     # No doc chunks exist; all results should be code chunks
     for r in results:
         assert not r["file"].endswith((".md", ".rst", ".txt", ".adoc"))
-    # Should return code chunks despite doc_k=1 (fills unused doc slot with code)
-    assert len(results) > 0
+    # The unused doc slot must be back-filled with code so callers receive
+    # the requested ``k`` results when an entire bucket is empty.
+    assert len(results) == 3
+
+
+def test_search_doc_k_backfills_when_doc_bucket_short(tmp_path):
+    """When fewer than doc_k doc chunks exist, fill the remainder with code."""
+    store = FAISSStore(
+        dimension=4,
+        index_path=tmp_path / "idx",
+        meta_path=tmp_path / "meta.pkl",
+    )
+    vecs = [
+        np.array([1, 0, 0, 0], dtype=np.float32),
+        np.array([0, 1, 0, 0], dtype=np.float32),
+        np.array([0, 0, 1, 0], dtype=np.float32),
+        np.array([0, 0, 0, 1], dtype=np.float32),
+    ]
+    # Three code chunks, one doc chunk; ask for k=4, doc_k=2.
+    metas = [
+        {"file": "src/a.py", "start_line": 1, "end_line": 5, "text": "a"},
+        {"file": "src/b.py", "start_line": 1, "end_line": 5, "text": "b"},
+        {"file": "src/c.py", "start_line": 1, "end_line": 5, "text": "c"},
+        {"file": "docs/intro.md", "start_line": 1, "end_line": 5, "text": "d"},
+    ]
+    store.add(vecs, metas)
+
+    query = np.array([1, 0, 0, 0], dtype=np.float32)
+    results = store.search(query, k=4, doc_k=2)
+
+    # The single doc chunk fills one of the two doc slots; the leftover doc
+    # slot is back-filled with the third code chunk so we still hit ``k``.
+    assert len(results) == 4
+    doc_results = [r for r in results if r["file"].endswith(_DOC_EXTS)]
+    assert len(doc_results) == 1
