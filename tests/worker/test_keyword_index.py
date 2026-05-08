@@ -22,8 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from worker.pipeline.rag_indexer import Chunk  # still present in B1
-from worker.pipeline.retrieval.chunk import Chunk as CanonicalChunk
+from worker.pipeline.retrieval.chunk import Chunk
 from worker.pipeline.retrieval.keyword_index import KeywordIndex
 
 # ---------------------------------------------------------------------------
@@ -625,20 +624,21 @@ _FIXTURE_PATH = (
 )
 
 
-def _build_chunks(repo_dir: Path) -> list[CanonicalChunk]:
-    """Build one Chunk per synthetic file using the file text as a single chunk."""
-    chunks: list[CanonicalChunk] = []
+def _build_chunks() -> list[Chunk]:
+    """Build canonical chunks from the synthetic corpus dict.
+
+    Each entry in ``_SYNTHETIC_FILES`` becomes one chunk; line ranges span the
+    full file content. Source content is held in memory only — no I/O.
+    """
+    chunks: list[Chunk] = []
     for filename, content in _SYNTHETIC_FILES.items():
-        # Write the file to repo_dir so it exists on disk if needed later.
-        file_path = repo_dir / filename
-        file_path.write_text(content, encoding="utf-8")
-        lines = content.splitlines()
+        line_count = content.count("\n") + 1
         chunks.append(
-            CanonicalChunk(
+            Chunk(
                 file=filename,
                 text=content,
                 line_start=1,
-                line_end=len(lines),
+                line_end=line_count,
             )
         )
     return chunks
@@ -698,15 +698,14 @@ def test_build_empty_chunks_returns_empty_index():
 
 def test_build_only_short_text_returns_empty_index():
     """All-short text means every chunk tokenizes to empty (min_ascii_len=3)."""
-    chunks = [CanonicalChunk(file="a.py", text="ab", line_start=1, line_end=1)]
+    chunks = [Chunk(file="a.py", text="ab", line_start=1, line_end=1)]
     idx = KeywordIndex.build(chunks, repo_index={"files": []})
     assert idx.search(["anything"], k=5) == []
 
 
 def test_search_hard_cap_returns_fewer_than_k():
     chunks = [
-        CanonicalChunk(file="a.py", text="hello", line_start=i, line_end=i)
-        for i in range(5)
+        Chunk(file="a.py", text="hello", line_start=i, line_end=i) for i in range(5)
     ]
     idx = KeywordIndex.build(chunks, repo_index={"files": []})
     out = idx.search(["hello"], k=10, files=["a.py"], per_file_quota=2)
@@ -718,7 +717,7 @@ def test_search_hard_cap_returns_fewer_than_k():
 # ---------------------------------------------------------------------------
 
 
-def test_keyword_index_recall_gate(tmp_path: Path) -> None:
+def test_keyword_index_recall_gate() -> None:
     """BM25 top-3 recall ≥ 0.70 on a 20-question hand-crafted fixture.
 
     Spec §6.4 framed this as recall parity vs FAISS.  The FAISS comparison
@@ -737,7 +736,7 @@ def test_keyword_index_recall_gate(tmp_path: Path) -> None:
     questions = json.loads(_FIXTURE_PATH.read_text())
 
     # Build chunks from the synthesized corpus.
-    chunks = _build_chunks(tmp_path)
+    chunks = _build_chunks()
     idx = KeywordIndex.build(chunks, repo_index={"files": []})
 
     TOP_N = 3
@@ -780,7 +779,7 @@ def test_keyword_index_recall_gate(tmp_path: Path) -> None:
         "(or another provider key) to run this test."
     ),
 )
-def test_keyword_index_recall_parity_vs_faiss(tmp_path: Path) -> None:
+async def test_keyword_index_recall_parity_vs_faiss(tmp_path: Path) -> None:
     """BM25 top-3 recall is within ±10% of FAISS top-3 on the fixture.
 
     This test is gated by AUTOWIKI_TEST_REAL_EMBEDDING because a meaningful
@@ -792,43 +791,35 @@ def test_keyword_index_recall_parity_vs_faiss(tmp_path: Path) -> None:
     The test uses the same 20-question fixture and synthesized corpus as the
     always-on recall gate above.
     """
-    import asyncio
-
     import numpy as np
 
+    from shared.config import get_config
+    from worker.embedding import make_embedding_provider
     from worker.pipeline.retrieval.rag_indexer import FAISSStore
 
     questions = json.loads(_FIXTURE_PATH.read_text())
-    chunks = _build_chunks(tmp_path)
+    chunks = _build_chunks()
 
     # Build the BM25 index.
     bm25_idx = KeywordIndex.build(chunks, repo_index={"files": []})
 
     # Build the FAISS store using a real embedding provider.
     # Import lazily so the test module loads cleanly without API keys.
-    from worker.llm.factory import make_embedding_provider  # type: ignore[import]
-
-    embedding_provider = make_embedding_provider()
+    cfg = get_config()
+    embedding_provider = make_embedding_provider(cfg)
     faiss_store = FAISSStore(
         dimension=1536,
         index_path=tmp_path / "faiss.index",
         meta_path=tmp_path / "faiss.meta.pkl",
     )
 
-    async def _build_faiss() -> None:
-        texts = [c.text for c in chunks]
-        vectors = await embedding_provider.embed_batch(texts, is_code=True)
-        faiss_store.add(vectors, [{"file": c.file} for c in chunks])
-
-    asyncio.run(_build_faiss())
+    texts = [c.text for c in chunks]
+    vectors = await embedding_provider.embed_batch(texts, is_code=True)
+    faiss_store.add(vectors, [{"file": c.file} for c in chunks])
 
     TOP_N = 3
     bm25_hits = 0
     faiss_hits = 0
-
-    async def _embed_query(q: str) -> np.ndarray:
-        vecs = await embedding_provider.embed_batch([q], is_code=False)
-        return vecs[0]
 
     for item in questions:
         query: str = item["query"]
@@ -840,7 +831,8 @@ def test_keyword_index_recall_parity_vs_faiss(tmp_path: Path) -> None:
             bm25_hits += 1
 
         # FAISS
-        qvec = asyncio.run(_embed_query(query))
+        qvecs = await embedding_provider.embed_batch([query], is_code=False)
+        qvec: np.ndarray = qvecs[0]
         faiss_results = {m["file"] for m in faiss_store.search(qvec, k=TOP_N)}
         if faiss_results & set(expected):
             faiss_hits += 1
