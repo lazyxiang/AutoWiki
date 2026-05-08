@@ -559,7 +559,7 @@ async def generate_page(
                 for issue in remaining_issues:
                     if issue.kind == "claim" and issue.claim:
                         draft = strip_failed_claim(
-                            draft, issue.claim, issue.reason, issue.section
+                            draft, issue.claim, issue.reason, issue.section or None
                         )
                     elif issue.kind == "diagram" and issue.diagram_index is not None:
                         draft = strip_failed_diagram(

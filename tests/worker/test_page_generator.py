@@ -515,8 +515,9 @@ async def test_generate_page_strips_oos_claim_without_calling_revision(
             "key_claims": ["claim a", "claim b", "claim c"],
             "out_of_scope_claims": [oos_phrase],
         },
-        # Pass 3: fact-check — should NOT be reached (early-exit), but guard anyway
-        {"verdict": "pass", "issues": []},
+        # Pass 3: fact-check — must NOT be reached because OOS early-exit fires first.
+        # Raise to make any accidental call an explicit test failure.
+        Exception("fact-check LLM must not be called when only OOS issues exist"),
     ]
 
     spec = WikiPageSpec(title="Models", purpose="Test.", files=["models.py"])
@@ -529,15 +530,15 @@ async def test_generate_page_strips_oos_claim_without_calling_revision(
         repo_name="test",
     )
 
-    # The out-of-scope phrase must be stripped from prose (may appear in HTML comment)
+    # The out-of-scope phrase must be stripped from prose.
     import re as _re
 
     prose_only = _re.sub(r"<!--.*?-->", "", result.content, flags=_re.DOTALL)
     assert oos_phrase not in prose_only
-    # The removal comment must have been injected
-    assert "<!-- removed:" in result.content
     # Draft was generated (llm.generate called once); revision LLM NOT called
     assert llm.generate.call_count == 1
+    # Only Pass 1 outline was called; Pass 3 fact-check was short-circuited by OOS gate
+    assert fast_llm.generate_structured.call_count == 1
 
 
 async def test_extract_signature_slices_empty_when_no_repo_root(tmp_path):

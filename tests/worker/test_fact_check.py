@@ -1,5 +1,6 @@
 from worker.llm.prompt_segment import PromptSegment
 from worker.pipeline.page.fact_check import (
+    OUT_OF_SCOPE_REASON_PREFIX,
     FactCheckIssue,
     parse_fact_check_result,
     run_fact_check,
@@ -337,7 +338,7 @@ async def test_factcheck_fails_when_draft_contains_out_of_scope_claim(mock_fast_
         fast_llm=mock_fast_llm,
     )
     assert result.verdict == "fail"
-    assert any("out of scope" in i.reason.lower() for i in result.issues)
+    assert any(i.reason.startswith(OUT_OF_SCOPE_REASON_PREFIX) for i in result.issues)
     assert any(i.kind == "claim" for i in result.issues)
     # LLM should NOT have been consulted — early return
     mock_fast_llm.generate_structured.assert_not_called()
@@ -364,6 +365,51 @@ async def test_factcheck_no_oos_hits_calls_llm(mock_fast_llm):
     )
     assert result.verdict == "pass"
     mock_fast_llm.generate_structured.assert_called_once()
+
+
+async def test_factcheck_oos_strip_handles_whitespace_variation(mock_fast_llm):
+    """OOS claim with non-standard whitespace must still detect and strip correctly.
+
+    The LLM may emit multi-space strings in out_of_scope_claims (e.g. from
+    prompt formatting noise).  Detection normalizes both sides; the stored claim
+    is the normalized form so strip_failed_claim can also find it in drafts that
+    use single spaces.
+    """
+    mock_fast_llm.generate_structured.side_effect = None
+    mock_fast_llm.generate_structured.return_value = {"verdict": "pass", "issues": []}
+
+    outline = PageOutline(
+        sections=[SectionPlan(heading="X", kind="prose", focus="Y", diagram=None)],
+        key_claims=["a", "b", "c"],
+        out_of_scope_claims=["validates  outline  JSON"],  # double spaces from LLM
+    )
+    draft = "This module validates outline JSON before drafting. Done."
+    result = await run_fact_check(
+        draft=draft,
+        outline=outline,
+        entity_summaries="",
+        dep_info=None,
+        targeted_chunks="",
+        fast_llm=mock_fast_llm,
+    )
+    assert result.verdict == "fail"
+    assert result.issues
+    # The stored claim must be the normalized form (single spaces)
+    assert result.issues[0].claim == "validates outline JSON"
+    # LLM should NOT have been consulted
+    mock_fast_llm.generate_structured.assert_not_called()
+
+    # strip_failed_claim must also handle the case where the normalized claim is
+    # passed against an un-normalized draft.
+    stripped = strip_failed_claim(draft, "validates outline JSON", "out of scope", None)
+    assert "validates outline JSON" not in stripped or "<!-- removed:" in stripped
+
+
+def test_strip_failed_claim_whitespace_tolerant():
+    """strip_failed_claim matches when claim has single spaces but draft has double."""
+    draft = "The system  validates  outline  JSON before  drafting.\n"
+    result = strip_failed_claim(draft, "validates outline JSON", "out of scope")
+    assert "validates  outline  JSON" not in result or "<!-- removed:" in result
 
 
 async def test_run_targeted_revision_fixes_claims(mock_llm):

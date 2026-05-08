@@ -21,7 +21,10 @@ logger = logging.getLogger("worker.fact_check")
 
 # Sentinel prefix used to tag synthetic out-of-scope issues so the generator
 # can identify and strip them before handing remaining issues to the LLM revision.
-OUT_OF_SCOPE_REASON_PREFIX = "out of scope"
+# Using a machine-tagged prefix that the LLM cannot organically produce prevents
+# misclassification of LLM-generated reasons that happen to start with natural
+# language like "out of scope for this component".
+OUT_OF_SCOPE_REASON_PREFIX = "autowiki:oos:"
 
 _FACT_CHECK_SCHEMA = {
     "type": "object",
@@ -195,25 +198,34 @@ def _find_oos_issues(draft: str, outline: PageOutline) -> list[FactCheckIssue]:
 
     Each issue has kind="claim" and reason starting with OUT_OF_SCOPE_REASON_PREFIX
     so the generator can identify and strip them pre-revision.
+
+    The normalized form of each claim (whitespace-collapsed) is stored on the issue
+    so that :func:`strip_failed_claim` can reliably find it in the un-normalized draft.
     """
     if not outline.out_of_scope_claims:
         return []
 
     draft_norm = _normalize_text(draft)
     issues: list[FactCheckIssue] = []
+    # Deduplicate while preserving order so the same OOS phrase is not stripped twice.
+    seen: dict[str, None] = {}
     for oos_claim in outline.out_of_scope_claims:
         claim_norm = _normalize_text(oos_claim)
-        if not claim_norm:
+        if not claim_norm or claim_norm in seen:
             continue
+        seen[claim_norm] = None
         if re.search(re.escape(claim_norm), draft_norm, re.IGNORECASE):
             issues.append(
                 FactCheckIssue(
                     kind="claim",
                     section="",
-                    claim=oos_claim,
+                    # Store the normalized form so strip_failed_claim can match it
+                    # against whitespace-collapsed lines without relying on the raw
+                    # (potentially multi-space) LLM output string.
+                    claim=claim_norm,
                     reason=(
                         f"{OUT_OF_SCOPE_REASON_PREFIX} (covered by sibling page): "
-                        f"{oos_claim[:80]}"
+                        f"{oos_claim[:200]}"
                     ),
                     suggested_fix=(
                         "Remove this sentence; refer to the sibling page by title."
@@ -238,6 +250,16 @@ async def run_fact_check(
     If the draft contains any out-of-scope claims (from
     ``outline.out_of_scope_claims``), returns early with ``verdict="fail"`` and
     synthetic issues — the LLM is NOT called.
+
+    **Early-exit semantics**: when ``outline.out_of_scope_claims`` produces any
+    hit on ``draft``, this function returns immediately with ``verdict="fail"``
+    and synthetic OOS issues.  The LLM fact-check call is skipped entirely.
+    The rationale is that out-of-scope content must be removed before any other
+    fact-check signal is meaningful; the generator strips OOS sentences
+    deterministically (no LLM needed) and then proceeds.  Note that the
+    generator does NOT re-run fact-check after stripping, so genuine factual
+    errors in the remaining prose are not caught in that pass.  Per spec §5.3
+    B3 / plan B2.1 step 3.
     """
     # ── Early-exit: out-of-scope claim gate ──
     oos_issues = _find_oos_issues(draft, outline)
@@ -354,12 +376,16 @@ def strip_failed_claim(
         lines = text.split("\n")
         result_lines = []
         for line in lines:
-            if claim_lower in line.lower():
+            # Normalize internal whitespace before matching so that OOS claims
+            # stored in their normalized form (single spaces) still find their
+            # counterpart in lines that may have irregular spacing from LLM output.
+            line_norm_lower = re.sub(r"\s+", " ", line.lower())
+            if claim_lower in line_norm_lower:
                 sentences = re.split(r"(?<=[.!?])\s+", line)
                 kept = []
                 removed = False
                 for sentence in sentences:
-                    if claim_lower in sentence.lower():
+                    if claim_lower in re.sub(r"\s+", " ", sentence.lower()):
                         removed = True
                     else:
                         kept.append(sentence)
