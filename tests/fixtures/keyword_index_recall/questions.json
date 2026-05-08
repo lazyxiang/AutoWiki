@@ -1,0 +1,82 @@
+[
+  {
+    "query": "JWT token authentication login password hash",
+    "expected_files": ["auth.py"]
+  },
+  {
+    "query": "user session login verify credentials",
+    "expected_files": ["auth.py"]
+  },
+  {
+    "query": "SQL database query cursor connection pool",
+    "expected_files": ["database.py"]
+  },
+  {
+    "query": "execute transaction commit rollback",
+    "expected_files": ["database.py"]
+  },
+  {
+    "query": "HTTP request response status code headers",
+    "expected_files": ["http_client.py"]
+  },
+  {
+    "query": "GET POST PUT DELETE endpoint URL",
+    "expected_files": ["http_client.py"]
+  },
+  {
+    "query": "markdown parse heading bold italic link",
+    "expected_files": ["markdown_parser.py"]
+  },
+  {
+    "query": "syntax tree AST nodes tokenizer text",
+    "expected_files": ["markdown_parser.py"]
+  },
+  {
+    "query": "mermaid diagram sanitize flowchart subgraph",
+    "expected_files": ["mermaid_sanitizer.py"]
+  },
+  {
+    "query": "Mermaid node edge label quote rendering",
+    "expected_files": ["mermaid_sanitizer.py"]
+  },
+  {
+    "query": "BM25 keyword index tokenize search ranking",
+    "expected_files": ["keyword_index.py"]
+  },
+  {
+    "query": "Okapi BM25 document frequency IDF scoring",
+    "expected_files": ["keyword_index.py"]
+  },
+  {
+    "query": "page generator wiki draft outline section",
+    "expected_files": ["page_generator.py"]
+  },
+  {
+    "query": "LLM prompt wiki page outline generation",
+    "expected_files": ["page_generator.py"]
+  },
+  {
+    "query": "dependency graph import module circular detection",
+    "expected_files": ["dependency_graph.py"]
+  },
+  {
+    "query": "file import edge node graph traversal BFS",
+    "expected_files": ["dependency_graph.py"]
+  },
+  {
+    "query": "cache key TTL expiry invalidation store",
+    "expected_files": ["cache.py"]
+  },
+  {
+    "query": "Redis key-value store set get expire",
+    "expected_files": ["cache.py"]
+  },
+  {
+    "query": "tokenize text camel case split identifier",
+    "expected_files": ["tokenizer.py"]
+  },
+  {
+    "query": "unicode normalize CJK ngram ASCII token",
+    "expected_files": ["tokenizer.py"]
+  }
+]
