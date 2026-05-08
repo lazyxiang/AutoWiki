@@ -1,4 +1,5 @@
 from worker.pipeline.rag_indexer import Chunk  # still present in B1
+from worker.pipeline.retrieval.chunk import Chunk as CanonicalChunk
 from worker.pipeline.retrieval.keyword_index import KeywordIndex
 
 
@@ -42,3 +43,25 @@ def test_search_files_filter_restricts_scope():
     idx = KeywordIndex.build(chunks, repo_index={"files": []})
     out = idx.search(["alpha"], k=5, files=["a.py"])
     assert all(c.file == "a.py" for c in out)
+
+
+def test_build_empty_chunks_returns_empty_index():
+    idx = KeywordIndex.build([], repo_index={"files": []})
+    assert idx.search(["anything"], k=5) == []
+
+
+def test_build_only_short_text_returns_empty_index():
+    """All-short text means every chunk tokenizes to empty (min_ascii_len=3)."""
+    chunks = [CanonicalChunk(file="a.py", text="ab", line_start=1, line_end=1)]
+    idx = KeywordIndex.build(chunks, repo_index={"files": []})
+    assert idx.search(["anything"], k=5) == []
+
+
+def test_search_hard_cap_returns_fewer_than_k():
+    chunks = [
+        CanonicalChunk(file="a.py", text="hello", line_start=i, line_end=i)
+        for i in range(5)
+    ]
+    idx = KeywordIndex.build(chunks, repo_index={"files": []})
+    out = idx.search(["hello"], k=10, files=["a.py"], per_file_quota=2)
+    assert len(out) == 2  # quota caps before k
