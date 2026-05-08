@@ -33,7 +33,10 @@ import faiss
 import numpy as np
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+from worker.pipeline.retrieval.chunk import Chunk  # re-exported for importers
 from worker.utils.retry import OnRetryCallback
+
+__all__ = ["Chunk", "FAISSStore", "build_rag_index"]
 
 _DOC_EXTENSIONS = frozenset({".md", ".rst", ".txt", ".adoc"})
 
