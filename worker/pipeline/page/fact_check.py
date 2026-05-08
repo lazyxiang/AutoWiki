@@ -19,6 +19,10 @@ from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retr
 
 logger = logging.getLogger("worker.fact_check")
 
+# Sentinel prefix used to tag synthetic out-of-scope issues so the generator
+# can identify and strip them before handing remaining issues to the LLM revision.
+OUT_OF_SCOPE_REASON_PREFIX = "out of scope"
+
 _FACT_CHECK_SCHEMA = {
     "type": "object",
     "properties": {
@@ -181,6 +185,44 @@ def _build_fact_check_prompt(
     return system_segments, PromptSegment(text=tail)
 
 
+def _normalize_text(text: str) -> str:
+    """Collapse internal whitespace for substring matching."""
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _find_oos_issues(draft: str, outline: PageOutline) -> list[FactCheckIssue]:
+    """Return synthetic FactCheckIssue items for out-of-scope claims found in draft.
+
+    Each issue has kind="claim" and reason starting with OUT_OF_SCOPE_REASON_PREFIX
+    so the generator can identify and strip them pre-revision.
+    """
+    if not outline.out_of_scope_claims:
+        return []
+
+    draft_norm = _normalize_text(draft)
+    issues: list[FactCheckIssue] = []
+    for oos_claim in outline.out_of_scope_claims:
+        claim_norm = _normalize_text(oos_claim)
+        if not claim_norm:
+            continue
+        if re.search(re.escape(claim_norm), draft_norm, re.IGNORECASE):
+            issues.append(
+                FactCheckIssue(
+                    kind="claim",
+                    section="",
+                    claim=oos_claim,
+                    reason=(
+                        f"{OUT_OF_SCOPE_REASON_PREFIX} (covered by sibling page): "
+                        f"{oos_claim[:80]}"
+                    ),
+                    suggested_fix=(
+                        "Remove this sentence; refer to the sibling page by title."
+                    ),
+                )
+            )
+    return issues
+
+
 async def run_fact_check(
     draft: str,
     outline: PageOutline,
@@ -191,7 +233,20 @@ async def run_fact_check(
     on_retry: OnRetryCallback | None = None,
     wiki_language: str = "en",
 ) -> FactCheckResult:
-    """Run fact-check on a draft using the fast model. Fails open on error."""
+    """Run fact-check on a draft using the fast model. Fails open on error.
+
+    If the draft contains any out-of-scope claims (from
+    ``outline.out_of_scope_claims``), returns early with ``verdict="fail"`` and
+    synthetic issues — the LLM is NOT called.
+    """
+    # ── Early-exit: out-of-scope claim gate ──
+    oos_issues = _find_oos_issues(draft, outline)
+    if oos_issues:
+        logger.debug(
+            "fact_check: early-exit with %d out-of-scope hit(s)", len(oos_issues)
+        )
+        return FactCheckResult(verdict="fail", issues=oos_issues)
+
     context_segments, user_segment = _build_fact_check_prompt(
         draft, outline, entity_summaries, dep_info, targeted_chunks
     )

@@ -388,6 +388,7 @@ async def generate_page(
     from worker.pipeline.page.diagram_post_processor import ensure_diagram_headers
     from worker.pipeline.page.draft import build_draft_prompt, generate_draft
     from worker.pipeline.page.fact_check import (
+        OUT_OF_SCOPE_REASON_PREFIX,
         run_fact_check,
         run_targeted_revision,
         strip_failed_claim,
@@ -501,50 +502,69 @@ async def generate_page(
 
     # ── Pass 4: Targeted revision (main model, conditional) ──
     if fc_result.verdict == "fail" and fc_result.issues:
-        await _report_page_progress(on_progress, spec.title, "Revision")
-        context_segments = build_draft_prompt(
-            spec=spec,
-            outline=outline,
-            context_chunks=context_chunks,
-            repo_name=repo_name,
-            dep_info=dep_info,
-            entity_details=entity_details,
-            child_contents=child_contents,
-            repo_notes=repo_notes,
-        )
-        cache_segs = [s for s in context_segments if s.cacheable]
+        # Strip out-of-scope claims immediately (no LLM call needed).
+        # These are identified by a sentinel reason prefix set in fact_check.py.
+        oos_issues = [
+            i
+            for i in fc_result.issues
+            if i.reason.startswith(OUT_OF_SCOPE_REASON_PREFIX)
+        ]
+        for issue in oos_issues:
+            if issue.claim:
+                draft = strip_failed_claim(
+                    draft, issue.claim, issue.reason, issue.section or None
+                )
+        remaining_issues = [
+            i
+            for i in fc_result.issues
+            if not i.reason.startswith(OUT_OF_SCOPE_REASON_PREFIX)
+        ]
 
-        try:
-            draft = await run_targeted_revision(
-                draft=draft,
-                issues=fc_result.issues,
-                context_segments=cache_segs,
-                llm=llm,
-                on_retry=on_retry,
-                wiki_language=wiki_language,
+        if remaining_issues:
+            await _report_page_progress(on_progress, spec.title, "Revision")
+            context_segments = build_draft_prompt(
+                spec=spec,
+                outline=outline,
+                context_chunks=context_chunks,
+                repo_name=repo_name,
+                dep_info=dep_info,
+                entity_details=entity_details,
+                child_contents=child_contents,
+                repo_notes=repo_notes,
             )
-        except Exception as exc:
-            from worker.pipeline.pipeline_logging import log_final_failure
+            cache_segs = [s for s in context_segments if s.cacheable]
 
-            log_final_failure(
-                logger,
-                stage="page_generator.revision",
-                exc=exc,
-                context={
-                    "page_title": spec.title,
-                    "issue_count": len(fc_result.issues),
-                },
-            )
-            # Revision failed — deterministic fallback: strip all flagged issues
-            for issue in fc_result.issues:
-                if issue.kind == "claim" and issue.claim:
-                    draft = strip_failed_claim(
-                        draft, issue.claim, issue.reason, issue.section
-                    )
-                elif issue.kind == "diagram" and issue.diagram_index is not None:
-                    draft = strip_failed_diagram(
-                        draft, issue.section, issue.diagram_index, issue.reason
-                    )
+            try:
+                draft = await run_targeted_revision(
+                    draft=draft,
+                    issues=remaining_issues,
+                    context_segments=cache_segs,
+                    llm=llm,
+                    on_retry=on_retry,
+                    wiki_language=wiki_language,
+                )
+            except Exception as exc:
+                from worker.pipeline.pipeline_logging import log_final_failure
+
+                log_final_failure(
+                    logger,
+                    stage="page_generator.revision",
+                    exc=exc,
+                    context={
+                        "page_title": spec.title,
+                        "issue_count": len(remaining_issues),
+                    },
+                )
+                # Revision failed — deterministic fallback: strip all flagged issues
+                for issue in remaining_issues:
+                    if issue.kind == "claim" and issue.claim:
+                        draft = strip_failed_claim(
+                            draft, issue.claim, issue.reason, issue.section
+                        )
+                    elif issue.kind == "diagram" and issue.diagram_index is not None:
+                        draft = strip_failed_diagram(
+                            draft, issue.section, issue.diagram_index, issue.reason
+                        )
 
     # ── Post-processing ──
     draft = _strip_preamble_and_ensure_header(draft, spec.title)

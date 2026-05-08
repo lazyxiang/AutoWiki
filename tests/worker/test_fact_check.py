@@ -317,6 +317,55 @@ async def test_fact_check_logs_failure_with_context(caplog, mock_fast_llm):
     assert any("boom" in r.getMessage() for r in failure_logs)
 
 
+async def test_factcheck_fails_when_draft_contains_out_of_scope_claim(mock_fast_llm):
+    """out_of_scope_claims hit causes early-exit with verdict='fail'; LLM not called."""
+    mock_fast_llm.generate_structured.side_effect = None
+    mock_fast_llm.generate_structured.return_value = {"verdict": "pass", "issues": []}
+
+    outline = PageOutline(
+        sections=[SectionPlan(heading="X", kind="prose", focus="Y", diagram=None)],
+        key_claims=["k1", "k2", "k3"],
+        out_of_scope_claims=["validates outline JSON"],
+    )
+    draft = "This module validates outline JSON before drafting."
+    result = await run_fact_check(
+        draft=draft,
+        outline=outline,
+        entity_summaries="",
+        dep_info=None,
+        targeted_chunks="",
+        fast_llm=mock_fast_llm,
+    )
+    assert result.verdict == "fail"
+    assert any("out of scope" in i.reason.lower() for i in result.issues)
+    assert any(i.kind == "claim" for i in result.issues)
+    # LLM should NOT have been consulted — early return
+    mock_fast_llm.generate_structured.assert_not_called()
+
+
+async def test_factcheck_no_oos_hits_calls_llm(mock_fast_llm):
+    """When no out-of-scope claim matches the draft, the LLM is still consulted."""
+    mock_fast_llm.generate_structured.side_effect = None
+    mock_fast_llm.generate_structured.return_value = {"verdict": "pass", "issues": []}
+
+    outline = PageOutline(
+        sections=[SectionPlan(heading="X", kind="prose", focus="Y", diagram=None)],
+        key_claims=["k1", "k2", "k3"],
+        out_of_scope_claims=["some unrelated topic not in draft"],
+    )
+    draft = "This module does something completely different."
+    result = await run_fact_check(
+        draft=draft,
+        outline=outline,
+        entity_summaries="",
+        dep_info=None,
+        targeted_chunks="",
+        fast_llm=mock_fast_llm,
+    )
+    assert result.verdict == "pass"
+    mock_fast_llm.generate_structured.assert_called_once()
+
+
 async def test_run_targeted_revision_fixes_claims(mock_llm):
     mock_llm.generate.return_value = "## Overview\n\nRevised content here."
 

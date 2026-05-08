@@ -350,6 +350,55 @@ def test_outline_prompt_omits_signature_slices_block_when_empty():
     assert "Signature slices" not in "".join(p.text for p in segments_empty)
 
 
+def test_outline_schema_includes_out_of_scope_claims():
+    from worker.pipeline.page.outline import _OUTLINE_SCHEMA
+
+    assert "out_of_scope_claims" in _OUTLINE_SCHEMA["properties"]
+    field = _OUTLINE_SCHEMA["properties"]["out_of_scope_claims"]
+    assert field["type"] == "array"
+    assert field["items"]["type"] == "string"
+
+
+def test_validate_outline_accepts_out_of_scope_claims():
+    raw = {
+        "sections": [
+            {
+                "heading": "Overview",
+                "kind": "prose+diagram",
+                "focus": "What it does",
+                "diagram": {
+                    "type": "flowchart",
+                    "purpose": "Show data flow",
+                    "source_files": ["src/main.py"],
+                },
+            },
+        ],
+        "key_claims": ["claim1", "claim2", "claim3"],
+        "out_of_scope_claims": ["validates outline JSON", "sanitizes Mermaid"],
+    }
+    outline = validate_outline(raw, page_files=["src/main.py"])
+    assert outline.out_of_scope_claims == [
+        "validates outline JSON",
+        "sanitizes Mermaid",
+    ]
+
+
+def test_validate_outline_defaults_out_of_scope_claims_to_empty():
+    raw = {
+        "sections": [
+            {
+                "heading": "Overview",
+                "kind": "prose+diagram",
+                "focus": "f",
+                "diagram": {"type": "flowchart", "purpose": "p", "source_files": []},
+            },
+        ],
+        "key_claims": ["a", "b", "c"],
+    }
+    outline = validate_outline(raw, page_files=[])
+    assert outline.out_of_scope_claims == []
+
+
 async def test_generate_page_outline_retries_on_validation_error():
     from worker.pipeline.page.outline import generate_page_outline
 

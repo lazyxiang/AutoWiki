@@ -477,6 +477,69 @@ async def test_extract_signature_slices_skips_missing_files(tmp_path):
     assert slices == {}
 
 
+async def test_generate_page_strips_oos_claim_without_calling_revision(
+    page_store, mock_embedding
+):
+    """Out-of-scope claim in draft is stripped without calling the revision LLM.
+
+    The fact-check returns a single out-of-scope issue.  The generator must:
+    1. Strip the offending sentence from the draft.
+    2. NOT call llm.generate a second time (no revision LLM call).
+    """
+    llm = AsyncMock()
+    fast_llm = AsyncMock()
+
+    oos_phrase = "validates outline JSON"
+    draft_with_oos = (
+        "## Overview\n\n"
+        f"The module {oos_phrase} before drafting.\n\n"
+        "```mermaid\nflowchart TD\n  A-->B\n```\n\n*Source: models.py:1-10*"
+    )
+    llm.generate.return_value = draft_with_oos
+
+    fast_llm.generate_structured.side_effect = [
+        # Pass 1: outline
+        {
+            "sections": [
+                {
+                    "heading": "Overview",
+                    "kind": "prose+diagram",
+                    "focus": "overview",
+                    "diagram": {
+                        "type": "flowchart",
+                        "purpose": "Flow",
+                        "source_files": ["models.py"],
+                    },
+                }
+            ],
+            "key_claims": ["claim a", "claim b", "claim c"],
+            "out_of_scope_claims": [oos_phrase],
+        },
+        # Pass 3: fact-check — should NOT be reached (early-exit), but guard anyway
+        {"verdict": "pass", "issues": []},
+    ]
+
+    spec = WikiPageSpec(title="Models", purpose="Test.", files=["models.py"])
+    result = await generate_page(
+        spec,
+        page_store,
+        llm,
+        fast_llm,
+        mock_embedding,
+        repo_name="test",
+    )
+
+    # The out-of-scope phrase must be stripped from prose (may appear in HTML comment)
+    import re as _re
+
+    prose_only = _re.sub(r"<!--.*?-->", "", result.content, flags=_re.DOTALL)
+    assert oos_phrase not in prose_only
+    # The removal comment must have been injected
+    assert "<!-- removed:" in result.content
+    # Draft was generated (llm.generate called once); revision LLM NOT called
+    assert llm.generate.call_count == 1
+
+
 async def test_extract_signature_slices_empty_when_no_repo_root(tmp_path):
     """Without repo_root, helper returns an empty dict (no extraction)."""
     from worker.pipeline.ast_analysis import FileAnalysis, FileInfo
