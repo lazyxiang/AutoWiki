@@ -1,9 +1,16 @@
-"""Tests for worker.pipeline.page.section_drafter — Pass 2a and Pass 2b."""
+"""Tests for worker.pipeline.page.section_drafter — Pass 2a, Pass 2b, Pass 2c."""
 
 from unittest.mock import AsyncMock
 
+import pytest
+
 from worker.pipeline.page.outline import DiagramPlan, PageOutline, SectionPlan
-from worker.pipeline.page.section_drafter import build_skeleton, draft_section
+from worker.pipeline.page.section_drafter import (
+    build_skeleton,
+    draft_page_in_sections,
+    draft_section,
+)
+from worker.pipeline.planner.wiki_planner import WikiPageSpec
 
 
 class _StubKeywordIndex:
@@ -127,3 +134,80 @@ async def test_draft_section_passes_heading_and_focus_in_queries():
     queries = stub.captured["queries"]
     assert any("Per-section drafting" in q for q in queries)
     assert any("scope intersection" in q for q in queries)
+
+
+class _SimpleStubKeywordIndex:
+    """Minimal stub — returns no chunks, ignores all arguments."""
+
+    def search(self, queries, *, k, files=None, per_file_quota=2):
+        return []
+
+
+async def test_draft_page_in_sections_returns_full_markdown():
+    """Skeleton + per-section drafts + stitch returns full markdown."""
+    spec = WikiPageSpec(title="Wiki Planner", purpose="...", files=["wiki_planner.py"])
+    outline = PageOutline(
+        sections=[
+            SectionPlan(heading="Phase 1: Outline", kind="prose", focus="..."),
+            SectionPlan(heading="Phase 2: File Selection", kind="prose", focus="..."),
+        ],
+        key_claims=["a", "b", "c"],
+    )
+
+    fast_llm = AsyncMock()
+    # First call → build_skeleton; last call → stitch_sections
+    skeleton = (
+        "# Wiki Planner\n\n"
+        "## Phase 1: Outline\n...\n\n"
+        "## Phase 2: File Selection\n...\n"
+    )
+    stitched = (
+        "# Wiki Planner\n\n"
+        "## Phase 1: Outline\nSection 1 body.\n\n"
+        "## Phase 2: File Selection\nSection 2 body.\n"
+    )
+    fast_llm.generate.side_effect = [skeleton, stitched]
+
+    llm = AsyncMock()
+    llm.generate.side_effect = ["Section 1 body.", "Section 2 body."]
+
+    md = await draft_page_in_sections(
+        spec=spec,
+        outline=outline,
+        keyword_index=_SimpleStubKeywordIndex(),
+        llm=llm,
+        fast_llm=fast_llm,
+    )
+
+    assert md.startswith("# Wiki Planner")
+    assert "## Phase 1: Outline" in md
+    assert "## Phase 2: File Selection" in md
+    # Skeleton + Stitch on fast_llm; per-section on llm
+    assert fast_llm.generate.call_count == 2
+    assert llm.generate.call_count == 2
+
+
+async def test_draft_page_in_sections_fails_loudly_on_retry_exhaustion():
+    """No legacy fallback per spec §5.3 B2 — bubbles as WikiGenerationError."""
+    from worker.pipeline.page.section_drafter import WikiGenerationError
+
+    spec = WikiPageSpec(title="X", purpose="...", files=["x.py"])
+    outline = PageOutline(
+        sections=[SectionPlan(heading="Intro", kind="prose", focus="overview")],
+        key_claims=["a", "b", "c"],
+    )
+
+    fast_llm = AsyncMock()
+    fast_llm.generate.side_effect = RuntimeError("fast_llm explosion")
+
+    llm = AsyncMock()
+    llm.generate.return_value = "body"
+
+    with pytest.raises(WikiGenerationError):
+        await draft_page_in_sections(
+            spec=spec,
+            outline=outline,
+            keyword_index=_SimpleStubKeywordIndex(),
+            llm=llm,
+            fast_llm=fast_llm,
+        )

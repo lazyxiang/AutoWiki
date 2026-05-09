@@ -386,7 +386,7 @@ async def generate_page(
     Pass 4 (revision): llm fixes issues if fact-check fails (max 1 attempt).
     """
     from worker.pipeline.page.diagram_post_processor import ensure_diagram_headers
-    from worker.pipeline.page.draft import build_draft_prompt, generate_draft
+    from worker.pipeline.page.draft import build_draft_prompt
     from worker.pipeline.page.fact_check import (
         OUT_OF_SCOPE_REASON_PREFIX,
         run_fact_check,
@@ -470,20 +470,34 @@ async def generate_page(
         signature_slices=signature_slices,
     )
 
-    # ── Pass 2: Draft (main model) ──
+    # ── Pass 2: Section-level drafting (Skeleton → per-section → Stitch) ──
     await _report_page_progress(on_progress, spec.title, "Draft")
-    draft = await generate_draft(
+    from worker.pipeline.page.section_drafter import draft_page_in_sections
+    from worker.pipeline.retrieval.chunk import Chunk
+    from worker.pipeline.retrieval.keyword_index import KeywordIndex
+
+    # Build a KeywordIndex from the FAISS-retrieved chunks. In B2.5 the entire
+    # FAISS path is deleted and KeywordIndex is built directly from a fresh
+    # chunking pass over spec.files; for now we adapt the existing chunks so the
+    # section drafter can do per-section retrieval within the page-level budget.
+    keyword_chunks = [
+        Chunk(
+            file=c.get("file", ""),
+            text=c.get("text", ""),
+            line_start=c.get("start_line", 0),
+            line_end=c.get("end_line", 0),
+        )
+        for c in context_chunks
+        if c.get("text") and c.get("file")
+    ]
+    keyword_index = KeywordIndex.build(keyword_chunks, repo_index={"files": []})
+
+    draft = await draft_page_in_sections(
         spec=spec,
         outline=outline,
-        context_chunks=context_chunks,
-        repo_name=repo_name,
+        keyword_index=keyword_index,
         llm=llm,
-        dep_info=dep_info,
-        entity_details=entity_details,
-        child_contents=child_contents,
-        on_retry=on_retry,
-        wiki_language=wiki_language,
-        repo_notes=repo_notes,
+        fast_llm=fast_llm,
     )
 
     # ── Pass 3: Fact-check (fast model) ──

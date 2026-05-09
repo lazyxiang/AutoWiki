@@ -42,7 +42,7 @@ def page_store(tmp_path):
 
 
 def _make_mock_fast_llm():
-    """Mock fast LLM for outline + fact-check passes."""
+    """Mock fast LLM for outline + skeleton + fact-check + stitch passes."""
     m = AsyncMock()
     m.generate_structured.side_effect = [
         # First call: outline
@@ -74,6 +74,10 @@ def _make_mock_fast_llm():
         # Second call: fact-check
         {"verdict": "pass", "issues": []},
     ]
+    # Pass 2a (skeleton) and Pass 2c (stitch) both use fast_llm.generate
+    m.generate.return_value = (
+        "# Models\n\n## Overview\n\nContent.\n\n## Architecture\n\nContent.\n"
+    )
     return m
 
 
@@ -104,7 +108,8 @@ async def test_generate_page_multi_pass(page_store, mock_embedding):
     assert len(result.content) > 0
     # Verify both LLMs were called
     assert fast_llm.generate_structured.call_count == 2  # outline + fact-check
-    assert llm.generate.call_count == 1  # draft only
+    # 2 sections → 2 per-section draft calls; skeleton + stitch on fast_llm.generate
+    assert llm.generate.call_count == 2
 
 
 async def test_generate_page_with_fact_check_fail_triggers_revision(
@@ -114,7 +119,7 @@ async def test_generate_page_with_fact_check_fail_triggers_revision(
     fast_llm = AsyncMock()
 
     fast_llm.generate_structured.side_effect = [
-        # Outline
+        # Outline — 1 section so draft = 1 llm.generate call
         {
             "sections": [
                 {
@@ -144,10 +149,13 @@ async def test_generate_page_with_fact_check_fail_triggers_revision(
             ],
         },
     ]
-
     _diagram = "```mermaid\nflowchart TD\n  A-->B\n```\n\n*Source: models.py:1-10*"
+    # Pass 2a (skeleton) and Pass 2c (stitch) use fast_llm.generate
+    fast_llm.generate.return_value = f"# Models\n\n## Overview\n\n{_diagram}"
+
     llm.generate.side_effect = [
-        f"## Overview\n\n**Diagram: Flow**\n\n{_diagram}",
+        f"## Overview\n\n**Diagram: Flow**\n\n{_diagram}",  # section draft
+        # revision:
         f"## Overview\n\nRevised content.\n\n**Diagram: Flow**\n\n{_diagram}",
     ]
 
@@ -160,7 +168,7 @@ async def test_generate_page_with_fact_check_fail_triggers_revision(
         mock_embedding,
         repo_name="test",
     )
-    assert llm.generate.call_count == 2  # draft + revision
+    assert llm.generate.call_count == 2  # 1 section draft + 1 revision
 
 
 async def test_generate_page_revision_failure_falls_back_to_strip(
@@ -207,9 +215,11 @@ async def test_generate_page_revision_failure_falls_back_to_strip(
         "```mermaid\nflowchart TD\n  A-->B\n```\n\n*Source: models.py:1-10*"
     )
     llm.generate.side_effect = [
-        draft_text,  # draft
+        draft_text,  # section draft (1 section)
         RuntimeError("LLM unavailable"),  # revision fails
     ]
+    # Pass 2a (skeleton) and Pass 2c (stitch) use fast_llm.generate
+    fast_llm.generate.return_value = "# Models\n\n## Overview\nContent.\n"
 
     spec = WikiPageSpec(title="Models", purpose="Test.", files=["models.py"])
     result = await generate_page(
@@ -247,8 +257,15 @@ async def test_generate_page_batch_returns_all_results(page_store, mock_embeddin
 
     fast_llm.generate_structured.side_effect = _fast_structured
 
-    llm = AsyncMock()
     _mermaid = "```mermaid\nflowchart TD\n  A-->B\n```\n\n*Source: a.py:1-5*"
+
+    # Pass 2a (skeleton) and Pass 2c (stitch) use fast_llm.generate
+    async def _fast_generate(*args, **kwargs):
+        return "# Page\n\n## Overview\n\nSkeleton.\n"
+
+    fast_llm.generate.side_effect = _fast_generate
+
+    llm = AsyncMock()
 
     # Return a valid draft regardless of call order
     async def _llm_generate(*args, **kwargs):
@@ -496,6 +513,13 @@ async def test_generate_page_strips_oos_claim_without_calling_revision(
         "```mermaid\nflowchart TD\n  A-->B\n```\n\n*Source: models.py:1-10*"
     )
     llm.generate.return_value = draft_with_oos
+    # Pass 2a (skeleton): returns frame without OOS phrase.
+    # Pass 2c (stitch): returns the stitched draft that includes the OOS phrase
+    # (as would happen in reality, since stitch concatenates the section body).
+    fast_llm.generate.side_effect = [
+        "# Models\n\n## Overview\nSkeleton frame.\n",  # skeleton
+        draft_with_oos,  # stitch — carries the OOS phrase so early-exit fires
+    ]
 
     fast_llm.generate_structured.side_effect = [
         # Pass 1: outline
