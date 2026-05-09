@@ -13,9 +13,15 @@ Per spec §5.3 B2 / plan task B2.2.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from worker.llm.base import LLMProvider
 from worker.llm.prompt_segment import PromptSegment
-from worker.pipeline.page.outline import PageOutline
+from worker.pipeline.page.outline import PageOutline, SectionPlan
+from worker.pipeline.retrieval.chunk import Chunk
+
+if TYPE_CHECKING:
+    from worker.pipeline.retrieval.keyword_index import KeywordIndex
 
 _SKELETON_SYSTEM = (
     "You are drafting the rendered shape of a wiki page from its outline. "
@@ -23,6 +29,48 @@ _SKELETON_SYSTEM = (
     "for each section in order, with a one-sentence purpose line under each "
     "heading. Do not write body text."
 )
+
+_SECTION_DRAFT_SYSTEM = (
+    "You are drafting one section of a wiki page. Write Markdown body text only — "
+    "do NOT repeat the H2 heading; the heading is already in place. Stay strictly "
+    "within the section's focus; do not cover topics handled by other sections. "
+    "Cite specific functions / classes / files when making concrete claims."
+)
+
+
+def _format_chunks_for_section(chunks: list[Chunk]) -> str:
+    """Format retrieved Chunk objects into a plain text block for the section prompt."""
+    if not chunks:
+        return "No source chunks retrieved."
+    parts = []
+    for c in chunks:
+        header = f"{c.file}:{c.line_start}-{c.line_end}"
+        parts.append(f"{header}\n{c.text}\n---")
+    return "\n".join(parts)
+
+
+def _build_section_prompt(
+    *,
+    section: SectionPlan,
+    chunks: list[Chunk],
+    skeleton_heading: str,
+) -> list[PromptSegment]:
+    """Build the per-section draft prompt as a list of PromptSegments.
+
+    Returns a cacheable system segment with drafting instructions and a
+    non-cacheable user segment with the heading, focus, and retrieved chunks.
+    """
+    chunk_text = _format_chunks_for_section(chunks)
+    user_text = (
+        f"Section heading: {skeleton_heading}\n"
+        f"Section focus: {section.focus}\n\n"
+        f"Retrieved source chunks:\n{chunk_text}\n\n"
+        "Write the body of this section now."
+    )
+    return [
+        PromptSegment(text=_SECTION_DRAFT_SYSTEM, cacheable=True),
+        PromptSegment(text=user_text),
+    ]
 
 
 async def build_skeleton(
@@ -47,3 +95,52 @@ async def build_skeleton(
             PromptSegment(text=user_text),
         ]
     )
+
+
+async def draft_section(
+    *,
+    section: SectionPlan,
+    spec_files: list[str],
+    keyword_index: KeywordIndex,
+    llm: LLMProvider,
+    skeleton_heading: str,
+) -> str:
+    """Pass 2b — draft a single section's body with section-scoped retrieval.
+
+    Section scope = ``spec_files`` ∩ ``section.diagram.source_files`` (when the
+    section has a diagram), else ``spec_files``. This is the lever that closes
+    the orchestrator-under-coverage gap from spec §3 P2 / §5.3 B2: each section
+    retrieves chunks from its own scope, so an orchestrator-only section gets
+    orchestrator chunks regardless of how dense the outline file is.
+
+    Args:
+        section: The planned section from the page outline.
+        spec_files: All files assigned to this page (the page-level scope).
+        keyword_index: BM25 keyword index used to retrieve relevant source chunks.
+        llm: LLM provider used to generate the section body.
+        skeleton_heading: The exact H2 heading string from the skeleton (e.g.
+            ``"## Phase 2: File Selection"``).
+
+    Returns:
+        Markdown body text for this section (heading not included).
+    """
+    queries = [section.heading]
+    if section.focus:
+        queries.append(section.focus)
+
+    diagram_files = section.diagram.source_files if section.diagram else []
+    section_scope = list(set(spec_files) & set(diagram_files)) or list(spec_files)
+
+    chunks = keyword_index.search(
+        [q for q in queries if q.strip()],
+        k=8,
+        files=section_scope,
+        per_file_quota=2,
+    )
+
+    prompt = _build_section_prompt(
+        section=section,
+        chunks=chunks,
+        skeleton_heading=skeleton_heading,
+    )
+    return await llm.generate(prompt)

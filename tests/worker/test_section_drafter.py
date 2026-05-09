@@ -1,9 +1,21 @@
-"""Tests for worker.pipeline.page.section_drafter — Pass 2a (Skeleton)."""
+"""Tests for worker.pipeline.page.section_drafter — Pass 2a and Pass 2b."""
 
 from unittest.mock import AsyncMock
 
-from worker.pipeline.page.outline import PageOutline, SectionPlan
-from worker.pipeline.page.section_drafter import build_skeleton
+from worker.pipeline.page.outline import DiagramPlan, PageOutline, SectionPlan
+from worker.pipeline.page.section_drafter import build_skeleton, draft_section
+
+
+class _StubKeywordIndex:
+    def __init__(self):
+        self.captured = {}
+
+    def search(self, queries, *, k, files=None, per_file_quota=2):
+        self.captured["queries"] = queries
+        self.captured["k"] = k
+        self.captured["files"] = files
+        self.captured["per_file_quota"] = per_file_quota
+        return []
 
 
 async def test_skeleton_returns_markdown_with_h1_and_section_headings():
@@ -46,3 +58,72 @@ async def test_skeleton_user_prompt_lists_sections_in_order():
     assert "Alpha" in user_text and "Beta" in user_text
     assert user_text.index("Alpha") < user_text.index("Beta")
     assert "alpha purpose" in user_text
+
+
+async def test_draft_section_uses_keyword_index_with_section_scope():
+    """Scope = spec_files ∩ diagram.source_files when diagram exists."""
+    section = SectionPlan(
+        heading="Phase 2: File Selection",
+        kind="prose+diagram",
+        focus="How files are scored",
+        diagram=DiagramPlan(
+            type="flowchart", purpose="...", source_files=["wiki_planner.py"]
+        ),
+    )
+    stub = _StubKeywordIndex()
+    llm = AsyncMock()
+    llm.generate.return_value = "## body text"
+    await draft_section(
+        section=section,
+        spec_files=["wiki_planner.py", "page_generator.py"],
+        keyword_index=stub,
+        llm=llm,
+        skeleton_heading="## Phase 2: File Selection",
+    )
+    assert set(stub.captured["files"]) == {"wiki_planner.py"}
+    assert stub.captured["k"] == 8
+    assert stub.captured["per_file_quota"] == 2
+
+
+async def test_draft_section_falls_back_to_spec_files_when_no_diagram():
+    """When section has no diagram, full spec_files are used as scope."""
+    section = SectionPlan(
+        heading="Intro",
+        kind="prose",
+        focus="overview",
+        diagram=None,
+    )
+    stub = _StubKeywordIndex()
+    llm = AsyncMock()
+    llm.generate.return_value = "body"
+    await draft_section(
+        section=section,
+        spec_files=["a.py", "b.py"],
+        keyword_index=stub,
+        llm=llm,
+        skeleton_heading="## Intro",
+    )
+    assert set(stub.captured["files"]) == {"a.py", "b.py"}
+
+
+async def test_draft_section_passes_heading_and_focus_in_queries():
+    """Heading and focus must appear in the queries sent to keyword_index.search."""
+    section = SectionPlan(
+        heading="Per-section drafting",
+        kind="prose",
+        focus="how scope intersection works",
+        diagram=None,
+    )
+    stub = _StubKeywordIndex()
+    llm = AsyncMock()
+    llm.generate.return_value = "body"
+    await draft_section(
+        section=section,
+        spec_files=["x.py"],
+        keyword_index=stub,
+        llm=llm,
+        skeleton_heading="## Per-section drafting",
+    )
+    queries = stub.captured["queries"]
+    assert any("Per-section drafting" in q for q in queries)
+    assert any("scope intersection" in q for q in queries)
