@@ -490,7 +490,10 @@ async def generate_page(
         for c in context_chunks
         if c.get("text") and c.get("file")
     ]
-    keyword_index = KeywordIndex.build(keyword_chunks, repo_index={"files": []})
+    # repo_index is reserved for Phase A11 scoring integration
+    # (see KeywordIndex.build docstring). Passing {} is the transitional
+    # contract; B2.5 may populate this from repo_index.json.
+    keyword_index = KeywordIndex.build(keyword_chunks, repo_index={})
 
     draft = await draft_page_in_sections(
         spec=spec,

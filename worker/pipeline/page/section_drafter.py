@@ -13,6 +13,7 @@ Per spec §5.3 B2 / plan task B2.2.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -22,7 +23,6 @@ from worker.pipeline.page.outline import PageOutline, SectionPlan
 from worker.pipeline.retrieval.chunk import Chunk
 
 if TYPE_CHECKING:
-    from worker.pipeline.page.outline import PageOutline
     from worker.pipeline.planner.wiki_planner import WikiPageSpec
     from worker.pipeline.retrieval.keyword_index import KeywordIndex
 
@@ -196,7 +196,7 @@ async def stitch_sections(
         + "\n\n".join(f"## {h}\n{b}" for h, b in sections)
     )
     return await fast_llm.generate(
-        [PromptSegment(text=_STITCH_SYSTEM), PromptSegment(text=user)]
+        [PromptSegment(text=_STITCH_SYSTEM, cacheable=True), PromptSegment(text=user)]
     )
 
 
@@ -234,20 +234,21 @@ async def draft_page_in_sections(
     """
     from worker.pipeline.pipeline_logging import log_final_failure
 
+    async def _draft_one(section: SectionPlan) -> tuple[str, str]:
+        body = await draft_section(
+            section=section,
+            spec_files=spec.files,
+            keyword_index=keyword_index,
+            llm=llm,
+            skeleton_heading=section.heading,
+        )
+        return (section.heading, body)
+
     try:
         skeleton = await build_skeleton(
             title=spec.title, outline=outline, fast_llm=fast_llm
         )
-        drafts: list[tuple[str, str]] = []
-        for section in outline.sections:
-            body = await draft_section(
-                section=section,
-                spec_files=spec.files,
-                keyword_index=keyword_index,
-                llm=llm,
-                skeleton_heading=section.heading,
-            )
-            drafts.append((section.heading, body))
+        drafts = list(await asyncio.gather(*(_draft_one(s) for s in outline.sections)))
         return await stitch_sections(
             skeleton=skeleton, sections=drafts, fast_llm=fast_llm
         )

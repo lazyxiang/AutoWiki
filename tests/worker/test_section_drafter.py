@@ -1,5 +1,6 @@
 """Tests for worker.pipeline.page.section_drafter — Pass 2a, Pass 2b, Pass 2c."""
 
+import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
@@ -211,3 +212,47 @@ async def test_draft_page_in_sections_fails_loudly_on_retry_exhaustion():
             llm=llm,
             fast_llm=fast_llm,
         )
+
+
+async def test_draft_page_in_sections_runs_sections_in_parallel():
+    """Pass 2b uses asyncio.gather (per spec §5.3 B2 table).
+
+    Uses asyncio.Barrier(3) so that all three section coroutines must arrive at
+    the barrier before any can return.  If drafting were sequential only one
+    task would be running at a time and barrier.wait() would deadlock — caught
+    by asyncio.wait_for's timeout.
+    """
+    spec = WikiPageSpec(title="X", purpose="...", files=["x.py"])
+    outline = PageOutline(
+        sections=[
+            SectionPlan(heading=f"S{i}", kind="prose", focus=f"f{i}") for i in range(3)
+        ],
+        key_claims=["a", "b", "c"],
+    )
+
+    barrier = asyncio.Barrier(3)
+
+    async def gated_generate(*args, **kwargs):
+        # All three section coroutines must reach this point before any proceeds.
+        await barrier.wait()
+        return "body"
+
+    llm = AsyncMock()
+    llm.generate.side_effect = gated_generate
+
+    fast_llm = AsyncMock()
+    fast_llm.generate.side_effect = ["# X\n\n## S0\n## S1\n## S2\n", "# X\nstitched"]
+
+    # If sections were sequential this deadlocks at barrier.wait() (only one
+    # task runs at a time); asyncio.wait_for converts that into a hard failure.
+    await asyncio.wait_for(
+        draft_page_in_sections(
+            spec=spec,
+            outline=outline,
+            keyword_index=_SimpleStubKeywordIndex(),
+            llm=llm,
+            fast_llm=fast_llm,
+        ),
+        timeout=2.0,
+    )
+    assert llm.generate.call_count == 3

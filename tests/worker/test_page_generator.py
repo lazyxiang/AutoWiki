@@ -108,7 +108,7 @@ async def test_generate_page_multi_pass(page_store, mock_embedding):
     assert len(result.content) > 0
     # Verify both LLMs were called
     assert fast_llm.generate_structured.call_count == 2  # outline + fact-check
-    # 2 sections → 2 per-section draft calls; skeleton + stitch on fast_llm.generate
+    # 2 sections in mock outline → 2 per-section llm.generate calls
     assert llm.generate.call_count == 2
 
 
