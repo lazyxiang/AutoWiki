@@ -25,8 +25,8 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from worker.embedding.base import EmbeddingProvider
+from worker.embedding.faiss_store import FAISSStore
 from worker.llm.base import LLMProvider
-from worker.pipeline.retrieval.rag_indexer import FAISSStore
 
 # Event payload emitted to WebSocket / CLI consumers.
 ResearchEvent = dict[str, Any]

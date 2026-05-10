@@ -13,9 +13,9 @@ from shared.config import get_config
 from shared.database import get_session, init_db
 from shared.models import Job, Repository, ResearchReport
 from worker.embedding import make_embedding_provider
+from worker.embedding.faiss_store import FAISSStore
 from worker.llm import make_llm_provider
 from worker.pipeline.ingestion import extract_readme
-from worker.pipeline.retrieval.rag_indexer import FAISSStore
 from worker.research.service import run_deep_research_flow
 
 logger = logging.getLogger("worker.task")

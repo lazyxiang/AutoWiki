@@ -433,7 +433,7 @@ def test_build_fast_report_index_normalizes_mixed_path_separators(tmp_path: Path
 
 @pytest.mark.filterwarnings("ignore:builtin type Swig.*:DeprecationWarning")
 async def test_run_full_index_persists_repo_index_only(
-    tmp_path, mock_llm, mock_fast_llm, mock_embedding
+    tmp_path, mock_llm, mock_fast_llm
 ):
     from shared.database import dispose_db, get_session, init_db
     from shared.models import Job, Repository
@@ -442,7 +442,6 @@ async def test_run_full_index_persists_repo_index_only(
 
     db_path = str(tmp_path / "test.db")
     await init_db(db_path)
-    mock_embedding.dimension = 1536
     repo_id = "fast_report_full_repo"
     job_id = str(uuid.uuid4())
 
@@ -480,11 +479,6 @@ async def test_run_full_index_persists_repo_index_only(
         stack.enter_context(
             patch(
                 "worker.index.full.make_fast_llm_provider", return_value=mock_fast_llm
-            )
-        )
-        stack.enter_context(
-            patch(
-                "worker.index.full.make_embedding_provider", return_value=mock_embedding
             )
         )
         cfg = mock_cfg.return_value
@@ -535,7 +529,7 @@ async def test_run_full_index_persists_repo_index_only(
 
 @pytest.mark.filterwarnings("ignore:builtin type Swig.*:DeprecationWarning")
 async def test_run_refresh_index_persists_repo_index_only(
-    tmp_path, mock_llm, mock_fast_llm, mock_embedding
+    tmp_path, mock_llm, mock_fast_llm
 ):
     from shared.database import dispose_db, get_session, init_db
     from shared.models import Job, Repository, WikiPage
@@ -544,7 +538,6 @@ async def test_run_refresh_index_persists_repo_index_only(
 
     db_path = str(tmp_path / "test.db")
     await init_db(db_path)
-    mock_embedding.dimension = 1536
     repo_id = "fast_report_refresh_repo"
     job_id = str(uuid.uuid4())
 
@@ -616,12 +609,6 @@ async def test_run_refresh_index_persists_repo_index_only(
             patch(
                 "worker.index.refresh.make_fast_llm_provider",
                 return_value=mock_fast_llm,
-            )
-        )
-        stack.enter_context(
-            patch(
-                "worker.index.refresh.make_embedding_provider",
-                return_value=mock_embedding,
             )
         )
         cfg = mock_cfg.return_value

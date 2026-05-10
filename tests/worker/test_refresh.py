@@ -1,7 +1,7 @@
 import json
 import threading
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -93,7 +93,6 @@ async def _run_refresh_with_mocks(
     clone_root,
     mock_llm,
     mock_fast_llm,
-    mock_embedding,
     changed_files: list[str],
     generate_wiki_plan,
     generate_page_batch,
@@ -105,7 +104,6 @@ async def _run_refresh_with_mocks(
     from worker.pipeline.dependency_graph import DependencyGraph
 
     file_analysis = _make_single_file_analysis()
-    mock_embedding.dimension = 1536
     dependency_graph_builder = build_dependency_graph or (
         lambda *_args, **_kwargs: DependencyGraph(edges={}, clusters=[["main.py"]])
     )
@@ -133,14 +131,9 @@ async def _run_refresh_with_mocks(
             side_effect=dependency_graph_builder,
         ),
         patch("worker.index.refresh.build_repo_index", side_effect=repo_index_builder),
-        patch("worker.index.refresh._make_faiss_store", return_value=MagicMock()),
-        patch("worker.index.refresh.build_rag_index", new_callable=AsyncMock),
         patch("worker.index.refresh.make_llm_provider", return_value=mock_llm),
         patch(
             "worker.index.refresh.make_fast_llm_provider", return_value=mock_fast_llm
-        ),
-        patch(
-            "worker.index.refresh.make_embedding_provider", return_value=mock_embedding
         ),
         patch("worker.index.refresh.generate_wiki_plan", new=generate_wiki_plan),
         patch("worker.index.refresh.generate_page_batch", new=generate_page_batch),
@@ -206,9 +199,7 @@ async def test_run_refresh_index_no_changes(tmp_path, mock_llm, mock_embedding):
     await dispose_db(db_path)
 
 
-async def test_run_refresh_index_with_changes(
-    tmp_path, mock_llm, mock_fast_llm, mock_embedding
-):
+async def test_run_refresh_index_with_changes(tmp_path, mock_llm, mock_fast_llm):
     """Changed files trigger re-indexing of affected modules."""
     from shared.database import dispose_db, get_session, init_db
     from shared.models import Job, Repository, WikiPage
@@ -221,8 +212,6 @@ async def test_run_refresh_index_with_changes(
     job_id = str(uuid.uuid4())
     old_sha = "old123"
     new_sha = "new456"
-
-    mock_embedding.dimension = 1536
 
     async with get_session(db_path) as s:
         s.add(
@@ -280,9 +269,6 @@ async def test_run_refresh_index_with_changes(
         patch(
             "worker.index.refresh.make_fast_llm_provider", return_value=mock_fast_llm
         ),
-        patch(
-            "worker.index.refresh.make_embedding_provider", return_value=mock_embedding
-        ),
     ):
         cfg = mock_cfg.return_value
         cfg.database_path = tmp_path / "test.db"
@@ -319,7 +305,7 @@ async def test_run_refresh_index_with_changes(
 
 
 async def test_run_refresh_index_replans_all_files_for_readme_only_change(
-    tmp_path, mock_llm, mock_fast_llm, mock_embedding
+    tmp_path, mock_llm, mock_fast_llm
 ):
     """README-only changes force a global replan with the full source analysis."""
     from worker.pipeline.page.generator import PageResult
@@ -360,7 +346,6 @@ async def test_run_refresh_index_replans_all_files_for_readme_only_change(
         clone_root=clone_root,
         mock_llm=mock_llm,
         mock_fast_llm=mock_fast_llm,
-        mock_embedding=mock_embedding,
         changed_files=["README.md"],
         readme="# New README",
         generate_wiki_plan=fake_generate_wiki_plan,
@@ -377,7 +362,7 @@ async def test_run_refresh_index_replans_all_files_for_readme_only_change(
 
 
 async def test_run_refresh_index_builds_dependency_graph_and_repo_index_in_executor(
-    tmp_path, mock_llm, mock_fast_llm, mock_embedding
+    tmp_path, mock_llm, mock_fast_llm
 ):
     from shared.database import dispose_db
     from worker.pipeline.dependency_graph import DependencyGraph
@@ -427,7 +412,6 @@ async def test_run_refresh_index_builds_dependency_graph_and_repo_index_in_execu
             clone_root=clone_root,
             mock_llm=mock_llm,
             mock_fast_llm=mock_fast_llm,
-            mock_embedding=mock_embedding,
             changed_files=["main.py"],
             generate_wiki_plan=fake_generate_wiki_plan,
             generate_page_batch=fake_generate_page_batch,
@@ -442,7 +426,7 @@ async def test_run_refresh_index_builds_dependency_graph_and_repo_index_in_execu
 
 
 async def test_run_refresh_index_keeps_existing_pages_if_generation_fails(
-    tmp_path, mock_llm, mock_fast_llm, mock_embedding
+    tmp_path, mock_llm, mock_fast_llm
 ):
     """A refresh failure after a generated result must not delete live wiki rows."""
     from sqlalchemy import select as sa_select
@@ -488,7 +472,6 @@ async def test_run_refresh_index_keeps_existing_pages_if_generation_fails(
             clone_root=clone_root,
             mock_llm=mock_llm,
             mock_fast_llm=mock_fast_llm,
-            mock_embedding=mock_embedding,
             changed_files=["main.py"],
             generate_wiki_plan=fake_generate_wiki_plan,
             generate_page_batch=failing_generate_page_batch,

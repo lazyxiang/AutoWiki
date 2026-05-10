@@ -14,9 +14,7 @@ from sqlalchemy import delete as sa_delete
 from shared.config import get_config
 from shared.database import get_session, init_db
 from shared.models import Repository, WikiPage
-from worker.embedding import make_embedding_provider
 from worker.index.artifacts import (
-    _make_faiss_store,
     _remove_path,
     _write_text_async,
     phase1_prompt_dump_path,
@@ -55,7 +53,8 @@ from worker.pipeline.planner.wiki_planner import (
     WikiPlan,
     generate_wiki_plan,
 )
-from worker.pipeline.retrieval.rag_indexer import build_rag_index
+from worker.pipeline.retrieval.chunking import build_chunks
+from worker.pipeline.retrieval.keyword_index import KeywordIndex
 from worker.pipeline.retrieval.repo_index import build_repo_index
 from worker.platform.registry import get_platform_by_name
 from worker.platform.token_store import get_platform_token
@@ -188,23 +187,22 @@ async def run_full_index(
 
         # Clear all artifacts from any previous run before starting fresh.
         def _clear_repo_artifacts() -> None:
-            """Remove generated wiki files and optionally the search index.
+            """Remove generated wiki files from any previous run.
 
             Removes Markdown pages and other entries under ``wiki/``.  When
             *reuse_plan* is ``True`` the user-facing ``wiki.json`` is
             preserved so the reuse-plan branch can recover user-edited
             ``page_notes``; otherwise ``ast/wiki_plan.json`` is also deleted.
-            When *reuse_index* is ``False`` the FAISS index and metadata
-            pickle are deleted.  The git clone is preserved.
+            The git clone is preserved.  Legacy FAISS files (faiss.index,
+            faiss.meta.pkl) are removed if they exist from a prior run.
             """
-            index_path = repo_data_dir / "faiss.index"
-            meta_path = repo_data_dir / "faiss.meta.pkl"
             wiki_dir = repo_data_dir / "wiki"
             ast_dir = repo_data_dir / "ast"
-            if not reuse_index:
-                for p in (index_path, meta_path):
-                    if p.exists():
-                        p.unlink()
+            # Remove any legacy FAISS artefacts left by older versions.
+            for legacy_name in ("faiss.index", "faiss.meta.pkl"):
+                p = repo_data_dir / legacy_name
+                if p.exists():
+                    p.unlink()
             if wiki_dir.exists():
                 for f in wiki_dir.iterdir():
                     # Preserve wiki.json when reusing the plan: the reuse-plan
@@ -313,43 +311,35 @@ async def run_full_index(
             db_path,
             job_id,
             progress=25,
-            status_description="Indexing code for RAG search (embedding)...",
+            status_description="Building keyword index...",
         )
 
-        # Stage 4: RAG Indexer — entity-aware chunking + FAISS vector index
-        logger.info("Stage 4: RAG Indexer starting")
+        # Stage 4: Keyword Index — entity-aware chunking + in-memory BM25 index
+        # (FAISS/embedding removed in B2.5; KeywordIndex is fast, pure-Python BM25)
+        logger.info("Stage 4: Keyword Index starting")
+        # reuse_index previously skipped FAISS rebuild; KeywordIndex is in-memory and
+        # rebuilds each run without significant cost, so reuse_index no longer affects
+        # retrieval — it still controls faiss.index / faiss.meta.pkl cleanup above.
+        logger.info(
+            "reuse_index=%s; KeywordIndex is in-memory and rebuilds each run",
+            reuse_index,
+        )
         llm = make_llm_provider(cfg)
         fast_llm = make_fast_llm_provider(cfg, llm)
-        embedding = make_embedding_provider(cfg)
-        logger.info(
-            "Using embedding provider: %s, model: %s (dim=%d)",
-            cfg.embedding.provider,
-            cfg.embedding.model,
-            embedding.dimension,
+        file_entities = {
+            rel: list(info.entities) for rel, info in file_analysis.files.items()
+        }
+        repo_chunks = await loop.run_in_executor(
+            None,
+            lambda: build_chunks(files, clone_root, file_entities),
         )
-        index_path = repo_data_dir / "faiss.index"
+        keyword_index = KeywordIndex.build(repo_chunks, repo_index=repo_index)
+        logger.info(
+            "Keyword index built: %d chunks across %d files",
+            len(repo_chunks),
+            len(keyword_index.file_to_chunks),
+        )
         wiki_dir = repo_data_dir / "wiki"
-        store = _make_faiss_store(repo_data_dir, embedding)
-        if reuse_index and index_path.exists():
-            logger.info(
-                "Reusing existing FAISS index at %s (skipping embedding)", index_path
-            )
-            await loop.run_in_executor(None, store.load)
-        else:
-            file_entities = {
-                rel: [e for e in info.entities]
-                for rel, info in file_analysis.files.items()
-            }
-            logger.info("Building new RAG index at %s", index_path)
-            await build_rag_index(
-                files,
-                clone_root,
-                store,
-                embedding,
-                file_entities=file_entities,
-                on_retry=_on_retry,
-            )
-            logger.info("RAG index build complete")
         await _update_job(
             db_path,
             job_id,
@@ -503,10 +493,9 @@ async def run_full_index(
 
             await generate_page_batch(
                 specs_with_children,
-                store,
+                keyword_index,
                 llm,
                 fast_llm,
-                embedding,
                 repo_name=name,
                 file_analysis=file_analysis,
                 dep_graph=dep_graph,

@@ -1,7 +1,6 @@
 import asyncio
 from unittest.mock import AsyncMock
 
-import numpy as np
 import pytest
 
 from worker.pipeline.page.generator import (
@@ -16,29 +15,22 @@ from worker.pipeline.page.generator import (
     generate_page_batch,
 )
 from worker.pipeline.planner.wiki_planner import WikiPageSpec, WikiPlan
+from worker.pipeline.retrieval.chunk import Chunk
+from worker.pipeline.retrieval.keyword_index import KeywordIndex
 
 
 @pytest.fixture
-def page_store(tmp_path):
-    from worker.pipeline.retrieval.rag_indexer import FAISSStore
-
-    store = FAISSStore(
-        dimension=1536,
-        index_path=tmp_path / "idx",
-        meta_path=tmp_path / "meta.pkl",
-    )
-    store.add(
-        [np.zeros(1536, dtype=np.float32)],
-        [
-            {
-                "text": "class User: pass",
-                "file": "models.py",
-                "start_line": 1,
-                "end_line": 1,
-            }
-        ],
-    )
-    return store
+def page_store():
+    """A KeywordIndex pre-populated with one chunk from models.py."""
+    chunks = [
+        Chunk(
+            file="models.py",
+            text="class User: pass",
+            line_start=1,
+            line_end=1,
+        )
+    ]
+    return KeywordIndex.build(chunks, repo_index={})
 
 
 def _make_mock_fast_llm():
@@ -81,7 +73,7 @@ def _make_mock_fast_llm():
     return m
 
 
-async def test_generate_page_multi_pass(page_store, mock_embedding):
+async def test_generate_page_multi_pass(page_store):
     llm = AsyncMock()
     llm.generate.return_value = (
         "## Overview\n\nThe models module defines data classes.\n\n"
@@ -100,7 +92,6 @@ async def test_generate_page_multi_pass(page_store, mock_embedding):
         page_store,
         llm,
         fast_llm,
-        mock_embedding,
         repo_name="test",
     )
     assert isinstance(result, PageResult)
@@ -112,9 +103,7 @@ async def test_generate_page_multi_pass(page_store, mock_embedding):
     assert llm.generate.call_count == 2
 
 
-async def test_generate_page_with_fact_check_fail_triggers_revision(
-    page_store, mock_embedding
-):
+async def test_generate_page_with_fact_check_fail_triggers_revision(page_store):
     llm = AsyncMock()
     fast_llm = AsyncMock()
 
@@ -165,15 +154,12 @@ async def test_generate_page_with_fact_check_fail_triggers_revision(
         page_store,
         llm,
         fast_llm,
-        mock_embedding,
         repo_name="test",
     )
     assert llm.generate.call_count == 2  # 1 section draft + 1 revision
 
 
-async def test_generate_page_revision_failure_falls_back_to_strip(
-    page_store, mock_embedding
-):
+async def test_generate_page_revision_failure_falls_back_to_strip(page_store):
     """When revision raises, deterministic fallback strips the flagged claim."""
     llm = AsyncMock()
     fast_llm = AsyncMock()
@@ -227,14 +213,13 @@ async def test_generate_page_revision_failure_falls_back_to_strip(
         page_store,
         llm,
         fast_llm,
-        mock_embedding,
         repo_name="test",
     )
     # Fallback strips the claim text from content
     assert "bad claim" not in result.content
 
 
-async def test_generate_page_batch_returns_all_results(page_store, mock_embedding):
+async def test_generate_page_batch_returns_all_results(page_store):
     """generate_page_batch produces one PageResult per spec."""
     fast_llm = AsyncMock()
     _three_claims = ["claim 1", "claim 2", "claim 3"]
@@ -281,10 +266,9 @@ async def test_generate_page_batch_returns_all_results(page_store, mock_embeddin
 
     results = await generate_page_batch(
         specs_with_children=[(spec_a, None), (spec_b, None)],
-        store=page_store,
+        keyword_index=page_store,
         llm=llm,
         fast_llm=fast_llm,
-        embedding=mock_embedding,
         repo_name="testrepo",
         file_analysis=FileAnalysis(files={}),
         dep_graph=DependencyGraph(),
@@ -299,7 +283,7 @@ async def test_generate_page_batch_returns_all_results(page_store, mock_embeddin
 
 
 async def test_generate_page_batch_calls_on_result_as_each_page_finishes(
-    page_store, mock_embedding, monkeypatch
+    page_store, monkeypatch
 ):
     from worker.pipeline.ast_analysis import FileAnalysis
     from worker.pipeline.dependency_graph import DependencyGraph
@@ -323,10 +307,9 @@ async def test_generate_page_batch_calls_on_result_as_each_page_finishes(
     batch_task = asyncio.create_task(
         generate_page_batch(
             specs_with_children=[(spec_fast, None), (spec_slow, None)],
-            store=page_store,
+            keyword_index=page_store,
             llm=AsyncMock(),
             fast_llm=AsyncMock(),
-            embedding=mock_embedding,
             repo_name="testrepo",
             file_analysis=FileAnalysis(files={}),
             dep_graph=DependencyGraph(),
@@ -442,12 +425,24 @@ async def test_extract_signature_slices_pulls_top_entities(tmp_path):
 
 
 async def test_generate_page_uses_en_keywords_as_retrieval_query(
-    page_store, mock_embedding
+    page_store, monkeypatch
 ):
     """A4: English keywords from the page spec must become a retrieval query."""
+    from worker.pipeline.retrieval.keyword_index import KeywordIndex
+
     llm = AsyncMock()
     llm.generate.return_value = "## Overview\n\nThe page describes the frontend.\n"
     fast_llm = _make_mock_fast_llm()
+
+    # Capture search queries to verify en_keywords are passed
+    search_calls: list[list[str]] = []
+    original_search = KeywordIndex.search
+
+    def capturing_search(self, queries, **kwargs):
+        search_calls.append(list(queries))
+        return original_search(self, queries, **kwargs)
+
+    monkeypatch.setattr(KeywordIndex, "search", capturing_search)
 
     spec = WikiPageSpec(
         title="前端界面",
@@ -461,12 +456,12 @@ async def test_generate_page_uses_en_keywords_as_retrieval_query(
         page_store,
         llm,
         fast_llm,
-        mock_embedding,
         repo_name="test",
     )
 
-    queries = [call.args[0] for call in mock_embedding.embed.await_args_list]
-    assert "web components next" in queries
+    # The en_keywords should appear as one of the query strings
+    all_queries = [q for call in search_calls for q in call]
+    assert any("web" in q and "components" in q for q in all_queries)
 
 
 async def test_extract_signature_slices_skips_missing_files(tmp_path):
@@ -494,9 +489,7 @@ async def test_extract_signature_slices_skips_missing_files(tmp_path):
     assert slices == {}
 
 
-async def test_generate_page_strips_oos_claim_without_calling_revision(
-    page_store, mock_embedding
-):
+async def test_generate_page_strips_oos_claim_without_calling_revision(page_store):
     """Out-of-scope claim in draft is stripped without calling the revision LLM.
 
     The fact-check returns a single out-of-scope issue.  The generator must:
@@ -550,7 +543,6 @@ async def test_generate_page_strips_oos_claim_without_calling_revision(
         page_store,
         llm,
         fast_llm,
-        mock_embedding,
         repo_name="test",
     )
 
@@ -710,14 +702,11 @@ def test_compute_generation_order_handles_cycle():
 # ── A4: multi-query retrieval + rank-weighted chunk quota ────────────────
 
 
-def _chunk(file: str, idx: int = 0) -> dict:
-    """Test helper: minimal RAG chunk dict for _balance_chunks tests."""
-    return {
-        "file": file,
-        "start_line": idx,
-        "end_line": idx,
-        "text": f"chunk {idx} from {file}",
-    }
+def _chunk(file: str, idx: int = 0) -> Chunk:
+    """Test helper: minimal Chunk object for _balance_chunks tests."""
+    return Chunk(
+        file=file, text=f"chunk {idx} from {file}", line_start=idx, line_end=idx
+    )
 
 
 def test_balance_chunks_rank_weighted_quota():
@@ -726,7 +715,7 @@ def test_balance_chunks_rank_weighted_quota():
     chunks = [_chunk(f, i) for f in files for i in range(20)]  # 100 chunks
     out = _balance_chunks(chunks, files=files, k=30, floor=2)
 
-    counts = {f: sum(1 for c in out if c["file"] == f) for f in files}
+    counts = {f: sum(1 for c in out if c.file == f) for f in files}
     # Counts should be non-increasing by rank (top file has the most)
     ordered = [counts[f] for f in files]
     assert ordered == sorted(ordered, reverse=True)
@@ -739,7 +728,7 @@ def test_balance_chunks_floor_only_for_low_rank():
     files = [f"f{i}.py" for i in range(8)]
     chunks = [_chunk(f, i) for f in files for i in range(20)]
     out = _balance_chunks(chunks, files=files, k=30, floor=2)
-    counts = {f: sum(1 for c in out if c["file"] == f) for f in files}
+    counts = {f: sum(1 for c in out if c.file == f) for f in files}
     for i in range(6, 8):
         assert counts[f"f{i}.py"] == 2
 
@@ -752,8 +741,8 @@ def test_balance_chunks_reuses_unfilled_ranked_file_quota():
     out = _balance_chunks(chunks, files=files, k=10, floor=1)
 
     assert len(out) == 10
-    assert sum(1 for c in out if c["file"] == "a.py") == 1
-    assert sum(1 for c in out if c["file"] == "b.py") == 9
+    assert sum(1 for c in out if c.file == "a.py") == 1
+    assert sum(1 for c in out if c.file == "b.py") == 9
 
 
 # ── A5: rank-weighted entity quota ───────────────────────────────────────

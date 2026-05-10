@@ -29,7 +29,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from worker.embedding.base import EmbeddingProvider
 from worker.llm.base import LLMProvider
 from worker.pipeline.page.formatters import (
     _format_context_chunks,
@@ -37,9 +36,10 @@ from worker.pipeline.page.formatters import (
     _rank_weighted_quotas,
 )
 from worker.pipeline.planner.wiki_planner import WikiPageSpec, WikiPlan
+from worker.pipeline.retrieval.chunk import Chunk
 from worker.pipeline.retrieval.code_slices import extract_source_slice
-from worker.pipeline.retrieval.rag_indexer import FAISSStore
-from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
+from worker.pipeline.retrieval.keyword_index import KeywordIndex
+from worker.utils.retry import OnRetryCallback
 
 if TYPE_CHECKING:
     from worker.pipeline.ast_analysis import FileAnalysis
@@ -152,12 +152,12 @@ def _file_stems(files: list[str]) -> list[str]:
 
 
 def _balance_chunks(
-    chunks: list[dict],
+    chunks: list[Chunk],
     *,
     files: list[str],
     k: int,
     floor: int = 2,
-) -> list[dict]:
+) -> list[Chunk]:
     """Allocate up to *k* chunks to *files* using a rank-weighted graduated quota.
 
     For each file at rank ``i`` (0-indexed), the weight is
@@ -171,8 +171,9 @@ def _balance_chunks(
     used to fill any unmet quota when a bucket is short.
 
     Args:
-        chunks: Chunks returned by :meth:`FAISSStore.search` /
-            :meth:`FAISSStore.multi_search`.  Each must have a ``"file"`` key.
+        chunks: Chunks from
+            :meth:`~worker.pipeline.retrieval.keyword_index.KeywordIndex.search`.
+            Each must have a ``file`` attribute.
         files: Ranked list of file paths (rank 0 = most important).  When
             empty, the first *k* chunks are returned unchanged.
         k: Total chunk budget for the page.
@@ -180,7 +181,7 @@ def _balance_chunks(
             supply across all chunks combined).
 
     Returns:
-        list[dict]: Up to *k* chunks, ordered by file rank then by input
+        list[Chunk]: Up to *k* chunks, ordered by file rank then by input
         order within each file.
     """
     if not files:
@@ -188,17 +189,17 @@ def _balance_chunks(
 
     quotas = _rank_weighted_quotas(files, k, floor=floor)
 
-    by_file: dict[str, list[dict]] = {f: [] for f in files}
-    leftovers: list[dict] = []
+    by_file: dict[str, list[Chunk]] = {f: [] for f in files}
+    leftovers: list[Chunk] = []
     for c in chunks:
-        f = c.get("file") if isinstance(c, dict) else getattr(c, "file", None)
+        f = c.file
         if f in by_file:
             by_file[f].append(c)
         else:
             leftovers.append(c)
 
-    out: list[dict] = []
-    spillover: list[dict] = []
+    out: list[Chunk] = []
+    spillover: list[Chunk] = []
     for f, q in zip(files, quotas, strict=False):
         bucket = by_file[f]
         out.extend(bucket[:q])
@@ -361,10 +362,9 @@ PageResultCallback = Callable[[PageResult, WikiPageSpec], Awaitable[None]]
 
 async def generate_page(
     spec: WikiPageSpec,
-    store: FAISSStore,
+    keyword_index: KeywordIndex,
     llm: LLMProvider,
     fast_llm: LLMProvider,
-    embedding: EmbeddingProvider,
     repo_name: str,
     top_k: int = 30,
     dep_info: dict[str, Any] | None = None,
@@ -397,7 +397,7 @@ async def generate_page(
     from worker.pipeline.page.outline import generate_page_outline
     from worker.utils.mermaid import sanitize_mermaid_blocks
 
-    # ── RAG retrieval (A4: 5 complementary queries + rank-weighted quota) ──
+    # ── BM25 retrieval (A4: 5 complementary queries + rank-weighted quota) ──
     en_keywords = getattr(spec, "en_keywords", None) or []
     top_entity_names = [
         e.get("name", "") for e in (entity_details or [])[:5] if e.get("name")
@@ -411,27 +411,14 @@ async def generate_page(
     ]
     queries = [q for q in queries if q.strip()]
 
-    query_vecs = []
-    for q in queries:
-        vec = await async_retry(
-            embedding.embed,
-            q,
-            initial_delay=10.0,
-            max_retries=5,
-            max_delay=120.0,
-            transient_exceptions=TRANSIENT_EXCEPTIONS,
-            on_retry=on_retry,
-        )
-        query_vecs.append(vec)
-
     # Over-fetch (k=top_k * 2) so the rank-weighted quota has supply across
-    # the ranked file list; doc_k=1 keeps at most one documentation chunk.
-    if len(query_vecs) > 1:
-        raw_chunks = store.multi_search(query_vecs, k=top_k * 2, doc_k=1)
-    elif query_vecs:
-        raw_chunks = store.search(query_vecs[0], k=top_k * 2, doc_k=1)
-    else:
-        raw_chunks = []
+    # the ranked file list; per_file_quota=4 is generous — the balancer tightens.
+    raw_chunks = keyword_index.search(
+        queries=queries,
+        k=top_k * 2,
+        files=spec.files or None,
+        per_file_quota=4,
+    )
     context_chunks = _balance_chunks(
         raw_chunks,
         files=spec.files or [],
@@ -473,27 +460,6 @@ async def generate_page(
     # ── Pass 2: Section-level drafting (Skeleton → per-section → Stitch) ──
     await _report_page_progress(on_progress, spec.title, "Draft")
     from worker.pipeline.page.section_drafter import draft_page_in_sections
-    from worker.pipeline.retrieval.chunk import Chunk
-    from worker.pipeline.retrieval.keyword_index import KeywordIndex
-
-    # Build a KeywordIndex from the FAISS-retrieved chunks. In B2.5 the entire
-    # FAISS path is deleted and KeywordIndex is built directly from a fresh
-    # chunking pass over spec.files; for now we adapt the existing chunks so the
-    # section drafter can do per-section retrieval within the page-level budget.
-    keyword_chunks = [
-        Chunk(
-            file=c.get("file", ""),
-            text=c.get("text", ""),
-            line_start=c.get("start_line", 0),
-            line_end=c.get("end_line", 0),
-        )
-        for c in context_chunks
-        if c.get("text") and c.get("file")
-    ]
-    # repo_index is reserved for Phase A11 scoring integration
-    # (see KeywordIndex.build docstring). Passing {} is the transitional
-    # contract; B2.5 may populate this from repo_index.json.
-    keyword_index = KeywordIndex.build(keyword_chunks, repo_index={})
 
     draft = await draft_page_in_sections(
         spec=spec,
@@ -602,10 +568,9 @@ async def _report_page_progress(
 
 async def generate_page_batch(
     specs_with_children: list[tuple[WikiPageSpec, list[PageResult] | None]],
-    store: FAISSStore,
+    keyword_index: KeywordIndex,
     llm: LLMProvider,
     fast_llm: LLMProvider,
-    embedding: EmbeddingProvider,
     repo_name: str,
     file_analysis: FileAnalysis,
     dep_graph: DependencyGraph,
@@ -654,10 +619,9 @@ async def generate_page_batch(
 
         return await generate_page(
             spec=spec,
-            store=store,
+            keyword_index=keyword_index,
             llm=llm,
             fast_llm=fast_llm,
-            embedding=embedding,
             repo_name=repo_name,
             dep_info=dep_info_or_none,
             entity_details=entities_or_none,

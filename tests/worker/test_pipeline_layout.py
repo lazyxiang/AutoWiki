@@ -34,7 +34,7 @@ def test_pipeline_top_level_is_only_stages_and_helpers():
     }
     deprecation_shims = {
         "fast_report_index.py",
-        "rag_indexer.py",
+        # rag_indexer.py deleted in B2.5 (Stage 4 removal)
         "page_generator.py",
         "page_outline.py",
         "page_draft.py",
@@ -97,7 +97,7 @@ def test_back_compat_reexports_resolve():
         "worker.pipeline.wiki_planner",
         "worker.pipeline.outline_anchors",
         "worker.pipeline.user_steering",
-        "worker.pipeline.rag_indexer",
+        # worker.pipeline.rag_indexer deleted in B2.5 (Stage 4 removal)
     ],
 )
 def test_old_paths_emit_deprecation_warning(old_module):
