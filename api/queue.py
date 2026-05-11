@@ -59,11 +59,11 @@ async def enqueue_full_index(
     reuse_index: bool = False,
     reuse_plan: bool = False,
 ) -> str:
-    """Enqueue a full six-stage wiki generation job for a repository.
+    """Enqueue a full wiki generation job for a repository.
 
     Pushes a ``run_full_index`` task to the ARQ queue.  The worker will run
     the complete pipeline: ingestion → AST analysis → dependency graph →
-    RAG indexing → wiki planning → page generation.
+    wiki planning → page generation.
 
     Args:
         repo_id (str): Hex-encoded SHA-256 repository identifier (first 16
@@ -74,9 +74,8 @@ async def enqueue_full_index(
         name (str): GitHub repository name (e.g. ``"hello-world"``).
         wiki_language (str): ISO-639-1 language code for wiki content
             generation (e.g. ``"en"``, ``"zh"``).  Defaults to ``"en"``.
-        reuse_index (bool): When ``True``, preserve any existing FAISS index
-            and skip Stage 4 (RAG Indexer) if the index file is present.
-            Defaults to ``False``.
+        reuse_index (bool): Deprecated and ignored. Keyword retrieval is rebuilt
+            in memory for each index run. Defaults to ``False``.
         reuse_plan (bool): When ``True``, load the existing
             ``ast/wiki_plan.json`` and skip Stage 5 (Wiki Planner) if the
             plan file is present.  Defaults to ``False``.

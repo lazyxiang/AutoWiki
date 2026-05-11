@@ -37,10 +37,8 @@ class IndexRequest(BaseModel):
         wiki_language (str): ISO-639-1 language code for the generated wiki
             content.  Defaults to ``"en"`` (English).  Use ``"zh"`` to
             generate the wiki in Chinese (简体中文).
-        reuse_index (bool): When ``True``, preserve any existing FAISS index
-            for this repository and skip Stage 4 (RAG embedding) if the
-            index is already present.  Useful for iterating on wiki structure
-            without re-embedding the entire codebase.  Defaults to ``False``.
+        reuse_index (bool): Deprecated and ignored. Keyword retrieval is rebuilt
+            in memory for each index run. Defaults to ``False``.
         reuse_plan (bool): When ``True``, load the existing
             ``ast/wiki_plan.json`` and skip Stage 5 (Wiki Planner) if the
             plan file is present.  Useful for iterating on page generation
@@ -316,6 +314,7 @@ async def get_repo(repo_id: str):
             "wiki_language": repo.wiki_language or "en",
             "last_commit": repo.last_commit or "",
             "is_private": bool(repo.is_private),
+            "features": {"deep_research": False},
         }
 
 

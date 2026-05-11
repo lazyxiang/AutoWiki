@@ -436,10 +436,12 @@ async def test_generate_page_uses_en_keywords_as_retrieval_query(
 
     # Capture search queries to verify en_keywords are passed
     search_calls: list[list[str]] = []
+    quota_calls: list[int] = []
     original_search = KeywordIndex.search
 
     def capturing_search(self, queries, **kwargs):
         search_calls.append(list(queries))
+        quota_calls.append(kwargs.get("per_file_quota", 2))
         return original_search(self, queries, **kwargs)
 
     monkeypatch.setattr(KeywordIndex, "search", capturing_search)
@@ -462,6 +464,7 @@ async def test_generate_page_uses_en_keywords_as_retrieval_query(
     # The en_keywords should appear as one of the query strings
     all_queries = [q for call in search_calls for q in call]
     assert any("web" in q and "components" in q for q in all_queries)
+    assert quota_calls[0] == 0
 
 
 async def test_extract_signature_slices_skips_missing_files(tmp_path):

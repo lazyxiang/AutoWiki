@@ -43,3 +43,12 @@ def test_database_path_env_override(monkeypatch, tmp_path):
     monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "test.db"))
     cfg = Config()
     assert cfg.database_path == tmp_path / "test.db"
+
+
+def test_embedding_env_logs_deprecation_warning(monkeypatch, caplog):
+    monkeypatch.setenv("AUTOWIKI_EMBEDDING_API_KEY", "unused")
+
+    with caplog.at_level("WARNING", logger="shared.config"):
+        Config()
+
+    assert "embedding configuration is deprecated and ignored" in caplog.text

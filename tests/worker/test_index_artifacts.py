@@ -120,6 +120,8 @@ async def test_full_index_ast_dir_contains_only_repo_index_and_wiki_plan(
         assert json.loads((ast_dir / "wiki_plan.json").read_text())["pages"]
         assert not (ast_dir / "file_analysis_summary.txt").exists()
         assert not (ast_dir / "fast_report_index.json").exists()
+        assert not (repo_data_dir / "faiss.index").exists()
+        assert not (repo_data_dir / "faiss.meta.pkl").exists()
         assert not (repo_data_dir / "logs" / "phase1_prompt.txt").exists()
     finally:
         await dispose_db(db_path)

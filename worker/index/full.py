@@ -1,4 +1,4 @@
-"""Full-index ARQ job orchestration for the 6-stage wiki pipeline."""
+"""Full-index ARQ job orchestration for the five-stage wiki pipeline."""
 
 from __future__ import annotations
 
@@ -95,18 +95,18 @@ async def run_full_index(
     reuse_index: bool = False,
     reuse_plan: bool = False,
 ) -> None:
-    """Run the complete 6-stage wiki generation pipeline for a repository.
+    """Run the complete five-stage wiki generation pipeline for a repository.
 
     This is the primary ARQ job function.  For repositories with an existing
     successful wiki, it snapshots the artifacts that a full index may mutate,
     clears those artifacts to ensure a clean output, then executes each
     pipeline stage in sequence while writing progress to the DB.
 
-    Artifact clearing (before Stage 1):
+    Artifact clearing before ingestion:
         Removes all Markdown files in ``wiki/`` and ``wiki_plan.json``.
         Wiki page rows in SQLite are also deleted so the DB stays in sync
-        with the file system.  When *reuse_index* is ``True`` the FAISS
-        index and metadata files are preserved so Stage 4 can be skipped.
+        with the file system.  Legacy FAISS files are removed before each
+        successful run; *reuse_index* is deprecated and ignored.
 
     Pipeline stages:
         1. **Ingestion** — Shallow-clone or fetch the repo; filter source
@@ -116,12 +116,9 @@ async def run_full_index(
            file.
         3. **Dependency Graph** — Build file-level import graph; cluster
            related files for context-aware page planning.
-        4. **RAG Indexer** — Entity-aware chunking of source files + FAISS
-           ``IndexFlatIP`` build with embedding vectors.  Skipped when
-           *reuse_index* is ``True`` and a FAISS index already exists.
-        5. **Wiki Planner** — LLM generates a logical page hierarchy
+        4. **Wiki Planner** — LLM generates a logical page hierarchy
            (``WikiPlan``) with file-to-page assignments.
-        6. **Page Generator** — For each page: RAG retrieval + LLM Markdown
+        5. **Page Generator** — For each page: keyword retrieval + LLM Markdown
            generation; results written to SQLite and ``wiki/*.md``.
 
     Args:
@@ -134,10 +131,8 @@ async def run_full_index(
         name (str): Repository name.
         clone_root (Path | None): Override the default clone directory.
             Defaults to ``<data_dir>/repos/<repo_id>/clone``.
-        reuse_index (bool): When ``True``, preserve any existing FAISS index
-            and skip Stage 4 (RAG Indexer) if the index file is present.
-            Useful for iterating on wiki structure without re-embedding.
-            Defaults to ``False``.
+        reuse_index (bool): Deprecated and ignored. Keyword retrieval is
+            in-memory and rebuilt each run. Defaults to ``False``.
         reuse_plan (bool): When ``True``, skip Stage 5 (Wiki Planner) and
             load ``ast/wiki_plan.json`` directly if it exists.  User-edited
             ``page_notes`` from ``wiki/wiki.json`` are preserved.
@@ -314,9 +309,9 @@ async def run_full_index(
             status_description="Building keyword index...",
         )
 
-        # Stage 4: Keyword Index — entity-aware chunking + in-memory BM25 index
+        # Keyword retrieval setup — entity-aware chunking + in-memory BM25 index
         # (FAISS/embedding removed in B2.5; KeywordIndex is fast, pure-Python BM25)
-        logger.info("Stage 4: Keyword Index starting")
+        logger.info("Keyword index setup starting")
         # reuse_index previously skipped FAISS rebuild; KeywordIndex is in-memory and
         # rebuilds each run without significant cost, so reuse_index no longer affects
         # retrieval — it still controls faiss.index / faiss.meta.pkl cleanup above.

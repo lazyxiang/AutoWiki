@@ -156,12 +156,11 @@ async def run_refresh_index(
         1. **Ingestion** — ``git fetch`` to get the new HEAD SHA.
         2. **AST Analysis** — Re-parse all current files.
         3. **Dependency Graph** — Rebuild import graph over current files.
-        4. **RAG Indexer** — Rebuild the FAISS index for all current files.
-        5. **Wiki Planner** — Run planning only over the files from affected
+        4. **Wiki Planner** — Run planning only over the files from affected
            pages (plus any newly added files), while passing the titles of
            unaffected pages as ``existing_titles`` so the LLM does not
            duplicate them.
-        6. **Page Generator** — Regenerate only the newly planned pages;
+        5. **Page Generator** — Regenerate only the newly planned pages;
            preserve the ``page_order`` of replaced pages so the navigation
            ordering stays stable.  Truly new pages are appended.
 
@@ -481,9 +480,9 @@ async def run_refresh_index(
             db_path, job_id, progress=30, status_description="Building keyword index..."
         )
 
-        # Stage 4: Keyword Index — entity-aware chunking + in-memory BM25 index
+        # Keyword retrieval setup — entity-aware chunking + in-memory BM25 index
         # (FAISS/embedding removed in B2.5)
-        logger.info("Stage 4: Keyword Index starting")
+        logger.info("Keyword index setup starting")
         llm = make_llm_provider(cfg)
         fast_llm = make_fast_llm_provider(cfg, llm)
         repo_data_dir.mkdir(parents=True, exist_ok=True)

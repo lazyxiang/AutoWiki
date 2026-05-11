@@ -13,7 +13,7 @@ autowiki list
 # 启动完整技术栈（API + worker + web UI）
 autowiki serve [--port 3000] [--api-port 3001]
 
-# 对已建立索引的仓库运行深度研究查询
+# 对已建立索引的仓库运行深度研究查询（已禁用，见 issue #43）
 autowiki research github.com/owner/repo "身份验证系统是如何工作的？"
 
 # 在不运行流水线的情况下检查存储的维基计划 (wiki plan)

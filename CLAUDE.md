@@ -109,12 +109,12 @@ GET   /api/repos/{repo_id}/wiki              # List wiki pages
 GET   /api/repos/{repo_id}/wiki/{slug}       # Get page Markdown
 POST  /api/repos/{repo_id}/chat              # Create a new chat session
 GET   /api/repos/{repo_id}/chat/{session_id} # Get chat history
-POST  /api/repos/{repo_id}/research          # Start deep research → {job_id, report_id}
-GET   /api/repos/{repo_id}/research/{job_id} # Get research report (plan, findings, Markdown)
+POST  /api/repos/{repo_id}/research          # (disabled — see issue #43) → HTTP 503
+GET   /api/repos/{repo_id}/research/{job_id} # (disabled — see issue #43) → HTTP 410
 GET   /api/jobs/{job_id}                     # Job status + progress
 WS    /ws/jobs/{job_id}                      # Stream job progress
 WS    /ws/repos/{repo_id}/chat/{session_id}  # Stream chat responses
-WS    /ws/repos/{repo_id}/research/{job_id}  # Stream research events
+WS    /ws/repos/{repo_id}/research/{job_id}  # (disabled — see issue #43) → close 1011
 ```
 
 ### CLI (Phase 1 + Phase 3)
@@ -122,17 +122,17 @@ WS    /ws/repos/{repo_id}/research/{job_id}  # Stream research events
 autowiki index github.com/owner/repo [--reuse-index]
 autowiki list
 autowiki serve [--port 3000] [--debug]
-autowiki research github.com/owner/repo "<question>"
+autowiki research github.com/owner/repo "<question>"  # (disabled — see issue #43)
 autowiki validate-plan <repo>       # Offline planner diagnostic — reads ast/wiki_plan.json and reports coverage, page-size distribution, locality scores, and validation status
 autowiki config show
 autowiki config set <key> <value>
 ```
 
-### Research API (Phase 3)
+### Research API (Phase 3 — disabled, see issue #43)
 ```
-POST  /api/repos/{repo_id}/research                   # Start deep research → {job_id, report_id}
-GET   /api/repos/{repo_id}/research/{job_id}          # Get report (plan, findings, Markdown)
-WS    /ws/repos/{repo_id}/research/{job_id}           # Stream research events
+POST  /api/repos/{repo_id}/research                   # (disabled) → HTTP 503
+GET   /api/repos/{repo_id}/research/{job_id}          # (disabled) → HTTP 410
+WS    /ws/repos/{repo_id}/research/{job_id}           # (disabled) → WS close 1011
 ```
 
 ## Workflow Rules

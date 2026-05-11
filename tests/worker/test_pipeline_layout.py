@@ -85,6 +85,20 @@ def test_back_compat_reexports_resolve():
     assert PageResult is not None
 
 
+def test_index_orchestrators_do_not_advertise_deleted_stage4():
+    repo_root = Path(__file__).resolve().parents[2]
+    sources = [
+        repo_root / "worker" / "index" / "full.py",
+        repo_root / "worker" / "index" / "refresh.py",
+    ]
+
+    for source in sources:
+        text = source.read_text()
+        assert "Stage 4" not in text
+        assert "6-stage" not in text
+        assert "RAG Indexer" not in text
+
+
 @pytest.mark.parametrize(
     "old_module",
     [

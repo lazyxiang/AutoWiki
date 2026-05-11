@@ -795,7 +795,7 @@ async def test_keyword_index_recall_parity_vs_faiss(tmp_path: Path) -> None:
 
     from shared.config import get_config
     from worker.embedding import make_embedding_provider
-    from worker.pipeline.retrieval.rag_indexer import FAISSStore
+    from worker.embedding.faiss_store import FAISSStore
 
     questions = json.loads(_FIXTURE_PATH.read_text())
     chunks = _build_chunks()

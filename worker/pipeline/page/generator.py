@@ -417,7 +417,7 @@ async def generate_page(
         queries=queries,
         k=top_k * 2,
         files=spec.files or None,
-        per_file_quota=4,
+        per_file_quota=0,
     )
     context_chunks = _balance_chunks(
         raw_chunks,

@@ -13,7 +13,7 @@ autowiki list
 # Start the full stack (API + worker + web UI)
 autowiki serve [--port 3000] [--api-port 3001]
 
-# Run a deep research query against an indexed repo
+# Run a deep research query against an indexed repo (disabled — see issue #43)
 autowiki research github.com/owner/repo "How does the authentication system work?"
 
 # Inspect a stored wiki plan without running the pipeline
