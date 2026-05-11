@@ -50,8 +50,8 @@ export function HeroSection({ onQueryChange }: HeroSectionProps) {
           label="Reuse Index"
           checked={reuseIndex}
           onToggle={() => setReuseIndex((v) => !v)}
-          title="Debug: skip Stage 4 (RAG embedding) and reuse the existing FAISS index"
-          ariaLabel="Reuse existing FAISS index (skip embedding stage)"
+          title="Deprecated: ignored by keyword retrieval"
+          ariaLabel="Deprecated reuse index option"
           activeColorClass="border-amber-400 bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
           activeDotClass="bg-amber-500"
         />

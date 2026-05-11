@@ -411,8 +411,8 @@ async def generate_page(
     ]
     queries = [q for q in queries if q.strip()]
 
-    # Over-fetch (k=top_k * 2) so the rank-weighted quota has supply across
-    # the ranked file list; per_file_quota=4 is generous — the balancer tightens.
+    # Over-fetch (k=top_k * 2) without a flat per-file cap so the rank-weighted
+    # balancer can give the top-ranked files their full graduated quota.
     raw_chunks = keyword_index.search(
         queries=queries,
         k=top_k * 2,

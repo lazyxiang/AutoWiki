@@ -55,3 +55,29 @@ async def test_get_repo_exposes_features_deep_research_false(client_with_repo):
     assert resp.status_code == 200
     body = resp.json()
     assert body.get("features", {}).get("deep_research") is False
+
+
+def test_ws_research_closes_with_1011(tmp_path):
+    """WebSocket /ws/repos/{id}/research/{job_id} accepts then closes 1011."""
+    import os
+
+    os.environ["DATABASE_PATH"] = str(tmp_path / "ws.db")
+    os.environ["AUTOWIKI_DATA_DIR"] = str(tmp_path)
+    from shared.config import reset_config
+
+    reset_config()
+    from fastapi.testclient import TestClient
+
+    from api.main import app
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/repos/r1/research/j1") as ws:
+            # The server accepts then immediately closes with code 1011.
+            # WebSocketDisconnect is raised on the first receive.
+            from starlette.websockets import WebSocketDisconnect
+
+            with pytest.raises(WebSocketDisconnect) as exc_info:
+                ws.receive_text()
+            assert exc_info.value.code == 1011
+
+    reset_config()

@@ -1,7 +1,8 @@
 """Deterministic BM25 keyword index for wiki page retrieval.
 
-Replaces ``FAISSStore.multi_search`` for the wiki path. Pure-Python via
-``rank_bm25``; consumes the shared tokenizer from ``worker.utils.tokenize``.
+Replaces the previous FAISS-backed vector retrieval for the wiki path.
+Pure-Python via ``rank_bm25``; consumes the shared tokenizer from
+``worker.utils.tokenize``.
 """
 
 from __future__ import annotations

@@ -2,15 +2,9 @@
 
 from __future__ import annotations
 
-import pytest
 from typer.testing import CliRunner
 
 from cli.main import app
-
-pytestmark = pytest.mark.skipif(
-    False,
-    reason="placeholder — B5 disabled-state tests live here",
-)
 
 
 def test_research_command_exits_nonzero():

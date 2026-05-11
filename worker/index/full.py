@@ -312,9 +312,8 @@ async def run_full_index(
         # Keyword retrieval setup — entity-aware chunking + in-memory BM25 index
         # (FAISS/embedding removed in B2.5; KeywordIndex is fast, pure-Python BM25)
         logger.info("Keyword index setup starting")
-        # reuse_index previously skipped FAISS rebuild; KeywordIndex is in-memory and
-        # rebuilds each run without significant cost, so reuse_index no longer affects
-        # retrieval — it still controls faiss.index / faiss.meta.pkl cleanup above.
+        # KeywordIndex is in-memory and rebuilds each run, so the deprecated
+        # reuse_index flag no longer affects retrieval.
         logger.info(
             "reuse_index=%s; KeywordIndex is in-memory and rebuilds each run",
             reuse_index,
