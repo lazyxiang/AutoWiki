@@ -4,7 +4,7 @@
 # 为仓库建立索引
 autowiki index github.com/owner/repo
 
-# 重新建立索引，但不重建 FAISS 向量索引（速度更快，跳过嵌入步骤）
+# 已弃用的兼容参数；关键词检索会在内存中重建
 autowiki index github.com/owner/repo --reuse-index
 
 # 列出所有已建立索引的仓库
@@ -21,5 +21,5 @@ autowiki validate-plan owner-repo
 
 # 显示或更新配置
 autowiki config show
-autowiki config set <key> <value>  # 点分隔的键名，例如 llm.provider, embedding.model
+autowiki config set <key> <value>  # 点分隔的键名，例如 llm.provider
 ```

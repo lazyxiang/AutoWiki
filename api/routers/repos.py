@@ -40,7 +40,7 @@ class IndexRequest(BaseModel):
         reuse_index (bool): Deprecated and ignored. Keyword retrieval is rebuilt
             in memory for each index run. Defaults to ``False``.
         reuse_plan (bool): When ``True``, load the existing
-            ``ast/wiki_plan.json`` and skip Stage 5 (Wiki Planner) if the
+            ``ast/wiki_plan.json`` and skip Stage 4 (Wiki Planner) if the
             plan file is present.  Useful for iterating on page generation
             without re-running LLM planning.  Defaults to ``False``.
     """

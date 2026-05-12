@@ -9,7 +9,7 @@ information quickly.
 ## 1. What AutoWiki Is
 
 A self-hosted, open-source AI-powered wiki generator for software repositories.
-Given a GitHub URL, it produces a browsable, multi-level wiki — architecture
+Given a GitHub, GitLab, or Bitbucket URL, it produces a browsable, multi-level wiki — architecture
 overviews, module breakdowns, dependency diagrams, source-linked documentation,
 and conversational Q&A — running locally with user-supplied API keys.
 
@@ -29,15 +29,16 @@ The three headline design goals that shape every architecture decision:
 | Step | Document | What it establishes |
 |------|----------|---------------------|
 | 1 | `docs/superpowers/specs/2026-03-22-autowiki-design.md` | Product goals, competitive context, phased delivery roadmap, original API surface, storage layout |
-| 2 | `CLAUDE.md` (project root) | Authoritative current architecture: service topology, 6-stage pipeline, storage layout, all key implementation notes |
+| 2 | `CLAUDE.md` (project root) | Authoritative current architecture: service topology, 5-stage pipeline, storage layout, all key implementation notes |
 | 3 | `docs/superpowers/specs/2026-04-08-wiki-planner-improvements-design.md` | Two-phase planner, richer file summaries, bottom-up generation, `generate_batch` — the Phase 2.5 planner redesign |
-| 4 | `docs/superpowers/specs/2026-04-10-wiki-page-quality-redesign.md` | 4-pass page generation (outline → draft → fact-check → revision), `PromptSegment` caching, fast-model split, `doc_k` retrieval downweighting |
+| 4 | `docs/superpowers/specs/2026-04-10-wiki-page-quality-redesign.md` | Original 4-pass page generation, `PromptSegment` caching, fast-model split |
+| 5 | `docs/spec/claude/2026-04-29-wiki-page-quality-redesign.md` | Current Layer B design: BM25 `KeywordIndex`, section-level drafting, FAISS/embedding removal, Deep Research disabled during migration |
 
 For implementation details of each phase, follow with the corresponding plan doc
 (see §4 below).
 
 > **Quick orientation**: If you only read two documents, read `CLAUDE.md` for the
-> current state and `docs/superpowers/specs/2026-04-10-wiki-page-quality-redesign.md`
+> current state and `docs/spec/claude/2026-04-29-wiki-page-quality-redesign.md`
 > for the most recent and most detailed design rationale.
 
 ---
@@ -51,19 +52,20 @@ API Gateway (FastAPI)  ←→  Redis
     ↓
 Worker Service (ARQ job queue)
     ↓
-Storage (~/.autowiki/): SQLite + FAISS + Markdown files
+Storage (~/.autowiki/): SQLite + Markdown files + repo_index.json
 ```
 
-### 6-Stage Generation Pipeline
+### 5-Stage Generation Pipeline
 
 ```text
 Stage 1  Ingestion          shallow clone, file filtering, commit SHA
 Stage 2  AST Analysis       single-pass Tree-Sitter → FileAnalysis (entities, counts)
 Stage 3  Dependency Graph   file-level import edges → connected-component clusters
-Stage 4  RAG Indexer        LangChain chunking → FAISS IndexFlatIP; skippable with --reuse-index
-Stage 5  Wiki Planner       two-phase LLM: Phase 1 outline (titles/hierarchy), Phase 2 file selection (5-8 per page)
-Stage 6  Page Generator     bottom-up, 4-pass per page: outline → draft → fact-check → revision
+Stage 4  Wiki Planner       two-phase LLM: Phase 1 outline (titles/hierarchy), Phase 2 file selection (5-8 per page)
+Stage 5  Page Generator     bottom-up, 4-pass per page: outline → section draft → fact-check → revision
 ```
+
+Keyword retrieval is built in memory during indexing: `chunking.py` creates source chunks and `keyword_index.py` builds a BM25 `KeywordIndex`. The old FAISS/embedding Stage 4 was deleted in Layer B (issue #43), and `--reuse-index` is now deprecated and ignored.
 
 **What was Stage 7?** A diagram synthesis stage (`diagram_synthesis.py`) was
 briefly added in Phase 2 and removed in Phase 2.5 — the page generator's prompt
@@ -87,7 +89,7 @@ superseded.
 
 | Document | Status | Introduced |
 |----------|--------|------------|
-| `docs/superpowers/plans/2026-03-22-phase1-core-mvp.md` | Complete (stale: `build_module_tree`, 5-stage count) | Step-by-step implementation: Docker Compose, FastAPI, ARQ, SQLite, FAISS, Next.js UI |
+| `docs/superpowers/plans/2026-03-22-phase1-core-mvp.md` | Complete (stale: `build_module_tree`, old vector-index design) | Step-by-step implementation: Docker Compose, FastAPI, ARQ, SQLite, original FAISS-era Next.js UI |
 | `docs/2026-03-25-improve-wiki-quality-plan.md` | Complete (superseded: `build_enhanced_module_tree` API) | Dependency graph, enhanced AST, architecture diagrams, entity context for planner |
 | `docs/2026-03-25-improve-wiki-ux-plan.md` | Complete | `status_description` on jobs, hierarchical sidebar, Markdown CSS prose styles |
 | `docs/2026-03-27-improve-llm-retry-plan.md` | Complete (stale: "5-stage" reference) | Exponential backoff retry, `async_retry`, `OnRetryCallback`, `TRANSIENT_EXCEPTIONS` |
@@ -116,7 +118,7 @@ superseded.
 
 | Document | Status | Introduced |
 |----------|--------|------------|
-| `docs/superpowers/plans/2026-04-14-phase3&4-deep-research-and-steering.md` | Complete (PR #20) | Multi-step RAG research, LLM planner, synthesized report, `autowiki research` CLI, user-steering via `wiki.json` |
+| `docs/superpowers/plans/2026-04-14-phase3&4-deep-research-and-steering.md` | Complete (PR #20; Deep Research temporarily disabled in issue #43 branch) | Multi-step RAG research, LLM planner, synthesized report, `autowiki research` CLI, user-steering via `wiki.json` |
 
 ### Phase 4.5 — Planner Robustness Hardening
 
@@ -144,11 +146,13 @@ superseded.
 2. **Worker picks up** — `run_full_index()` in `worker/index/full.py` is the top-level
    orchestrator. Read it to understand stage sequencing and progress reporting.
 
-3. **Stages 1–4** (`worker/pipeline/ingestion.py`, `ast_analysis.py`,
-   `dependency_graph.py`, `rag_indexer.py`) build the evidence the planner needs.
-   Key output: a `FileAnalysis` object and a `FAISSStore`.
+3. **Stages 1–3** (`worker/pipeline/ingestion.py`, `ast_analysis.py`,
+   `dependency_graph.py`) build the structural evidence the planner needs.
+   Key outputs: a `FileAnalysis` object, a dependency graph, and `ast/repo_index.json`.
+   Keyword retrieval setup later chunks source files and builds an in-memory BM25
+   `KeywordIndex`; no FAISS store is persisted.
 
-4. **Stage 5 — Planner** (`worker/pipeline/wiki_planner.py`):
+4. **Stage 4 — Planner** (`worker/pipeline/planner/wiki_planner.py`):
    - Phase 1: `_build_outline_prompt()` (with architectural anchors from `outline_anchors.py`) → LLM call → `_validate_outline_structure()`; self-retries with feedback up to `max_retries` times
    - Phase 2: `_select_files_in_batches()` (12-page batches, cacheable system prompt) → `_validate_assignments()`; self-retries with feedback; on final failure falls back to `_heuristic_select_files()` (scoring-based heuristic)
    - Result: a `WikiPlan` (list of `WikiPageSpec`, each with title, purpose, `files`, parent)
@@ -156,15 +160,15 @@ superseded.
    - Offline diagnostics: `autowiki validate-plan <repo>` reads `ast/wiki_plan.json`
    - Design rationale: `docs/superpowers/specs/2026-04-08-wiki-planner-improvements-design.md` §5 and `docs/superpowers/plans/2026-04-17-page-centric-file-selection.md`.
 
-5. **Stage 6 — Page Generator** (`worker/pipeline/page_generator.py`):
+5. **Stage 5 — Page Generator** (`worker/pipeline/page/generator.py`):
    - `compute_generation_order(plan)` returns pages deepest-first (leaves before parents)
    - For each depth level, `generate_page_batch()` runs pages concurrently
    - Each page goes through `generate_page()`:
-     - Pass 1: `generate_page_outline()` via fast model (`worker/pipeline/page_outline.py`)
-     - Pass 2: `generate_draft()` via main model (`worker/pipeline/page_draft.py`)
-     - Pass 3: `run_fact_check()` via fast model (`worker/pipeline/fact_check.py`)
+     - Pass 1: `generate_page_outline()` via fast model (`worker/pipeline/page/outline.py`)
+     - Pass 2: `draft_page_in_sections()` (`worker/pipeline/page/section_drafter.py`) builds a skeleton, drafts sections in parallel with section-scoped BM25 retrieval, then stitches the page
+     - Pass 3: `run_fact_check()` via fast model (`worker/pipeline/page/fact_check.py`)
      - Pass 4: `run_targeted_revision()` via main model, only if fact-check verdict is `"fail"`
-     - Post-processing: `ensure_diagram_headers()` (`worker/pipeline/diagram_post_processor.py`)
+     - Post-processing: `ensure_diagram_headers()` (`worker/pipeline/page/diagram_post_processor.py`)
    - Design rationale: `docs/superpowers/specs/2026-04-10-wiki-page-quality-redesign.md` §5
 
 6. **Storage** — pages written to `~/.autowiki/repos/{hash}/wiki/*.md` and to
@@ -182,7 +186,7 @@ See `docs/superpowers/specs/2026-04-10-wiki-page-quality-redesign.md` §6.
 
 `run_refresh_index()` in `worker/index/refresh.py` loads the saved `wiki_plan.json`,
 identifies files changed since the last commit SHA, and re-runs only the affected
-pages through the Stage 6 pipeline. Unchanged pages are read from disk and can
+pages through the page-generation pipeline. Unchanged pages are read from disk and can
 supply `child_contents` for parent pages that do need regeneration.
 
 ---
@@ -195,12 +199,12 @@ supply `child_contents` for parent pages that do need regeneration.
 | Bottom-up generation (children before parents) | `docs/superpowers/specs/2026-04-08-wiki-planner-improvements-design.md` §7 |
 | 4-pass page generation | `docs/superpowers/specs/2026-04-10-wiki-page-quality-redesign.md` §3, §5 |
 | `PromptSegment` and Anthropic prompt caching | `docs/superpowers/specs/2026-04-10-wiki-page-quality-redesign.md` §8 |
-| `doc_k` downweighting stale design docs | `docs/superpowers/specs/2026-04-10-wiki-page-quality-redesign.md` §4 |
+| BM25 keyword retrieval and FAISS removal | `docs/spec/claude/2026-04-29-wiki-page-quality-redesign.md` §5.3 B1/B4 |
 | `fast_model` / `fast_llm` split | `docs/superpowers/specs/2026-04-10-wiki-page-quality-redesign.md` §8.4 |
 | Stage 7 removal (diagram synthesis) | `docs/superpowers/specs/2026-04-08-wiki-planner-improvements-design.md` implementation notes |
 | `FileAnalysis` single-pass AST (replaced `build_module_tree`) | `docs/2026-03-28-pipeline-refactoring-plan.md` |
 | `wiki_plan.json` vs old `module_tree.json` | `docs/2026-03-28-pipeline-refactoring-plan.md` |
-| `reuse_index` / `--reuse-index` | `CLAUDE.md` implementation notes; `docs/superpowers/specs/2026-04-08-wiki-planner-improvements-design.md` implementation notes |
+| `reuse_index` / `--reuse-index` deprecated and ignored | `CLAUDE.md` implementation notes; `docs/spec/claude/2026-04-29-wiki-page-quality-redesign.md` §5.3 B4 |
 | Async retry / `OnRetryCallback` | `docs/2026-03-27-improve-llm-retry-plan.md` |
 | Incremental refresh logic | `docs/superpowers/plans/2026-03-23-phase2-chat-diagrams-refresh.md` |
 
@@ -208,12 +212,12 @@ supply `child_contents` for parent pages that do need regeneration.
 
 ## 7. Still-Planned Work (Not Yet Implemented)
 
-> **Note:** Deep Research mode (Phase 3) and user steering via `.autowiki/wiki.json` (Phase 4) are both **implemented** — shipped in PR #20. The items below are features still pending.
+> **Note:** Deep Research mode (Phase 3) shipped in PR #20 but is temporarily disabled while it migrates from FAISS to keyword retrieval (issue #43). User steering via `.autowiki/wiki.json` (Phase 4) remains implemented. The items below are features still pending.
 
 | Phase | Feature | Reference |
 |-------|---------|-----------|
-| Phase 5 | MCP server (`read_wiki_structure`, `read_wiki_page`, `search_wiki`, `ask_question`, `deep_research`) | `CLAUDE.md` API Surface |
-| Phase 5 | GitLab / Bitbucket support | `docs/superpowers/specs/2026-03-22-autowiki-design.md` |
-| Phase 5 | Hybrid search (BM25 + vector) | `docs/superpowers/specs/2026-03-22-autowiki-design.md` |
+| Phase 5 | MCP server (`read_wiki_structure`, `read_wiki_page`, `search_wiki`, `ask_question`) | `CLAUDE.md` API Surface |
+| Follow-up | Deep Research migration to `KeywordIndex` + graph expansion | issue #43 |
+| Phase 6 | Hybrid search | `docs/spec/claude/2026-04-29-wiki-page-quality-redesign.md` follow-ups |
 | Deferred | GitHub webhooks for auto-refresh | `docs/superpowers/specs/2026-03-22-autowiki-design.md` §9 |
 | Stub | `cache_ttl: long` (1-hour Anthropic cache) | `docs/superpowers/specs/2026-04-10-wiki-page-quality-redesign.md` implementation notes |

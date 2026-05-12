@@ -8,7 +8,7 @@
 ## 1. AutoWiki 是什么
 
 AutoWiki 是一个自托管、开源、由 AI 驱动的软件仓库维基生成器。
-给定一个 GitHub URL，它会生成一个可浏览的多级维基 —— 包括架构
+给定一个 GitHub、GitLab 或 Bitbucket URL，它会生成一个可浏览的多级维基 —— 包括架构
 概览、模块分解、依赖图、源链接文档以及对话式问答 —— 使用用户提供的 API 密钥在本地运行。
 
 塑造每个架构决策的三个核心设计目标：
@@ -26,14 +26,15 @@ AutoWiki 是一个自托管、开源、由 AI 驱动的软件仓库维基生成�
 | 步骤 | 文档 | 确立内容 |
 |------|----------|---------------------|
 | 1 | `docs/superpowers/specs/2026-03-22-autowiki-design.md` | 产品目标、竞争背景、分阶段交付路线图、原始 API 表面、存储布局 |
-| 2 | `CLAUDE.md` (项目根目录) | 权威的当前架构：服务拓扑、6 阶段流水线、存储布局、所有关键实现说明 |
+| 2 | `CLAUDE.md` (项目根目录) | 权威的当前架构：服务拓扑、5 阶段流水线、存储布局、所有关键实现说明 |
 | 3 | `docs/superpowers/specs/2026-04-08-wiki-planner-improvements-design.md` | 两阶段规划器、更丰富的文件摘要、自下而上生成、`generate_batch` —— Phase 2.5 规划器重新设计 |
-| 4 | `docs/superpowers/specs/2026-04-10-wiki-page-quality-redesign.md` | 4 阶段页面生成（大纲 → 草案 → 事实核查 → 修订）、`PromptSegment` 缓存、快速模型拆分、`doc_k` 检索权重降低 |
+| 4 | `docs/superpowers/specs/2026-04-10-wiki-page-quality-redesign.md` | 原始 4 阶段页面生成、`PromptSegment` 缓存、快速模型拆分 |
+| 5 | `docs/spec/claude/2026-04-29-wiki-page-quality-redesign.md` | 当前 Layer B 设计：BM25 `KeywordIndex`、分章节草案、FAISS/嵌入移除、Deep Research 迁移期间禁用 |
 
 有关各阶段的实现细节，请参阅相应的计划文档（见下文 §4）。
 
 > **快速导向**：如果你只读两份文档，请阅读 `CLAUDE.md` 以了解当前状态，以及
-> `docs/superpowers/specs/2026-04-10-wiki-page-quality-redesign.md` 以了解
+> `docs/spec/claude/2026-04-29-wiki-page-quality-redesign.md` 以了解
 > 最新的、最详细的设计原理。
 
 ---
@@ -47,19 +48,20 @@ API 网关 (FastAPI)  ←→  Redis
     ↓
 Worker 服务 (ARQ 任务队列)
     ↓
-存储 (~/.autowiki/): SQLite + FAISS + Markdown 文件
+存储 (~/.autowiki/): SQLite + Markdown 文件 + repo_index.json
 ```
 
-### 6 阶段生成流水线 (Pipeline)
+### 5 阶段生成流水线 (Pipeline)
 
 ```text
 第 1 阶段  摄入 (Ingestion)     浅克隆、文件过滤、提交 SHA
 第 2 阶段  AST 分析             单次 Tree-Sitter 解析 → FileAnalysis（实体、计数）
 第 3 阶段  依赖图               文件级导入边 → 连通分量簇
-第 4 阶段  RAG 索引器           LangChain 分块 → FAISS IndexFlatIP；可通过 --reuse-index 跳过
-第 5 阶段  维基规划器           两阶段 LLM：第 1 阶段大纲（标题/层次结构），第 2 阶段文件选择（每页 5-8 个）
-第 6 阶段  页面生成器           自下而上，每页 4 阶段：大纲 → 草案 → 事实核查 → 修订
+第 4 阶段  维基规划器           两阶段 LLM：第 1 阶段大纲（标题/层次结构），第 2 阶段文件选择（每页 5-8 个）
+第 5 阶段  页面生成器           自下而上，每页 4 阶段：大纲 → 分章节草案 → 事实核查 → 修订
 ```
+
+关键词检索在索引期间以内存形式构建：`chunking.py` 创建源码分块，`keyword_index.py` 构建 BM25 `KeywordIndex`。旧的 FAISS/嵌入第 4 阶段已在 Layer B（issue #43）删除，`--reuse-index` 现在已弃用且会被忽略。
 
 **曾经的第 7 阶段是什么？** 图表合成阶段 (`diagram_synthesis.py`) 曾在
 Phase 2 中短暂加入，并在 Phase 2.5 中被移除 —— 页面生成器的提示词
@@ -82,7 +84,7 @@ Phase 2 中短暂加入，并在 Phase 2.5 中被移除 —— 页面生成器�
 
 | 文档 | 状态 | 引入内容 |
 |----------|--------|------------|
-| `docs/superpowers/plans/2026-03-22-phase1-core-mvp.md` | 已完成（过时：`build_module_tree`，5 阶段计数） | 分步实现：Docker Compose, FastAPI, ARQ, SQLite, FAISS, Next.js UI |
+| `docs/superpowers/plans/2026-03-22-phase1-core-mvp.md` | 已完成（过时：`build_module_tree`，旧向量索引设计） | 分步实现：Docker Compose, FastAPI, ARQ, SQLite, 原 FAISS 时代的 Next.js UI |
 | `docs/2026-03-25-improve-wiki-quality-plan.md` | 已完成（被取代：`build_enhanced_module_tree` API） | 依赖图、增强版 AST、架构图、规划器的实体上下文 |
 | `docs/2026-03-25-improve-wiki-ux-plan.md` | 已完成 | 任务上的 `status_description`、分级侧边栏、Markdown CSS 正文样式 |
 | `docs/2026-03-27-improve-llm-retry-plan.md` | 已完成（过时：“5 阶段”引用） | 指数退避重试、`async_retry`、`OnRetryCallback`、`TRANSIENT_EXCEPTIONS` |
@@ -111,7 +113,7 @@ Phase 2 中短暂加入，并在 Phase 2.5 中被移除 —— 页面生成器�
 
 | 文档 | 状态 | 引入内容 |
 |----------|--------|------------|
-| `docs/superpowers/plans/2026-04-14-phase3&4-deep-research-and-steering.md` | 已完成 (PR #20) | 多步 RAG 研究、LLM 规划器、综合报告、`autowiki research` CLI、通过 `wiki.json` 进行用户引导 |
+| `docs/superpowers/plans/2026-04-14-phase3&4-deep-research-and-steering.md` | 已完成 (PR #20；Deep Research 在 issue #43 分支中暂时禁用) | 多步 RAG 研究、LLM 规划器、综合报告、`autowiki research` CLI、通过 `wiki.json` 进行用户引导 |
 
 ### Phase 4.5 — 规划器健壮性增强
 
@@ -139,11 +141,12 @@ Phase 2 中短暂加入，并在 Phase 2.5 中被移除 —— 页面生成器�
 2. **Worker 领取任务** —— `worker/index/full.py` 中的 `run_full_index()` 是顶层
    编排器。阅读它可以了解阶段排序和进度报告。
 
-3. **第 1–4 阶段** (`worker/pipeline/ingestion.py`, `ast_analysis.py`,
-   `dependency_graph.py`, `rag_indexer.py`) 构建规划器所需的证据。
-   关键输出：`FileAnalysis` 对象和 `FAISSStore`。
+3. **第 1–3 阶段** (`worker/pipeline/ingestion.py`, `ast_analysis.py`,
+   `dependency_graph.py`) 构建规划器所需的结构化证据。
+   关键输出：`FileAnalysis` 对象、依赖图以及 `ast/repo_index.json`。
+   后续检索准备会将源码分块并构建内存中的 BM25 `KeywordIndex`；不会持久化 FAISS 存储。
 
-4. **第 5 阶段 —— 规划器** (`worker/pipeline/wiki_planner.py`):
+4. **第 4 阶段 —— 规划器** (`worker/pipeline/planner/wiki_planner.py`):
    - 第 1 阶段：`_build_outline_prompt()`（带有来自 `outline_anchors.py` 的架构锚点） → LLM 调用 → `_validate_outline_structure()`；最多重试 `max_retries` 次并提供反馈
    - 第 2 阶段：`_select_files_in_batches()`（12 页一批，可缓存的系统提示词） → `_validate_assignments()`；重试并提供反馈；最后失败时回退到 `_heuristic_select_files()`（基于评分的启发式方法）
    - 结果：一个 `WikiPlan`（`WikiPageSpec` 列表，每个包含标题、目的、`files`、父页面）
@@ -151,15 +154,15 @@ Phase 2 中短暂加入，并在 Phase 2.5 中被移除 —— 页面生成器�
    - 离线诊断：`autowiki validate-plan <repo>` 读取 `ast/wiki_plan.json`
    - 设计原理：`docs/superpowers/specs/2026-04-08-wiki-planner-improvements-design.md` §5 和 `docs/superpowers/plans/2026-04-17-page-centric-file-selection.md`。
 
-5. **第 6 阶段 —— 页面生成器** (`worker/pipeline/page_generator.py`):
+5. **第 5 阶段 —— 页面生成器** (`worker/pipeline/page/generator.py`):
    - `compute_generation_order(plan)` 自深向浅返回页面（先叶子页面，后父页面）
    - 对于每个深度级别，`generate_page_batch()` 并发运行页面
    - 每个页面通过 `generate_page()` 生成：
-     - 第 1 步：通过快速模型进行 `generate_page_outline()` (`worker/pipeline/page_outline.py`)
-     - 第 2 步：通过主模型进行 `generate_draft()` (`worker/pipeline/page_draft.py`)
-     - 第 3 步：通过快速模型运行 `run_fact_check()` (`worker/pipeline/fact_check.py`)
+     - 第 1 步：通过快速模型进行 `generate_page_outline()` (`worker/pipeline/page/outline.py`)
+     - 第 2 步：`draft_page_in_sections()` (`worker/pipeline/page/section_drafter.py`) 生成骨架、使用章节范围内的 BM25 检索并行撰写章节，然后拼接页面
+     - 第 3 步：通过快速模型运行 `run_fact_check()` (`worker/pipeline/page/fact_check.py`)
      - 第 4 步：仅在事实核查结果为 `"fail"` 时，通过主模型运行 `run_targeted_revision()`
-     - 后处理：`ensure_diagram_headers()` (`worker/pipeline/diagram_post_processor.py`)
+     - 后处理：`ensure_diagram_headers()` (`worker/pipeline/page/diagram_post_processor.py`)
    - 设计原理：`docs/superpowers/specs/2026-04-10-wiki-page-quality-redesign.md` §5
 
 6. **存储** —— 页面被写入 `~/.autowiki/repos/{hash}/wiki/*.md` 和
@@ -176,7 +179,7 @@ Phase 2 中短暂加入，并在 Phase 2.5 中被移除 —— 页面生成器�
 ### 增量刷新是如何工作的
 
 `worker/index/refresh.py` 中的 `run_refresh_index()` 加载保存的 `wiki_plan.json`，
-识别出自上次提交 SHA 以来发生变化的文件，并仅通过第 6 阶段流水线重新运行受影响的页面。
+识别出自上次提交 SHA 以来发生变化的文件，并仅通过页面生成流水线重新运行受影响的页面。
 未更改的页面从磁盘读取，并可以为需要重新生成的父页面提供 `child_contents`。
 
 ---
@@ -189,12 +192,12 @@ Phase 2 中短暂加入，并在 Phase 2.5 中被移除 —— 页面生成器�
 | 自下而上生成（先子页面后父页面） | `docs/superpowers/specs/2026-04-08-wiki-planner-improvements-design.md` §7 |
 | 4 阶段页面生成 | `docs/superpowers/specs/2026-04-10-wiki-page-quality-redesign.md` §3, §5 |
 | `PromptSegment` 和 Anthropic 提示词缓存 | `docs/superpowers/specs/2026-04-10-wiki-page-quality-redesign.md` §8 |
-| `doc_k` 降低过时设计文档权重 | `docs/superpowers/specs/2026-04-10-wiki-page-quality-redesign.md` §4 |
+| BM25 关键词检索与 FAISS 移除 | `docs/spec/claude/2026-04-29-wiki-page-quality-redesign.md` §5.3 B1/B4 |
 | `fast_model` / `fast_llm` 拆分 | `docs/superpowers/specs/2026-04-10-wiki-page-quality-redesign.md` §8.4 |
 | 移除第 7 阶段（图表合成） | `docs/superpowers/specs/2026-04-08-wiki-planner-improvements-design.md` 实现说明 |
 | `FileAnalysis` 单次 AST（取代了 `build_module_tree`） | `docs/2026-03-28-pipeline-refactoring-plan.md` |
 | `wiki_plan.json` 对比旧的 `module_tree.json` | `docs/2026-03-28-pipeline-refactoring-plan.md` |
-| `reuse_index` / `--reuse-index` | `CLAUDE.md` 实现说明；`docs/superpowers/specs/2026-04-08-wiki-planner-improvements-design.md` 实现说明 |
+| `reuse_index` / `--reuse-index` 已弃用且忽略 | `CLAUDE.md` 实现说明；`docs/spec/claude/2026-04-29-wiki-page-quality-redesign.md` §5.3 B4 |
 | 异步重试 / `OnRetryCallback` | `docs/2026-03-27-improve-llm-retry-plan.md` |
 | 增量刷新逻辑 | `docs/superpowers/plans/2026-03-23-phase2-chat-diagrams-refresh.md` |
 
@@ -202,12 +205,12 @@ Phase 2 中短暂加入，并在 Phase 2.5 中被移除 —— 页面生成器�
 
 ## 7. 仍计划中的工作（尚未实现）
 
-> **注**：深度研究模式 (Phase 3) 和通过 `.autowiki/wiki.json` 进行用户引导 (Phase 4) 均**已实现** —— 在 PR #20 中交付。以下项是仍待处理的功能。
+> **注**：深度研究模式 (Phase 3) 已在 PR #20 中交付，但在从 FAISS 迁移到关键词检索期间暂时禁用（issue #43）。通过 `.autowiki/wiki.json` 进行用户引导 (Phase 4) 仍已实现。以下项是仍待处理的功能。
 
 | 阶段 | 功能 | 参考 |
 |-------|---------|-----------|
-| Phase 5 | MCP 服务器 (`read_wiki_structure`, `read_wiki_page`, `search_wiki`, `ask_question`, `deep_research`) | `CLAUDE.md` API 表面 |
-| Phase 5 | GitLab / Bitbucket 支持 | `docs/superpowers/specs/2026-03-22-autowiki-design.md` |
-| Phase 5 | 混合搜索 (BM25 + 向量) | `docs/superpowers/specs/2026-03-22-autowiki-design.md` |
+| Phase 5 | MCP 服务器 (`read_wiki_structure`, `read_wiki_page`, `search_wiki`, `ask_question`) | `CLAUDE.md` API 表面 |
+| 后续 | Deep Research 迁移到 `KeywordIndex` + 图扩展 | issue #43 |
+| Phase 6 | 混合搜索 | `docs/spec/claude/2026-04-29-wiki-page-quality-redesign.md` 后续工作 |
 | 暂缓 | 用于自动刷新的 GitHub webhooks | `docs/superpowers/specs/2026-03-22-autowiki-design.md` §9 |
 | 存根 | `cache_ttl: long` (1 小时 Anthropic 缓存) | `docs/superpowers/specs/2026-04-10-wiki-page-quality-redesign.md` 实现说明 |

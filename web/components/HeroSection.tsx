@@ -59,7 +59,7 @@ export function HeroSection({ onQueryChange }: HeroSectionProps) {
           label="Reuse Plan"
           checked={reusePlan}
           onToggle={() => setReusePlan((v) => !v)}
-          title="Debug: skip Stage 5 (Wiki Planner) and reuse the existing plan"
+          title="Debug: skip Stage 4 (Wiki Planner) and reuse the existing plan"
           ariaLabel="Reuse existing wiki plan (skip planning stage)"
           activeColorClass="border-violet-400 bg-violet-50 text-violet-700 dark:bg-violet-950 dark:text-violet-300"
           activeDotClass="bg-violet-500"

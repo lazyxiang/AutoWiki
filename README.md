@@ -9,9 +9,8 @@ Self-hosted, open-source AI-powered wiki generator for GitHub, GitLab, and Bitbu
 1. Clones the repository (shallow)
 2. Parses source files with Tree-Sitter (Python, JS/TS, Java, Go, Rust, C/C++, C#)
 3. Builds a file-level dependency graph from imports
-4. Chunks and embeds code into a FAISS vector index
-5. Asks an LLM to generate a logical page hierarchy with file assignments (two-phase: outline then file assignment)
-6. Generates wiki pages bottom-up through a 4-pass pipeline — outline, draft, fact-check, and targeted revision — using a fast model for cheap passes and the main model for quality passes
+4. Asks an LLM to generate a logical page hierarchy with file assignments (two-phase: outline then file assignment)
+5. Builds an in-memory BM25 keyword index from source chunks and generates wiki pages bottom-up through a 4-pass pipeline — outline, section-level draft, fact-check, and targeted revision — using a fast model for cheap passes and the main model for quality passes
 
 The result is served via a REST API and displayed in a Next.js web UI with sidebar navigation and a conversational Q&A chat interface.
 
@@ -45,7 +44,6 @@ cd web && npm install && npm run build && cd ..
 
 # 3. Set your API keys
 export ANTHROPIC_API_KEY=sk-ant-...
-export OPENAI_API_KEY=sk-...        # used for embeddings (text-embedding-3-small)
 
 # 4. Start Redis if it isn't already running
 redis-server --daemonize yes
@@ -56,17 +54,15 @@ autowiki serve
 
 Open http://localhost:3000, paste a GitHub, GitLab, or Bitbucket URL, and click **Generate Wiki**.
 
-To use a different LLM or embedding provider, set the relevant variables before step 5:
+To use a different LLM provider, set the relevant variables before step 5:
 
 ```bash
 # Ollama (fully local, no API keys needed)
 export AUTOWIKI_LLM_PROVIDER=ollama
 export AUTOWIKI_LLM_MODEL=llama3.2
-export AUTOWIKI_EMBEDDING_PROVIDER=ollama
-export AUTOWIKI_EMBEDDING_MODEL=nomic-embed-text
 autowiki serve
 
-# OpenAI for everything
+# OpenAI LLM
 export AUTOWIKI_LLM_PROVIDER=openai
 export AUTOWIKI_LLM_MODEL=gpt-4o
 export OPENAI_API_KEY=sk-...
@@ -75,8 +71,6 @@ autowiki serve
 # Google Gemini
 export AUTOWIKI_LLM_PROVIDER=google
 export AUTOWIKI_LLM_MODEL=gemini-1.5-pro
-export AUTOWIKI_EMBEDDING_PROVIDER=google
-export AUTOWIKI_EMBEDDING_MODEL=models/text-embedding-004
 export GOOGLE_API_KEY=AIzaSy...
 autowiki serve
 ```
@@ -89,32 +83,30 @@ autowiki serve
 # 1. Build the images (required for first run or when source changes)
 docker-compose build
 
-# 2. Start everything (Anthropic LLM + OpenAI embeddings default)
-ANTHROPIC_API_KEY=sk-ant-... OPENAI_API_KEY=sk-... docker-compose up
+# 2. Start everything (Anthropic LLM default)
+ANTHROPIC_API_KEY=sk-ant-... docker-compose up
 
 # Combined build and run
-ANTHROPIC_API_KEY=sk-ant-... OPENAI_API_KEY=sk-... docker-compose up --build
+ANTHROPIC_API_KEY=sk-ant-... docker-compose up --build
 ```
 
 #### Run with different providers
 
 ```bash
-# OpenAI for everything
+# OpenAI LLM
 AUTOWIKI_LLM_PROVIDER=openai AUTOWIKI_LLM_MODEL=gpt-4o \
   OPENAI_API_KEY=sk-... docker-compose up
 
 # Fully local with Ollama (point OLLAMA_HOST at your running instance)
 AUTOWIKI_LLM_PROVIDER=ollama AUTOWIKI_LLM_MODEL=llama3.2 \
-AUTOWIKI_EMBEDDING_PROVIDER=ollama AUTOWIKI_EMBEDDING_MODEL=nomic-embed-text \
 OLLAMA_HOST=http://host.docker.internal:11434 docker-compose up
 
-# Google Gemini for everything
+# Google Gemini
 AUTOWIKI_LLM_PROVIDER=google AUTOWIKI_LLM_MODEL=gemini-1.5-pro \
-AUTOWIKI_EMBEDDING_PROVIDER=google AUTOWIKI_EMBEDDING_MODEL=models/text-embedding-004 \
 GOOGLE_API_KEY=AIzaSy... docker-compose up
 ```
 
-Persistent data (SQLite, FAISS index, clones, wiki Markdown) is stored in the `autowiki_data` Docker volume.
+Persistent data (SQLite, clones, `repo_index.json`, wiki Markdown) is stored in the `autowiki_data` Docker volume.
 
 ---
 
@@ -145,26 +137,28 @@ AutoWiki/
 │   ├── jobs.py             # Compatibility facade for ARQ job entrypoints
 │   ├── index/              # Full-index and refresh job orchestration
 │   ├── fast_report/        # Fast Report service, retrieval, and job orchestration
-│   ├── research/           # Deep Research service and job orchestration
-│   ├── pipeline/           # 6-stage generation pipeline
+│   ├── research/           # Deep Research service and job orchestration (temporarily disabled)
+│   ├── pipeline/           # 5-stage generation pipeline
 │   ├── llm/                # LLM provider adapters
-│   └── embedding/          # Embedding provider adapters
+│   └── embedding/          # Legacy embedding adapters for disabled Deep Research
 ├── shared/                 # Config, SQLAlchemy models, database
 ├── cli/                    # Typer CLI (index, list, serve, config)
 ├── web/                    # Next.js 16 frontend
-└── tests/                  # pytest suite (591 backend tests, 80% coverage)
+└── tests/                  # pytest suite (726 backend tests, 80% coverage)
 ```
 
 ---
 
-## Supported providers
+## Supported LLM providers
 
-| Provider | LLM | Embeddings |
-|---|---|---|
-| Anthropic | ✅ | — |
-| OpenAI / compatible | ✅ | ✅ |
-| Ollama | ✅ | ✅ |
-| Google (Gemini) | ✅ | ✅ |
+| Provider | Wiki generation |
+|---|---|
+| Anthropic | ✅ |
+| OpenAI / compatible | ✅ |
+| Ollama | ✅ |
+| Google (Gemini) | ✅ |
+
+Wiki indexing no longer requires an embedding provider. Embedding adapters remain only for disabled Deep Research compatibility while issue #43 migrates that feature to keyword retrieval.
 
 ---
 
@@ -184,23 +178,23 @@ Browser / CLI
          ▼
 ┌─────────────────┐
 │     Worker      │  (ARQ background process)
-│  (6-stage pipe) │
+│  (5-stage pipe) │
 └────────┬────────┘
          │ write results
          ▼
 ┌─────────────────────────────────┐
 │  ~/.autowiki/                   │
 │    autowiki.db  (SQLite)        │
-│    repos/<id>/faiss.index       │
+│    repos/<id>/ast/repo_index.json │
 │    repos/<id>/wiki/*.md         │
 └─────────────────────────────────┘
 ```
 
 The API gateway is stateless — it accepts requests, reads from SQLite, and pushes jobs onto a Redis queue. The worker runs the pipeline and writes results back to SQLite and disk. The Next.js frontend talks only to the API; it never touches the worker or storage directly. `worker/jobs.py` remains the ARQ job facade, while full-index orchestration lives in `worker/index/full.py`, refresh orchestration lives in `worker/index/refresh.py`, Fast Report orchestration lives in `worker/fast_report/jobs.py`, and Deep Research orchestration lives in `worker/research/jobs.py`.
 
-### Pipeline (6 stages)
+### Pipeline (5 stages)
 
-Each indexing job runs six stages in sequence:
+Each indexing job runs five stages in sequence:
 
 **Stage 1 — Repo ingestion** (`worker/pipeline/ingestion.py`)
 Shallow-clones the repository with GitPython and records the HEAD commit SHA. Files are filtered by extension and size (max 1 MB); binary files, vendored dependencies (`node_modules`, `.git`, `vendor`, etc.), and generated code are excluded.
@@ -211,20 +205,17 @@ Every source file is parsed with Tree-Sitter in a single pass to extract named e
 **Stage 3 — Dependency graph** (`worker/pipeline/dependency_graph.py`)
 Import statements are extracted from each file using language-specific regex patterns and resolved to known repo files. The result is a file-level dependency graph with connected-component clusters, used by the wiki planner to understand code relationships.
 
-**Stage 4 — RAG indexing** (`worker/pipeline/rag_indexer.py`)
-Source files are split into overlapping chunks with LangChain's `RecursiveCharacterTextSplitter`, embedded in batches by the configured embedding provider, and stored in a FAISS `IndexFlatIP` (inner-product / cosine similarity). Entity-aware chunking keeps whole functions/classes together when possible. Pass `--reuse-index` to skip this stage and reuse an existing index.
-
-**Stage 5 — Wiki planning** (`worker/pipeline/wiki_planner.py`)
+**Stage 4 — Wiki planning** (`worker/pipeline/planner/wiki_planner.py`)
 A two-phase LLM process: Phase 1 generates the page hierarchy (titles, purposes, parent relationships) informed by architectural anchors (directory tree, package docstrings, README headings); Phase 2 selects 5–8 representative source files per page (max 10) rather than assigning every file to one page. Each phase validates its output and self-retries with feedback; on final failure, `_heuristic_select_files` preserves valid pages and fills the remainder via scoring. The output is saved as `wiki.json` (user-facing) and `wiki_plan.json` (internal, with file mappings and `all_repo_files` for correct refresh coverage). Use `autowiki validate-plan <repo>` to inspect the plan offline.
 
-**Stage 6 — Page generation** (`worker/pipeline/page_generator.py`)
+**Stage 5 — Page generation** (`worker/pipeline/page/generator.py`)
 Pages are generated bottom-up (leaf pages first, parent pages last) through a 4-pass pipeline per page:
 - **Pass 1 — Outline** (fast model): produces a structured outline with planned sections, diagrams, and key claims to verify.
-- **Pass 2 — Draft** (main model): generates full Markdown from the outline using multi-query RAG context.
+- **Pass 2 — Section draft** (fast + main models): builds a Markdown skeleton, drafts each section with section-scoped BM25 retrieval, then stitches the page.
 - **Pass 3 — Fact-check** (fast model): verifies key claims and diagrams against source code.
 - **Pass 4 — Revision** (main model, conditional): applies targeted fixes when fact-check fails; deterministic fallback strips any still-flagged issues.
 
-Parent pages receive their children's rendered Markdown and synthesize an overview rather than duplicating content. Prompt caching reduces cost on repeated system prompts, and a configurable fast model (`AUTOWIKI_LLM_FAST_MODEL`) handles the cheap passes.
+Before page generation, source files are chunked with `worker/pipeline/retrieval/chunking.py` and searched through an in-memory BM25 `KeywordIndex` (`worker/pipeline/retrieval/keyword_index.py`). Parent pages receive their children's rendered Markdown and synthesize an overview rather than duplicating content. Prompt caching reduces cost on repeated system prompts, and a configurable fast model (`AUTOWIKI_LLM_FAST_MODEL`) handles the cheap passes.
 
 ### Data flow (single indexing request)
 
@@ -238,9 +229,9 @@ Worker picks up job (`worker.index.full.run_full_index`):
   Stage 1  clone/fetch → files[]            progress 5→20
   Stage 2  AST parse  → FileAnalysis        progress   →35
   Stage 3  dep graph  → DependencyGraph     progress   →45  (internal; no API surface)
-  Stage 4  embed+index → FAISSStore         progress   →55  (skipped with --reuse-index)
-  Stage 5  two-phase LLM plan → WikiPlan    progress   →70
-  Stage 6  bottom-up batch LLM → WikiPages  progress   →100
+  setup    chunk+BM25 → KeywordIndex        progress   →50
+  Stage 4  two-phase LLM plan → WikiPlan    progress   →70
+  Stage 5  bottom-up batch LLM → WikiPages  progress   →100
 
   Job status  → "done"
   Repo status → "ready"
@@ -257,13 +248,13 @@ WS /ws/jobs/{job_id}                 → streams {progress, status} every second
 
 - **Phase 1** ✅ — Core pipeline (index + static wiki + REST API + web UI + CLI)
 - **Phase 2** ✅ — Incremental refresh, Q&A chat, dependency diagrams
-- **Phase 2.5** ✅ — Wiki quality enhancements: two-phase planner, 4-pass page generation, prompt caching, fast model support, RAG tuning, diagram post-processing
+- **Phase 2.5** ✅ — Wiki quality enhancements: two-phase planner, 4-pass page generation, prompt caching, fast model support, BM25 keyword retrieval, section-level drafting, diagram post-processing
 - **Phase 3** ✅ — Deep Research mode: multi-step RAG investigation with LLM planner, per-step AST context, synthesized Markdown report; REST + WebSocket API; `autowiki research` CLI command (PR #20) — **temporarily disabled, migrating to keyword retrieval (see issue #43)**
 - **Phase 4** ✅ — User-steered wiki structure via `.autowiki/wiki.json`: override page hierarchy, assign modules to pages, inject repo/page notes into generation (PR #20)
 - **Phase 4.5** ✅ — Planner robustness hardening (PR #22): architectural anchors in Phase-1 outline prompt (Layer C1), `autowiki validate-plan` offline diagnostic CLI, feedback-retry loop in `_assign_files`, various bug fixes (Gemini JSON, Mermaid, Docker)
 - **Phase 4.6** ✅ — Page-centric file selection (PR #23): Phase 2 replaced from file-centric assignment to page-centric selection (5–8 files per page); scoring-based pre-filter + fallback (`_score_file_for_page`, `_heuristic_select_files`); `WikiPlan.all_repo_files` for correct refresh coverage; orphan enforcement removed
 - **Phase 5** ✅ — GitLab/Bitbucket support (public + private repos, full API metadata) + homepage project search (PR #30)
-- **Phase 6** — Hybrid search (keyword + semantic BM25/FAISS fusion)
+- **Phase 6** — Hybrid search and Deep Research keyword-retrieval migration follow-ups
 
 ---
 
