@@ -70,17 +70,12 @@ def _enter_platform_patches(stack: ExitStack) -> None:
         stack.enter_context(patch(target, **kwargs))
 
 
-async def test_full_index_job_updates_status(
-    tmp_path, mock_llm, mock_fast_llm, mock_embedding
-):
+async def test_full_index_job_updates_status(tmp_path, mock_llm, mock_fast_llm):
     """Full pipeline runs against fixture repo and sets status=ready."""
     import os
 
     os.environ["DATABASE_PATH"] = str(tmp_path / "test.db")
     os.environ["AUTOWIKI_DATA_DIR"] = str(tmp_path)
-
-    # mock_embedding needs a dimension attribute for FAISSStore
-    mock_embedding.dimension = 1536
 
     from shared.config import reset_config
 
@@ -122,11 +117,6 @@ async def test_full_index_job_updates_status(
                 "worker.index.full.make_fast_llm_provider", return_value=mock_fast_llm
             )
         )
-        stack.enter_context(
-            patch(
-                "worker.index.full.make_embedding_provider", return_value=mock_embedding
-            )
-        )
         from worker.jobs import run_full_index
 
         await run_full_index(
@@ -145,9 +135,7 @@ async def test_full_index_job_updates_status(
         assert repo.status == "ready"
 
 
-async def test_run_full_index_persists_wiki_plan(
-    tmp_path, mock_llm, mock_fast_llm, mock_embedding
-):
+async def test_run_full_index_persists_wiki_plan(tmp_path, mock_llm, mock_fast_llm):
     import json
 
     from shared.database import dispose_db, get_session, init_db
@@ -156,8 +144,6 @@ async def test_run_full_index_persists_wiki_plan(
 
     db_path = str(tmp_path / "test.db")
     await init_db(db_path)
-
-    mock_embedding.dimension = 1536
 
     with ExitStack() as stack:
         mock_cfg = stack.enter_context(patch("worker.index.full.get_config"))
@@ -175,11 +161,6 @@ async def test_run_full_index_persists_wiki_plan(
         stack.enter_context(
             patch(
                 "worker.index.full.make_fast_llm_provider", return_value=mock_fast_llm
-            )
-        )
-        stack.enter_context(
-            patch(
-                "worker.index.full.make_embedding_provider", return_value=mock_embedding
             )
         )
         cfg = mock_cfg.return_value
@@ -270,13 +251,10 @@ async def _setup_db(tmp_path):
     return str(tmp_path / "test.db")
 
 
-async def test_always_clears_existing_artifacts(
-    tmp_path, mock_llm, mock_fast_llm, mock_embedding
-):
-    """run_full_index always clears existing FAISS files and WikiPage records."""
+async def test_always_clears_existing_artifacts(tmp_path, mock_llm, mock_fast_llm):
+    """run_full_index always clears legacy FAISS files and WikiPage records."""
     from shared.database import dispose_db
 
-    mock_embedding.dimension = 1536
     db_path = await _setup_db(tmp_path)
 
     from shared.database import get_session
@@ -325,11 +303,6 @@ async def test_always_clears_existing_artifacts(
                 "worker.index.full.make_fast_llm_provider", return_value=mock_fast_llm
             )
         )
-        stack.enter_context(
-            patch(
-                "worker.index.full.make_embedding_provider", return_value=mock_embedding
-            )
-        )
         from worker.jobs import run_full_index
 
         await run_full_index(
@@ -361,7 +334,7 @@ async def test_always_clears_existing_artifacts(
 
 
 async def test_reuse_plan_preserves_user_edited_page_notes(
-    tmp_path, mock_llm, mock_fast_llm, mock_embedding
+    tmp_path, mock_llm, mock_fast_llm
 ):
     """reuse_plan=True must preserve user-edited page_notes from wiki.json.
 
@@ -374,7 +347,6 @@ async def test_reuse_plan_preserves_user_edited_page_notes(
     from shared.database import dispose_db, get_session
     from shared.models import Job, Repository
 
-    mock_embedding.dimension = 1536
     db_path = await _setup_db(tmp_path)
 
     repo_id = "reuse-plan-r1"
@@ -443,11 +415,6 @@ async def test_reuse_plan_preserves_user_edited_page_notes(
         stack.enter_context(
             patch(
                 "worker.index.full.make_fast_llm_provider", return_value=mock_fast_llm
-            )
-        )
-        stack.enter_context(
-            patch(
-                "worker.index.full.make_embedding_provider", return_value=mock_embedding
             )
         )
         from worker.jobs import run_full_index
@@ -551,14 +518,11 @@ async def test_full_index_first_time_failure_preserves_failure_metadata(tmp_path
         await dispose_db(db_path)
 
 
-async def test_full_index_restore_failure_preserves_original_error(
-    tmp_path, mock_embedding
-):
+async def test_full_index_restore_failure_preserves_original_error(tmp_path):
     """Restore cleanup failures are logged without replacing the pipeline error."""
     from shared.database import dispose_db, get_session
     from shared.models import Job, Repository, WikiPage
 
-    mock_embedding.dimension = 1536
     db_path = await _setup_db(tmp_path)
 
     async with get_session(db_path) as s:
@@ -607,11 +571,6 @@ async def test_full_index_restore_failure_preserves_original_error(
             )
         )
         _enter_platform_patches(stack)
-        stack.enter_context(
-            patch(
-                "worker.index.full.make_embedding_provider", return_value=mock_embedding
-            )
-        )
         stack.enter_context(
             patch(
                 "worker.index.full.analyze_all_files",
@@ -681,14 +640,11 @@ async def test_snapshot_full_index_state_removes_partial_backup_on_failure(tmp_p
         await dispose_db(db_path)
 
 
-async def test_full_index_previously_indexed_failure_restores_db_and_files(
-    tmp_path, mock_embedding
-):
+async def test_full_index_previously_indexed_failure_restores_db_and_files(tmp_path):
     """Failed reindex restores the last successful wiki state and ready status."""
     from shared.database import dispose_db, get_session
     from shared.models import Job, Repository, WikiPage
 
-    mock_embedding.dimension = 1536
     db_path = await _setup_db(tmp_path)
     indexed_at = datetime(2026, 1, 2, tzinfo=UTC)
 
@@ -756,11 +712,6 @@ async def test_full_index_previously_indexed_failure_restores_db_and_files(
         _enter_platform_patches(stack)
         stack.enter_context(
             patch(
-                "worker.index.full.make_embedding_provider", return_value=mock_embedding
-            )
-        )
-        stack.enter_context(
-            patch(
                 "worker.index.full.analyze_all_files",
                 side_effect=RuntimeError("analysis failed"),
             )
@@ -803,6 +754,8 @@ async def test_full_index_previously_indexed_failure_restores_db_and_files(
             assert job.status == "failed"
 
         assert (wiki_dir / "old-page.md").read_text() == "old file content"
+        # Legacy FAISS files are backed up and restored by the snapshot system
+        # even though the pipeline no longer produces them.
         assert (repo_data / "faiss.index").read_bytes() == b"old-index"
         assert (repo_data / "faiss.meta.pkl").read_bytes() == b"old-meta"
         assert (ast_dir / "wiki_plan.json").read_text() == (

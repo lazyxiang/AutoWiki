@@ -30,7 +30,6 @@ def _enter_full_index_patches(
     tmp_path: Path,
     mock_llm,
     mock_fast_llm,
-    mock_embedding,
 ) -> None:
     mock_cfg = stack.enter_context(patch("worker.index.full.get_config"))
     stack.enter_context(
@@ -52,9 +51,6 @@ def _enter_full_index_patches(
     stack.enter_context(
         patch("worker.index.full.make_fast_llm_provider", return_value=mock_fast_llm)
     )
-    stack.enter_context(
-        patch("worker.index.full.make_embedding_provider", return_value=mock_embedding)
-    )
     cfg = mock_cfg.return_value
     cfg.database_path = tmp_path / "test.db"
     cfg.data_dir = tmp_path
@@ -65,13 +61,11 @@ async def _run_full_index(
     *,
     mock_llm,
     mock_fast_llm,
-    mock_embedding,
 ) -> tuple[str, Path]:
     from worker.jobs import run_full_index
 
     db_path = str(tmp_path / "test.db")
     await init_db(db_path)
-    mock_embedding.dimension = 1536
     repo_id = f"repo_{uuid.uuid4().hex}"
     job_id = str(uuid.uuid4())
 
@@ -94,7 +88,6 @@ async def _run_full_index(
             tmp_path=tmp_path,
             mock_llm=mock_llm,
             mock_fast_llm=mock_fast_llm,
-            mock_embedding=mock_embedding,
         )
         await run_full_index(
             {},
@@ -109,14 +102,13 @@ async def _run_full_index(
 
 
 async def test_full_index_ast_dir_contains_only_repo_index_and_wiki_plan(
-    tmp_path, mock_llm, mock_fast_llm, mock_embedding, monkeypatch
+    tmp_path, mock_llm, mock_fast_llm, monkeypatch
 ):
     monkeypatch.delenv("AUTOWIKI_DEBUG_DUMP_PROMPTS", raising=False)
     db_path, repo_data_dir = await _run_full_index(
         tmp_path,
         mock_llm=mock_llm,
         mock_fast_llm=mock_fast_llm,
-        mock_embedding=mock_embedding,
     )
 
     try:
@@ -128,20 +120,21 @@ async def test_full_index_ast_dir_contains_only_repo_index_and_wiki_plan(
         assert json.loads((ast_dir / "wiki_plan.json").read_text())["pages"]
         assert not (ast_dir / "file_analysis_summary.txt").exists()
         assert not (ast_dir / "fast_report_index.json").exists()
+        assert not (repo_data_dir / "faiss.index").exists()
+        assert not (repo_data_dir / "faiss.meta.pkl").exists()
         assert not (repo_data_dir / "logs" / "phase1_prompt.txt").exists()
     finally:
         await dispose_db(db_path)
 
 
 async def test_full_index_debug_prompt_dump_writes_actual_phase1_prompt(
-    tmp_path, mock_llm, mock_fast_llm, mock_embedding, monkeypatch
+    tmp_path, mock_llm, mock_fast_llm, monkeypatch
 ):
     monkeypatch.setenv("AUTOWIKI_DEBUG_DUMP_PROMPTS", "1")
     db_path, repo_data_dir = await _run_full_index(
         tmp_path,
         mock_llm=mock_llm,
         mock_fast_llm=mock_fast_llm,
-        mock_embedding=mock_embedding,
     )
 
     try:

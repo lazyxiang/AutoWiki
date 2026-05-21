@@ -771,12 +771,22 @@ def test_keyword_index_recall_gate() -> None:
     )
 
 
+def _real_embedding_test_enabled() -> bool:
+    return bool(
+        os.getenv("AUTOWIKI_TEST_REAL_EMBEDDING")
+        and (
+            os.getenv("AUTOWIKI_EMBEDDING_API_KEY")
+            or os.getenv("OPENAI_API_KEY")
+            or os.getenv("GOOGLE_API_KEY")
+        )
+    )
+
+
 @pytest.mark.skipif(
-    not os.getenv("AUTOWIKI_TEST_REAL_EMBEDDING"),
+    not _real_embedding_test_enabled(),
     reason=(
-        "FAISS parity comparison requires a real embedding provider. "
-        "Set AUTOWIKI_TEST_REAL_EMBEDDING=1 and configure ANTHROPIC_API_KEY "
-        "(or another provider key) to run this test."
+        "FAISS parity comparison requires AUTOWIKI_TEST_REAL_EMBEDDING=1 "
+        "and a real embedding API key."
     ),
 )
 async def test_keyword_index_recall_parity_vs_faiss(tmp_path: Path) -> None:
@@ -795,7 +805,7 @@ async def test_keyword_index_recall_parity_vs_faiss(tmp_path: Path) -> None:
 
     from shared.config import get_config
     from worker.embedding import make_embedding_provider
-    from worker.pipeline.retrieval.rag_indexer import FAISSStore
+    from worker.embedding.faiss_store import FAISSStore
 
     questions = json.loads(_FIXTURE_PATH.read_text())
     chunks = _build_chunks()

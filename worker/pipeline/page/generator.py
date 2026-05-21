@@ -29,7 +29,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from worker.embedding.base import EmbeddingProvider
 from worker.llm.base import LLMProvider
 from worker.pipeline.page.formatters import (
     _format_context_chunks,
@@ -37,9 +36,10 @@ from worker.pipeline.page.formatters import (
     _rank_weighted_quotas,
 )
 from worker.pipeline.planner.wiki_planner import WikiPageSpec, WikiPlan
+from worker.pipeline.retrieval.chunk import Chunk
 from worker.pipeline.retrieval.code_slices import extract_source_slice
-from worker.pipeline.retrieval.rag_indexer import FAISSStore
-from worker.utils.retry import TRANSIENT_EXCEPTIONS, OnRetryCallback, async_retry
+from worker.pipeline.retrieval.keyword_index import KeywordIndex
+from worker.utils.retry import OnRetryCallback
 
 if TYPE_CHECKING:
     from worker.pipeline.ast_analysis import FileAnalysis
@@ -152,12 +152,12 @@ def _file_stems(files: list[str]) -> list[str]:
 
 
 def _balance_chunks(
-    chunks: list[dict],
+    chunks: list[Chunk],
     *,
     files: list[str],
     k: int,
     floor: int = 2,
-) -> list[dict]:
+) -> list[Chunk]:
     """Allocate up to *k* chunks to *files* using a rank-weighted graduated quota.
 
     For each file at rank ``i`` (0-indexed), the weight is
@@ -171,8 +171,9 @@ def _balance_chunks(
     used to fill any unmet quota when a bucket is short.
 
     Args:
-        chunks: Chunks returned by :meth:`FAISSStore.search` /
-            :meth:`FAISSStore.multi_search`.  Each must have a ``"file"`` key.
+        chunks: Chunks from
+            :meth:`~worker.pipeline.retrieval.keyword_index.KeywordIndex.search`.
+            Each must have a ``file`` attribute.
         files: Ranked list of file paths (rank 0 = most important).  When
             empty, the first *k* chunks are returned unchanged.
         k: Total chunk budget for the page.
@@ -180,7 +181,7 @@ def _balance_chunks(
             supply across all chunks combined).
 
     Returns:
-        list[dict]: Up to *k* chunks, ordered by file rank then by input
+        list[Chunk]: Up to *k* chunks, ordered by file rank then by input
         order within each file.
     """
     if not files:
@@ -188,17 +189,17 @@ def _balance_chunks(
 
     quotas = _rank_weighted_quotas(files, k, floor=floor)
 
-    by_file: dict[str, list[dict]] = {f: [] for f in files}
-    leftovers: list[dict] = []
+    by_file: dict[str, list[Chunk]] = {f: [] for f in files}
+    leftovers: list[Chunk] = []
     for c in chunks:
-        f = c.get("file") if isinstance(c, dict) else getattr(c, "file", None)
+        f = c.file
         if f in by_file:
             by_file[f].append(c)
         else:
             leftovers.append(c)
 
-    out: list[dict] = []
-    spillover: list[dict] = []
+    out: list[Chunk] = []
+    spillover: list[Chunk] = []
     for f, q in zip(files, quotas, strict=False):
         bucket = by_file[f]
         out.extend(bucket[:q])
@@ -361,10 +362,9 @@ PageResultCallback = Callable[[PageResult, WikiPageSpec], Awaitable[None]]
 
 async def generate_page(
     spec: WikiPageSpec,
-    store: FAISSStore,
+    keyword_index: KeywordIndex,
     llm: LLMProvider,
     fast_llm: LLMProvider,
-    embedding: EmbeddingProvider,
     repo_name: str,
     top_k: int = 30,
     dep_info: dict[str, Any] | None = None,
@@ -386,8 +386,9 @@ async def generate_page(
     Pass 4 (revision): llm fixes issues if fact-check fails (max 1 attempt).
     """
     from worker.pipeline.page.diagram_post_processor import ensure_diagram_headers
-    from worker.pipeline.page.draft import build_draft_prompt, generate_draft
+    from worker.pipeline.page.draft import build_draft_prompt
     from worker.pipeline.page.fact_check import (
+        OUT_OF_SCOPE_REASON_PREFIX,
         run_fact_check,
         run_targeted_revision,
         strip_failed_claim,
@@ -396,7 +397,7 @@ async def generate_page(
     from worker.pipeline.page.outline import generate_page_outline
     from worker.utils.mermaid import sanitize_mermaid_blocks
 
-    # ── RAG retrieval (A4: 5 complementary queries + rank-weighted quota) ──
+    # ── BM25 retrieval (A4: 5 complementary queries + rank-weighted quota) ──
     en_keywords = getattr(spec, "en_keywords", None) or []
     top_entity_names = [
         e.get("name", "") for e in (entity_details or [])[:5] if e.get("name")
@@ -410,27 +411,14 @@ async def generate_page(
     ]
     queries = [q for q in queries if q.strip()]
 
-    query_vecs = []
-    for q in queries:
-        vec = await async_retry(
-            embedding.embed,
-            q,
-            initial_delay=10.0,
-            max_retries=5,
-            max_delay=120.0,
-            transient_exceptions=TRANSIENT_EXCEPTIONS,
-            on_retry=on_retry,
-        )
-        query_vecs.append(vec)
-
-    # Over-fetch (k=top_k * 2) so the rank-weighted quota has supply across
-    # the ranked file list; doc_k=1 keeps at most one documentation chunk.
-    if len(query_vecs) > 1:
-        raw_chunks = store.multi_search(query_vecs, k=top_k * 2, doc_k=1)
-    elif query_vecs:
-        raw_chunks = store.search(query_vecs[0], k=top_k * 2, doc_k=1)
-    else:
-        raw_chunks = []
+    # Over-fetch (k=top_k * 2) without a flat per-file cap so the rank-weighted
+    # balancer can give the top-ranked files their full graduated quota.
+    raw_chunks = keyword_index.search(
+        queries=queries,
+        k=top_k * 2,
+        files=spec.files or None,
+        per_file_quota=0,
+    )
     context_chunks = _balance_chunks(
         raw_chunks,
         files=spec.files or [],
@@ -469,20 +457,16 @@ async def generate_page(
         signature_slices=signature_slices,
     )
 
-    # ── Pass 2: Draft (main model) ──
+    # ── Pass 2: Section-level drafting (Skeleton → per-section → Stitch) ──
     await _report_page_progress(on_progress, spec.title, "Draft")
-    draft = await generate_draft(
+    from worker.pipeline.page.section_drafter import draft_page_in_sections
+
+    draft = await draft_page_in_sections(
         spec=spec,
         outline=outline,
-        context_chunks=context_chunks,
-        repo_name=repo_name,
+        keyword_index=keyword_index,
         llm=llm,
-        dep_info=dep_info,
-        entity_details=entity_details,
-        child_contents=child_contents,
-        on_retry=on_retry,
-        wiki_language=wiki_language,
-        repo_notes=repo_notes,
+        fast_llm=fast_llm,
     )
 
     # ── Pass 3: Fact-check (fast model) ──
@@ -501,50 +485,69 @@ async def generate_page(
 
     # ── Pass 4: Targeted revision (main model, conditional) ──
     if fc_result.verdict == "fail" and fc_result.issues:
-        await _report_page_progress(on_progress, spec.title, "Revision")
-        context_segments = build_draft_prompt(
-            spec=spec,
-            outline=outline,
-            context_chunks=context_chunks,
-            repo_name=repo_name,
-            dep_info=dep_info,
-            entity_details=entity_details,
-            child_contents=child_contents,
-            repo_notes=repo_notes,
-        )
-        cache_segs = [s for s in context_segments if s.cacheable]
+        # Strip out-of-scope claims immediately (no LLM call needed).
+        # These are identified by a sentinel reason prefix set in fact_check.py.
+        oos_issues = [
+            i
+            for i in fc_result.issues
+            if i.reason.startswith(OUT_OF_SCOPE_REASON_PREFIX)
+        ]
+        for issue in oos_issues:
+            if issue.claim:
+                draft = strip_failed_claim(
+                    draft, issue.claim, issue.reason, issue.section or None
+                )
+        remaining_issues = [
+            i
+            for i in fc_result.issues
+            if not i.reason.startswith(OUT_OF_SCOPE_REASON_PREFIX)
+        ]
 
-        try:
-            draft = await run_targeted_revision(
-                draft=draft,
-                issues=fc_result.issues,
-                context_segments=cache_segs,
-                llm=llm,
-                on_retry=on_retry,
-                wiki_language=wiki_language,
+        if remaining_issues:
+            await _report_page_progress(on_progress, spec.title, "Revision")
+            context_segments = build_draft_prompt(
+                spec=spec,
+                outline=outline,
+                context_chunks=context_chunks,
+                repo_name=repo_name,
+                dep_info=dep_info,
+                entity_details=entity_details,
+                child_contents=child_contents,
+                repo_notes=repo_notes,
             )
-        except Exception as exc:
-            from worker.pipeline.pipeline_logging import log_final_failure
+            cache_segs = [s for s in context_segments if s.cacheable]
 
-            log_final_failure(
-                logger,
-                stage="page_generator.revision",
-                exc=exc,
-                context={
-                    "page_title": spec.title,
-                    "issue_count": len(fc_result.issues),
-                },
-            )
-            # Revision failed — deterministic fallback: strip all flagged issues
-            for issue in fc_result.issues:
-                if issue.kind == "claim" and issue.claim:
-                    draft = strip_failed_claim(
-                        draft, issue.claim, issue.reason, issue.section
-                    )
-                elif issue.kind == "diagram" and issue.diagram_index is not None:
-                    draft = strip_failed_diagram(
-                        draft, issue.section, issue.diagram_index, issue.reason
-                    )
+            try:
+                draft = await run_targeted_revision(
+                    draft=draft,
+                    issues=remaining_issues,
+                    context_segments=cache_segs,
+                    llm=llm,
+                    on_retry=on_retry,
+                    wiki_language=wiki_language,
+                )
+            except Exception as exc:
+                from worker.pipeline.pipeline_logging import log_final_failure
+
+                log_final_failure(
+                    logger,
+                    stage="page_generator.revision",
+                    exc=exc,
+                    context={
+                        "page_title": spec.title,
+                        "issue_count": len(remaining_issues),
+                    },
+                )
+                # Revision failed — deterministic fallback: strip all flagged issues
+                for issue in remaining_issues:
+                    if issue.kind == "claim" and issue.claim:
+                        draft = strip_failed_claim(
+                            draft, issue.claim, issue.reason, issue.section or None
+                        )
+                    elif issue.kind == "diagram" and issue.diagram_index is not None:
+                        draft = strip_failed_diagram(
+                            draft, issue.section, issue.diagram_index, issue.reason
+                        )
 
     # ── Post-processing ──
     draft = _strip_preamble_and_ensure_header(draft, spec.title)
@@ -565,10 +568,9 @@ async def _report_page_progress(
 
 async def generate_page_batch(
     specs_with_children: list[tuple[WikiPageSpec, list[PageResult] | None]],
-    store: FAISSStore,
+    keyword_index: KeywordIndex,
     llm: LLMProvider,
     fast_llm: LLMProvider,
-    embedding: EmbeddingProvider,
     repo_name: str,
     file_analysis: FileAnalysis,
     dep_graph: DependencyGraph,
@@ -617,10 +619,9 @@ async def generate_page_batch(
 
         return await generate_page(
             spec=spec,
-            store=store,
+            keyword_index=keyword_index,
             llm=llm,
             fast_llm=fast_llm,
-            embedding=embedding,
             repo_name=repo_name,
             dep_info=dep_info_or_none,
             entity_details=entities_or_none,

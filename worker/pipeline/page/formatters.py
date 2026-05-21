@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    pass
 
 
 def _rank_weighted_quotas(files: list[str], k: int, floor: int = 2) -> list[int]:
@@ -149,8 +152,12 @@ def _format_entity_details(
     return "\n".join(lines)
 
 
-def _format_context_chunks(context_chunks: list[dict]) -> str:
-    """Format a list of RAG-retrieved chunk dicts into fenced code blocks.
+def _format_context_chunks(context_chunks: list) -> str:
+    """Format a list of retrieved chunks into fenced code blocks.
+
+    Accepts either :class:`~worker.pipeline.retrieval.chunk.Chunk` dataclass
+    instances (the new BM25 path) or legacy dicts (for backward compatibility
+    with any caller that still passes raw dicts).
 
     Each chunk is rendered as a header line (file path, line range, and
     optional entity name) followed by a fenced code block containing the
@@ -158,12 +165,11 @@ def _format_context_chunks(context_chunks: list[dict]) -> str:
     easily distinguish them.
 
     Args:
-        context_chunks: List of chunk metadata dicts as returned by
-            :meth:`~worker.pipeline.retrieval.rag_indexer.FAISSStore.search` or
-            :meth:`~worker.pipeline.retrieval.rag_indexer.FAISSStore.multi_search`.
-            Expected keys: ``"file"`` (str), ``"start_line"`` (int),
-            ``"end_line"`` (int), ``"entity"`` (str | None),
-            ``"text"`` (str).
+        context_chunks: List of :class:`~worker.pipeline.retrieval.chunk.Chunk`
+            instances or legacy dicts.  For ``Chunk``, the relevant attributes
+            are ``file``, ``line_start``, ``line_end``, and ``text``.  For
+            dicts, expected keys are ``"file"``, ``"start_line"``,
+            ``"end_line"``, ``"entity"``, and ``"text"``.
 
     Returns:
         str: A string containing one fenced code block per chunk, each
@@ -172,24 +178,32 @@ def _format_context_chunks(context_chunks: list[dict]) -> str:
         *context_chunks* is empty.
 
     Example:
-        >>> chunks = [{"file": "api/routes.py", "start_line": 10,
-        ...            "end_line": 25, "entity": "list_repos",
-        ...            "text": "@app.get('/repos')\\nasync def list_repos():"}]
+        >>> from worker.pipeline.retrieval.chunk import Chunk
+        >>> chunks = [Chunk(file="api/routes.py", text="async def list_repos(): ...",
+        ...                 line_start=10, line_end=25)]
         >>> print(_format_context_chunks(chunks))
-        File: api/routes.py (lines 10-25) [list_repos]
+        File: api/routes.py (lines 10-25)
         ```
-        @app.get('/repos')
-        async def list_repos():
+        async def list_repos(): ...
         ```
     """
     if not context_chunks:
         return "No source code context available."
     sections = []
     for c in context_chunks:
-        file_path = c.get("file", "unknown")
-        start = c.get("start_line", 0)
-        end = c.get("end_line", 0)
-        entity = c.get("entity")
+        # Support both Chunk dataclasses and legacy dict chunks.
+        if hasattr(c, "file"):
+            file_path = c.file
+            start = getattr(c, "line_start", 0)
+            end = getattr(c, "line_end", 0)
+            entity = getattr(c, "entity", None)
+            text = c.text
+        else:
+            file_path = c.get("file", "unknown")
+            start = c.get("start_line", 0)
+            end = c.get("end_line", 0)
+            entity = c.get("entity")
+            text = c.get("text", "")
 
         header = f"File: {file_path}"
         if start and end:
@@ -197,5 +211,5 @@ def _format_context_chunks(context_chunks: list[dict]) -> str:
         if entity:
             header += f" [{entity}]"
 
-        sections.append(f"{header}\n```\n{c.get('text', '')}\n```")
+        sections.append(f"{header}\n```\n{text}\n```")
     return "\n\n---\n\n".join(sections)

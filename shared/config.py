@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger("shared.config")
 
 
 class LLMConfig(BaseSettings):
@@ -101,6 +104,20 @@ class Config(BaseSettings):
             os.environ.get("DATABASE_PATH", Path.home() / ".autowiki" / "autowiki.db")
         )
     )
+
+    def model_post_init(self, __context) -> None:
+        if any(
+            os.environ.get(name)
+            for name in (
+                "AUTOWIKI_EMBEDDING_PROVIDER",
+                "AUTOWIKI_EMBEDDING_MODEL",
+                "AUTOWIKI_EMBEDDING_API_KEY",
+            )
+        ):
+            logger.warning(
+                "embedding configuration is deprecated and ignored by wiki indexing; "
+                "it is kept temporarily for disabled Deep Research compatibility"
+            )
 
 
 _config: Config | None = None

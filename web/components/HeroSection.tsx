@@ -50,8 +50,8 @@ export function HeroSection({ onQueryChange }: HeroSectionProps) {
           label="Reuse Index"
           checked={reuseIndex}
           onToggle={() => setReuseIndex((v) => !v)}
-          title="Debug: skip Stage 4 (RAG embedding) and reuse the existing FAISS index"
-          ariaLabel="Reuse existing FAISS index (skip embedding stage)"
+          title="Deprecated: ignored by keyword retrieval"
+          ariaLabel="Deprecated reuse index option"
           activeColorClass="border-amber-400 bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
           activeDotClass="bg-amber-500"
         />
@@ -59,7 +59,7 @@ export function HeroSection({ onQueryChange }: HeroSectionProps) {
           label="Reuse Plan"
           checked={reusePlan}
           onToggle={() => setReusePlan((v) => !v)}
-          title="Debug: skip Stage 5 (Wiki Planner) and reuse the existing plan"
+          title="Debug: skip Stage 4 (Wiki Planner) and reuse the existing plan"
           ariaLabel="Reuse existing wiki plan (skip planning stage)"
           activeColorClass="border-violet-400 bg-violet-50 text-violet-700 dark:bg-violet-950 dark:text-violet-300"
           activeDotClass="bg-violet-500"

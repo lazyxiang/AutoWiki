@@ -129,6 +129,8 @@ def mock_fast_llm():
         return _outline if idx % 2 == 0 else _fact_check_pass
 
     m.generate_structured.side_effect = _structured_side_effect
+    # Pass 2a (skeleton) and Pass 2c (stitch) call fast_llm.generate directly.
+    m.generate.return_value = "# Page\n\n## Overview\nContent.\n"
     return m
 
 
