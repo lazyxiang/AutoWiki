@@ -1,7 +1,6 @@
 import asyncio
 from unittest.mock import AsyncMock
 
-import numpy as np
 import pytest
 
 from worker.pipeline.page.generator import (
@@ -16,33 +15,26 @@ from worker.pipeline.page.generator import (
     generate_page_batch,
 )
 from worker.pipeline.planner.wiki_planner import WikiPageSpec, WikiPlan
+from worker.pipeline.retrieval.chunk import Chunk
+from worker.pipeline.retrieval.keyword_index import KeywordIndex
 
 
 @pytest.fixture
-def page_store(tmp_path):
-    from worker.pipeline.retrieval.rag_indexer import FAISSStore
-
-    store = FAISSStore(
-        dimension=1536,
-        index_path=tmp_path / "idx",
-        meta_path=tmp_path / "meta.pkl",
-    )
-    store.add(
-        [np.zeros(1536, dtype=np.float32)],
-        [
-            {
-                "text": "class User: pass",
-                "file": "models.py",
-                "start_line": 1,
-                "end_line": 1,
-            }
-        ],
-    )
-    return store
+def page_store():
+    """A KeywordIndex pre-populated with one chunk from models.py."""
+    chunks = [
+        Chunk(
+            file="models.py",
+            text="class User: pass",
+            line_start=1,
+            line_end=1,
+        )
+    ]
+    return KeywordIndex.build(chunks, repo_index={})
 
 
 def _make_mock_fast_llm():
-    """Mock fast LLM for outline + fact-check passes."""
+    """Mock fast LLM for outline + skeleton + fact-check + stitch passes."""
     m = AsyncMock()
     m.generate_structured.side_effect = [
         # First call: outline
@@ -74,10 +66,14 @@ def _make_mock_fast_llm():
         # Second call: fact-check
         {"verdict": "pass", "issues": []},
     ]
+    # Pass 2a (skeleton) and Pass 2c (stitch) both use fast_llm.generate
+    m.generate.return_value = (
+        "# Models\n\n## Overview\n\nContent.\n\n## Architecture\n\nContent.\n"
+    )
     return m
 
 
-async def test_generate_page_multi_pass(page_store, mock_embedding):
+async def test_generate_page_multi_pass(page_store):
     llm = AsyncMock()
     llm.generate.return_value = (
         "## Overview\n\nThe models module defines data classes.\n\n"
@@ -96,7 +92,6 @@ async def test_generate_page_multi_pass(page_store, mock_embedding):
         page_store,
         llm,
         fast_llm,
-        mock_embedding,
         repo_name="test",
     )
     assert isinstance(result, PageResult)
@@ -104,17 +99,16 @@ async def test_generate_page_multi_pass(page_store, mock_embedding):
     assert len(result.content) > 0
     # Verify both LLMs were called
     assert fast_llm.generate_structured.call_count == 2  # outline + fact-check
-    assert llm.generate.call_count == 1  # draft only
+    # 2 sections in mock outline → 2 per-section llm.generate calls
+    assert llm.generate.call_count == 2
 
 
-async def test_generate_page_with_fact_check_fail_triggers_revision(
-    page_store, mock_embedding
-):
+async def test_generate_page_with_fact_check_fail_triggers_revision(page_store):
     llm = AsyncMock()
     fast_llm = AsyncMock()
 
     fast_llm.generate_structured.side_effect = [
-        # Outline
+        # Outline — 1 section so draft = 1 llm.generate call
         {
             "sections": [
                 {
@@ -144,10 +138,13 @@ async def test_generate_page_with_fact_check_fail_triggers_revision(
             ],
         },
     ]
-
     _diagram = "```mermaid\nflowchart TD\n  A-->B\n```\n\n*Source: models.py:1-10*"
+    # Pass 2a (skeleton) and Pass 2c (stitch) use fast_llm.generate
+    fast_llm.generate.return_value = f"# Models\n\n## Overview\n\n{_diagram}"
+
     llm.generate.side_effect = [
-        f"## Overview\n\n**Diagram: Flow**\n\n{_diagram}",
+        f"## Overview\n\n**Diagram: Flow**\n\n{_diagram}",  # section draft
+        # revision:
         f"## Overview\n\nRevised content.\n\n**Diagram: Flow**\n\n{_diagram}",
     ]
 
@@ -157,15 +154,12 @@ async def test_generate_page_with_fact_check_fail_triggers_revision(
         page_store,
         llm,
         fast_llm,
-        mock_embedding,
         repo_name="test",
     )
-    assert llm.generate.call_count == 2  # draft + revision
+    assert llm.generate.call_count == 2  # 1 section draft + 1 revision
 
 
-async def test_generate_page_revision_failure_falls_back_to_strip(
-    page_store, mock_embedding
-):
+async def test_generate_page_revision_failure_falls_back_to_strip(page_store):
     """When revision raises, deterministic fallback strips the flagged claim."""
     llm = AsyncMock()
     fast_llm = AsyncMock()
@@ -207,9 +201,11 @@ async def test_generate_page_revision_failure_falls_back_to_strip(
         "```mermaid\nflowchart TD\n  A-->B\n```\n\n*Source: models.py:1-10*"
     )
     llm.generate.side_effect = [
-        draft_text,  # draft
+        draft_text,  # section draft (1 section)
         RuntimeError("LLM unavailable"),  # revision fails
     ]
+    # Pass 2a (skeleton) and Pass 2c (stitch) use fast_llm.generate
+    fast_llm.generate.return_value = "# Models\n\n## Overview\nContent.\n"
 
     spec = WikiPageSpec(title="Models", purpose="Test.", files=["models.py"])
     result = await generate_page(
@@ -217,14 +213,13 @@ async def test_generate_page_revision_failure_falls_back_to_strip(
         page_store,
         llm,
         fast_llm,
-        mock_embedding,
         repo_name="test",
     )
     # Fallback strips the claim text from content
     assert "bad claim" not in result.content
 
 
-async def test_generate_page_batch_returns_all_results(page_store, mock_embedding):
+async def test_generate_page_batch_returns_all_results(page_store):
     """generate_page_batch produces one PageResult per spec."""
     fast_llm = AsyncMock()
     _three_claims = ["claim 1", "claim 2", "claim 3"]
@@ -247,8 +242,15 @@ async def test_generate_page_batch_returns_all_results(page_store, mock_embeddin
 
     fast_llm.generate_structured.side_effect = _fast_structured
 
-    llm = AsyncMock()
     _mermaid = "```mermaid\nflowchart TD\n  A-->B\n```\n\n*Source: a.py:1-5*"
+
+    # Pass 2a (skeleton) and Pass 2c (stitch) use fast_llm.generate
+    async def _fast_generate(*args, **kwargs):
+        return "# Page\n\n## Overview\n\nSkeleton.\n"
+
+    fast_llm.generate.side_effect = _fast_generate
+
+    llm = AsyncMock()
 
     # Return a valid draft regardless of call order
     async def _llm_generate(*args, **kwargs):
@@ -264,10 +266,9 @@ async def test_generate_page_batch_returns_all_results(page_store, mock_embeddin
 
     results = await generate_page_batch(
         specs_with_children=[(spec_a, None), (spec_b, None)],
-        store=page_store,
+        keyword_index=page_store,
         llm=llm,
         fast_llm=fast_llm,
-        embedding=mock_embedding,
         repo_name="testrepo",
         file_analysis=FileAnalysis(files={}),
         dep_graph=DependencyGraph(),
@@ -282,7 +283,7 @@ async def test_generate_page_batch_returns_all_results(page_store, mock_embeddin
 
 
 async def test_generate_page_batch_calls_on_result_as_each_page_finishes(
-    page_store, mock_embedding, monkeypatch
+    page_store, monkeypatch
 ):
     from worker.pipeline.ast_analysis import FileAnalysis
     from worker.pipeline.dependency_graph import DependencyGraph
@@ -306,10 +307,9 @@ async def test_generate_page_batch_calls_on_result_as_each_page_finishes(
     batch_task = asyncio.create_task(
         generate_page_batch(
             specs_with_children=[(spec_fast, None), (spec_slow, None)],
-            store=page_store,
+            keyword_index=page_store,
             llm=AsyncMock(),
             fast_llm=AsyncMock(),
-            embedding=mock_embedding,
             repo_name="testrepo",
             file_analysis=FileAnalysis(files={}),
             dep_graph=DependencyGraph(),
@@ -425,12 +425,26 @@ async def test_extract_signature_slices_pulls_top_entities(tmp_path):
 
 
 async def test_generate_page_uses_en_keywords_as_retrieval_query(
-    page_store, mock_embedding
+    page_store, monkeypatch
 ):
     """A4: English keywords from the page spec must become a retrieval query."""
+    from worker.pipeline.retrieval.keyword_index import KeywordIndex
+
     llm = AsyncMock()
     llm.generate.return_value = "## Overview\n\nThe page describes the frontend.\n"
     fast_llm = _make_mock_fast_llm()
+
+    # Capture search queries to verify en_keywords are passed
+    search_calls: list[list[str]] = []
+    quota_calls: list[int] = []
+    original_search = KeywordIndex.search
+
+    def capturing_search(self, queries, **kwargs):
+        search_calls.append(list(queries))
+        quota_calls.append(kwargs.get("per_file_quota", 2))
+        return original_search(self, queries, **kwargs)
+
+    monkeypatch.setattr(KeywordIndex, "search", capturing_search)
 
     spec = WikiPageSpec(
         title="前端界面",
@@ -444,12 +458,13 @@ async def test_generate_page_uses_en_keywords_as_retrieval_query(
         page_store,
         llm,
         fast_llm,
-        mock_embedding,
         repo_name="test",
     )
 
-    queries = [call.args[0] for call in mock_embedding.embed.await_args_list]
-    assert "web components next" in queries
+    # The en_keywords should appear as one of the query strings
+    all_queries = [q for call in search_calls for q in call]
+    assert any("web" in q and "components" in q for q in all_queries)
+    assert quota_calls[0] == 0
 
 
 async def test_extract_signature_slices_skips_missing_files(tmp_path):
@@ -475,6 +490,74 @@ async def test_extract_signature_slices_skips_missing_files(tmp_path):
     spec = WikiPageSpec(title="X", purpose=".", files=["missing.py"])
     slices = await _extract_signature_slices(spec, file_analysis, tmp_path)
     assert slices == {}
+
+
+async def test_generate_page_strips_oos_claim_without_calling_revision(page_store):
+    """Out-of-scope claim in draft is stripped without calling the revision LLM.
+
+    The fact-check returns a single out-of-scope issue.  The generator must:
+    1. Strip the offending sentence from the draft.
+    2. NOT call llm.generate a second time (no revision LLM call).
+    """
+    llm = AsyncMock()
+    fast_llm = AsyncMock()
+
+    oos_phrase = "validates outline JSON"
+    draft_with_oos = (
+        "## Overview\n\n"
+        f"The module {oos_phrase} before drafting.\n\n"
+        "```mermaid\nflowchart TD\n  A-->B\n```\n\n*Source: models.py:1-10*"
+    )
+    llm.generate.return_value = draft_with_oos
+    # Pass 2a (skeleton): returns frame without OOS phrase.
+    # Pass 2c (stitch): returns the stitched draft that includes the OOS phrase
+    # (as would happen in reality, since stitch concatenates the section body).
+    fast_llm.generate.side_effect = [
+        "# Models\n\n## Overview\nSkeleton frame.\n",  # skeleton
+        draft_with_oos,  # stitch — carries the OOS phrase so early-exit fires
+    ]
+
+    fast_llm.generate_structured.side_effect = [
+        # Pass 1: outline
+        {
+            "sections": [
+                {
+                    "heading": "Overview",
+                    "kind": "prose+diagram",
+                    "focus": "overview",
+                    "diagram": {
+                        "type": "flowchart",
+                        "purpose": "Flow",
+                        "source_files": ["models.py"],
+                    },
+                }
+            ],
+            "key_claims": ["claim a", "claim b", "claim c"],
+            "out_of_scope_claims": [oos_phrase],
+        },
+        # Pass 3: fact-check — must NOT be reached because OOS early-exit fires first.
+        # Raise to make any accidental call an explicit test failure.
+        Exception("fact-check LLM must not be called when only OOS issues exist"),
+    ]
+
+    spec = WikiPageSpec(title="Models", purpose="Test.", files=["models.py"])
+    result = await generate_page(
+        spec,
+        page_store,
+        llm,
+        fast_llm,
+        repo_name="test",
+    )
+
+    # The out-of-scope phrase must be stripped from prose.
+    import re as _re
+
+    prose_only = _re.sub(r"<!--.*?-->", "", result.content, flags=_re.DOTALL)
+    assert oos_phrase not in prose_only
+    # Draft was generated (llm.generate called once); revision LLM NOT called
+    assert llm.generate.call_count == 1
+    # Only Pass 1 outline was called; Pass 3 fact-check was short-circuited by OOS gate
+    assert fast_llm.generate_structured.call_count == 1
 
 
 async def test_extract_signature_slices_empty_when_no_repo_root(tmp_path):
@@ -622,14 +705,11 @@ def test_compute_generation_order_handles_cycle():
 # ── A4: multi-query retrieval + rank-weighted chunk quota ────────────────
 
 
-def _chunk(file: str, idx: int = 0) -> dict:
-    """Test helper: minimal RAG chunk dict for _balance_chunks tests."""
-    return {
-        "file": file,
-        "start_line": idx,
-        "end_line": idx,
-        "text": f"chunk {idx} from {file}",
-    }
+def _chunk(file: str, idx: int = 0) -> Chunk:
+    """Test helper: minimal Chunk object for _balance_chunks tests."""
+    return Chunk(
+        file=file, text=f"chunk {idx} from {file}", line_start=idx, line_end=idx
+    )
 
 
 def test_balance_chunks_rank_weighted_quota():
@@ -638,7 +718,7 @@ def test_balance_chunks_rank_weighted_quota():
     chunks = [_chunk(f, i) for f in files for i in range(20)]  # 100 chunks
     out = _balance_chunks(chunks, files=files, k=30, floor=2)
 
-    counts = {f: sum(1 for c in out if c["file"] == f) for f in files}
+    counts = {f: sum(1 for c in out if c.file == f) for f in files}
     # Counts should be non-increasing by rank (top file has the most)
     ordered = [counts[f] for f in files]
     assert ordered == sorted(ordered, reverse=True)
@@ -651,7 +731,7 @@ def test_balance_chunks_floor_only_for_low_rank():
     files = [f"f{i}.py" for i in range(8)]
     chunks = [_chunk(f, i) for f in files for i in range(20)]
     out = _balance_chunks(chunks, files=files, k=30, floor=2)
-    counts = {f: sum(1 for c in out if c["file"] == f) for f in files}
+    counts = {f: sum(1 for c in out if c.file == f) for f in files}
     for i in range(6, 8):
         assert counts[f"f{i}.py"] == 2
 
@@ -664,8 +744,8 @@ def test_balance_chunks_reuses_unfilled_ranked_file_quota():
     out = _balance_chunks(chunks, files=files, k=10, floor=1)
 
     assert len(out) == 10
-    assert sum(1 for c in out if c["file"] == "a.py") == 1
-    assert sum(1 for c in out if c["file"] == "b.py") == 9
+    assert sum(1 for c in out if c.file == "a.py") == 1
+    assert sum(1 for c in out if c.file == "b.py") == 9
 
 
 # ── A5: rank-weighted entity quota ───────────────────────────────────────

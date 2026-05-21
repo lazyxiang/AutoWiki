@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.skipif(
+    True,
+    reason="Deep Research disabled pending KeywordIndex migration (B5, issue #43)",
+)
+
 
 async def test_research_report_model_persists_roundtrip(tmp_path):
     """Persisting a ResearchReport round-trips every field."""

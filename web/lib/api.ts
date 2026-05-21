@@ -106,6 +106,7 @@ export async function getRepo(repoId: string): Promise<Repository> {
     wiki_language: repo.wiki_language || "en",
     last_commit: repo.last_commit || "",
     is_private: repo.is_private ?? false,
+    features: repo.features,
   };
 }
 /**
@@ -165,6 +166,8 @@ export interface Repository {
   wiki_language: string;
   last_commit?: string;
   is_private?: boolean;
+  /** Feature flags served by /api/repos/{id}. */
+  features?: { deep_research?: boolean };
 }
 
 /**
@@ -185,6 +188,7 @@ interface RepoRaw {
   wiki_language?: string;
   last_commit?: string;
   is_private?: boolean;
+  features?: { deep_research?: boolean };
 }
 
 /**

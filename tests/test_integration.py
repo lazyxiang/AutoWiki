@@ -9,16 +9,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 FIXTURE_REPO = Path("tests/fixtures/simple-repo")
 
 
-async def test_full_pipeline_produces_pages(
-    tmp_path, mock_llm, mock_fast_llm, mock_embedding
-):
+async def test_full_pipeline_produces_pages(tmp_path, mock_llm, mock_fast_llm):
     import os
 
     os.environ["DATABASE_PATH"] = str(tmp_path / "autowiki.db")
     os.environ["AUTOWIKI_DATA_DIR"] = str(tmp_path)
-
-    # mock_embedding needs a dimension attribute for FAISSStore
-    mock_embedding.dimension = 1536
 
     from shared.config import reset_config
 
@@ -70,7 +65,6 @@ async def test_full_pipeline_produces_pages(
         patch("worker.index.full.get_platform_by_name", return_value=_mock_platform),
         patch("worker.index.full.make_llm_provider", return_value=mock_llm),
         patch("worker.index.full.make_fast_llm_provider", return_value=mock_fast_llm),
-        patch("worker.index.full.make_embedding_provider", return_value=mock_embedding),
     ):
         from worker.jobs import run_full_index
 

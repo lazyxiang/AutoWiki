@@ -9,8 +9,8 @@ def index_cmd(
         False,
         "--reuse-index",
         help=(
-            "Skip re-embedding if a FAISS index already exists for this repo. "
-            "Useful for iterating on wiki structure without incurring embedding costs."
+            "Deprecated and ignored. Keyword retrieval is rebuilt in memory "
+            "for each index run."
         ),
     ),
     reuse_plan: bool = typer.Option(

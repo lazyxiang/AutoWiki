@@ -84,6 +84,11 @@ _OUTLINE_SCHEMA = {
             "type": "array",
             "items": {"type": "string"},
         },
+        "out_of_scope_claims": {
+            "type": "array",
+            "items": {"type": "string"},
+            "default": [],
+        },
     },
     "required": ["sections", "key_claims"],
 }
@@ -114,6 +119,7 @@ class PageOutline:
 
     sections: list[SectionPlan]
     key_claims: list[str]
+    out_of_scope_claims: list[str] = field(default_factory=list)
 
 
 def validate_outline(
@@ -205,7 +211,22 @@ def validate_outline(
     if diagram_count < 1:
         raise ValueError("Every page must produce at least 1 diagram")
 
-    return PageOutline(sections=sections, key_claims=claims)
+    oos_raw = raw.get("out_of_scope_claims", [])
+    if not isinstance(oos_raw, list):
+        raise ValueError(
+            f"out_of_scope_claims must be a list, got {type(oos_raw).__name__}"
+        )
+    oos_claims: list[str] = []
+    for item in oos_raw:
+        if not isinstance(item, str):
+            raise ValueError(
+                f"out_of_scope_claims items must be strings, got {type(item).__name__}"
+            )
+        oos_claims.append(item)
+
+    return PageOutline(
+        sections=sections, key_claims=claims, out_of_scope_claims=oos_claims
+    )
 
 
 _SYSTEM = (

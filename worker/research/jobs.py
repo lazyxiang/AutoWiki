@@ -11,14 +11,20 @@ from pathlib import Path
 
 from shared.config import get_config
 from shared.database import get_session, init_db
+from shared.errors import FeatureDisabledError
 from shared.models import Job, Repository, ResearchReport
 from worker.embedding import make_embedding_provider
+from worker.embedding.faiss_store import FAISSStore
 from worker.llm import make_llm_provider
 from worker.pipeline.ingestion import extract_readme
-from worker.pipeline.retrieval.rag_indexer import FAISSStore
 from worker.research.service import run_deep_research_flow
 
 logger = logging.getLogger("worker.task")
+
+_DISABLED_MSG = (
+    "Deep Research is temporarily unavailable while migrating to keyword retrieval "
+    "(see issue #43)."
+)
 
 
 async def _update_job(db_path: str, job_id: str, **kwargs) -> None:
@@ -45,14 +51,14 @@ async def _load_faiss_for_research(repo_data_dir: Path, embedding) -> FAISSStore
     return store
 
 
-async def run_deep_research(
+async def _run_deep_research_impl(
     ctx: dict,
     repo_id: str,
     job_id: str,
     report_id: str,
     question: str,
 ) -> None:
-    """ARQ job: run the Deep Research flow and persist the result."""
+    """Deep Research flow implementation (disabled, kept for migration reference)."""
     cfg = get_config()
     db_path = str(cfg.database_path)
     data_dir = cfg.data_dir
@@ -152,3 +158,19 @@ async def run_deep_research(
             status_description=f"Error: {e}",
         )
         raise
+
+
+async def run_deep_research(
+    ctx: dict,
+    repo_id: str,
+    job_id: str,
+    report_id: str,
+    question: str,
+) -> None:
+    """ARQ job: run the Deep Research flow and persist the result.
+
+    B5: Temporarily disabled — Deep Research depends on FAISSStore + EmbeddingProvider
+    which were removed in Layer B (Stage 4 deletion). Raises FeatureDisabledError on
+    entry. See issue #43 for the migration plan.
+    """
+    raise FeatureDisabledError(_DISABLED_MSG)

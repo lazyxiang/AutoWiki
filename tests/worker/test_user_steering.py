@@ -196,13 +196,8 @@ async def test_full_index_reads_autowiki_wiki_json(tmp_path, monkeypatch):
             "worker.index.full.build_dependency_graph",
             return_value=MagicMock(clusters=[], edges={}),
         ),
-        patch("worker.index.full.build_rag_index", new=AsyncMock()),
         patch("worker.index.full.make_llm_provider"),
         patch("worker.index.full.make_fast_llm_provider"),
-        patch(
-            "worker.index.full.make_embedding_provider",
-            return_value=MagicMock(dimension=8),
-        ),
         patch("worker.index.full.generate_wiki_plan", new=_fake_plan),
         patch("worker.index.full.compute_generation_order", return_value=[]),
     ):

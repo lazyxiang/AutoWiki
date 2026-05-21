@@ -15,9 +15,7 @@ from sqlalchemy import select as sa_select
 from shared.config import get_config
 from shared.database import get_session, init_db
 from shared.models import Repository, WikiPage
-from worker.embedding import make_embedding_provider
 from worker.index.artifacts import (
-    _make_faiss_store,
     _write_text_async,
     phase1_prompt_dump_path,
     remove_stale_ast_artifacts,
@@ -50,7 +48,8 @@ from worker.pipeline.planner.wiki_planner import (
     WikiPlan,
     generate_wiki_plan,
 )
-from worker.pipeline.retrieval.rag_indexer import build_rag_index
+from worker.pipeline.retrieval.chunking import build_chunks
+from worker.pipeline.retrieval.keyword_index import KeywordIndex
 from worker.pipeline.retrieval.repo_index import build_repo_index
 from worker.platform.registry import get_platform_by_name
 from worker.platform.token_store import get_platform_token
@@ -157,12 +156,11 @@ async def run_refresh_index(
         1. **Ingestion** — ``git fetch`` to get the new HEAD SHA.
         2. **AST Analysis** — Re-parse all current files.
         3. **Dependency Graph** — Rebuild import graph over current files.
-        4. **RAG Indexer** — Rebuild the FAISS index for all current files.
-        5. **Wiki Planner** — Run planning only over the files from affected
+        4. **Wiki Planner** — Run planning only over the files from affected
            pages (plus any newly added files), while passing the titles of
            unaffected pages as ``existing_titles`` so the LLM does not
            duplicate them.
-        6. **Page Generator** — Regenerate only the newly planned pages;
+        5. **Page Generator** — Regenerate only the newly planned pages;
            preserve the ``page_order`` of replaced pages so the navigation
            ordering stays stable.  Truly new pages are appended.
 
@@ -479,35 +477,29 @@ async def run_refresh_index(
             json.dumps(repo_index, indent=2, ensure_ascii=False),
         )
         await _update_job(
-            db_path, job_id, progress=30, status_description="Rebuilding RAG index..."
+            db_path, job_id, progress=30, status_description="Building keyword index..."
         )
 
-        # Stage 4: Rebuild FAISS index
-        logger.info("Stage 4: RAG Indexer starting")
+        # Keyword retrieval setup — entity-aware chunking + in-memory BM25 index
+        # (FAISS/embedding removed in B2.5)
+        logger.info("Keyword index setup starting")
         llm = make_llm_provider(cfg)
         fast_llm = make_fast_llm_provider(cfg, llm)
-        embedding = make_embedding_provider(cfg)
-        logger.info(
-            "Using embedding provider: %s, model: %s (dim=%d)",
-            cfg.embedding.provider,
-            cfg.embedding.model,
-            embedding.dimension,
-        )
         repo_data_dir.mkdir(parents=True, exist_ok=True)
-        store = _make_faiss_store(repo_data_dir, embedding)
         file_entities = {
-            rel: [e for e in info.entities] for rel, info in file_analysis.files.items()
+            rel: list(info.entities) for rel, info in file_analysis.files.items()
         }
-        logger.info("Rebuilding RAG index...")
-        await build_rag_index(
-            files,
-            clone_root,
-            store,
-            embedding,
-            file_entities=file_entities,
-            on_retry=_on_retry,
+        logger.info("Building keyword index...")
+        repo_chunks = await loop.run_in_executor(
+            None,
+            lambda: build_chunks(files, clone_root, file_entities),
         )
-        logger.info("RAG index build complete")
+        keyword_index = KeywordIndex.build(repo_chunks, repo_index=repo_index)
+        logger.info(
+            "Keyword index built: %d chunks across %d files",
+            len(repo_chunks),
+            len(keyword_index.file_to_chunks),
+        )
         await _update_job(
             db_path,
             job_id,
@@ -647,10 +639,9 @@ async def run_refresh_index(
 
             await generate_page_batch(
                 specs_with_children,
-                store,
+                keyword_index,
                 llm,
                 fast_llm,
-                embedding,
                 repo_name=name,
                 file_analysis=file_analysis,
                 dep_graph=dep_graph,

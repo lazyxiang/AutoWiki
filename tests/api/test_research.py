@@ -5,6 +5,11 @@ from __future__ import annotations
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+pytestmark = pytest.mark.skipif(
+    True,
+    reason="Deep Research disabled pending KeywordIndex migration (B5, issue #43)",
+)
+
 
 async def _prep_repo(db_path: str):
     from shared.database import get_session, init_db

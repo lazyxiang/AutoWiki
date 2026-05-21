@@ -1,53 +1,53 @@
 # GEMINI.md
 
-This file provides guidance to GEMINI when working with code in this repository.
+This file provides guidance to Gemini CLI agents when working with code in this repository.
 
 ## Project Status
 
-AutoWiki **Phases 1, 2, 2.5, 3, 4, 4.5, 4.6, and 5 are complete**. Phase 1 tagged `v0.1.0-phase1`; Phase 2 (chat, diagrams, incremental refresh) merged via PR #4; Phase 2.5 (wiki quality enhancements) merged across PRs #15 and #17; Phase 3 (Deep Research) and Phase 4 (User Steering) merged via PR #20; Phase 4.5 (planner robustness hardening: Layer C1, validate-plan, feedback retries, Mermaid fixes, Docker startup fixes) merged via PR #22; Phase 4.6 (page-centric file selection) merged via PR #23; Phase 5 (GitLab/Bitbucket multi-platform support + private repos + homepage search) merged via PR #30.
+AutoWiki **Phases 1, 2, 2.5, 3, 4, 4.5, 4.6, and 5 are complete**. Phase 1 tagged `v0.1.0-phase1`; Phase 2 (chat, diagrams, incremental refresh) merged via PR #4; Phase 2.5 (wiki quality enhancements) merged across PRs #15 and #17; Phase 3 (Deep Research) and Phase 4 (User Steering) merged via PR #20, with Deep Research temporarily disabled while issue #43 migrates it to keyword retrieval; Phase 4.5 (planner robustness hardening: Layer C1, validate-plan, feedback retries, Mermaid fixes, Docker startup fixes) merged via PR #22; Phase 4.6 (page-centric file selection) merged via PR #23; Phase 5 (GitLab/Bitbucket multi-platform support + private repos + homepage search) merged via PR #30.
 
 ## What AutoWiki Is
 
-A self-hosted, open-source AI-powered wiki generator for software repositories. Given a GitHub URL, it generates a browsable wiki with architecture overviews, module breakdowns, source-linked documentation, and a conversational Q&A interface — running locally with user-supplied API keys.
+A self-hosted, open-source AI-powered wiki generator for software repositories. Given a supported GitHub, GitLab, or Bitbucket repository URL, it generates a browsable wiki with architecture overviews, module breakdowns, source-linked documentation, and a conversational Q&A interface — running locally with user-supplied API keys.
 
 ## Architecture
 
 ### Service Topology
-```text
+```
 User (Browser / CLI)
     ↓
 API Gateway (FastAPI)  ←→  Redis
     ↓
 Worker Service (ARQ job queue)
     ↓
-Storage (SQLite + FAISS + Markdown files at ~/.autowiki/)
+Storage (SQLite + Markdown files + repo_index.json at ~/.autowiki/)
 ```
 
 ### Core Components
 - **API Gateway** (`api/`) — FastAPI, REST + WebSocket endpoints, job enqueuing via ARQ
-- **Worker Service** (`worker/`) — ARQ background jobs, 6-stage generation pipeline
+- **Worker Service** (`worker/`) — ARQ background jobs, 5-stage generation pipeline
 - **Frontend** (`web/`) — Next.js 16.2.1 + TypeScript + Tailwind v4 + shadcn/ui, stateless SPA
-- **Storage** — SQLite for metadata, FAISS for vector index, Markdown files for wiki pages
+- **Storage** — SQLite for metadata, Markdown files for wiki pages, `repo_index.json` for shared repo metadata
 
-### Generation Pipeline (6 Stages)
+### Generation Pipeline (5 Stages)
 1. **Repo Ingestion** (`worker/pipeline/ingestion.py`) — shallow clone, file filtering, commit SHA
 2. **AST Analysis** (`worker/pipeline/ast_analysis.py`) — single-pass Tree-Sitter entity extraction → `FileAnalysis`
 3. **Dependency Graph** (`worker/pipeline/dependency_graph.py`) — file-level import graph + BFS-split clusters
-4. **RAG Indexer** (`worker/pipeline/rag_indexer.py`) — LangChain chunking, FAISS IndexFlatIP (skippable with `reuse_index=True`); `doc_k` param downweights pure documentation files
-5. **Wiki Planner** (`worker/pipeline/wiki_planner.py`) — two-phase LLM plan: Phase 1 outline (hierarchy/titles/purposes) + Phase 2 file assignment; each phase validates and self-retries → `WikiPlan`
-6. **Page Generator** (`worker/pipeline/page_generator.py`) — bottom-up 4-pass orchestrator: Pass 1 outline (fast model), Pass 2 draft (main model), Pass 3 fact-check (fast model), Pass 4 targeted revision (main model, conditional); post-processing applies diagram headers and Mermaid sanitization
+4. **Wiki Planner** (`worker/pipeline/planner/wiki_planner.py`) — two-phase LLM plan: Phase 1 outline (hierarchy/titles/purposes) + Phase 2 file assignment; each phase validates and self-retries → `WikiPlan`
+5. **Page Generator** (`worker/pipeline/page/generator.py`) — bottom-up orchestrator: Pass 1 outline (fast model), Pass 2 section-level drafting (skeleton → per-section draft → stitch), Pass 3 fact-check (fast model), Pass 4 targeted revision (main model, conditional); post-processing applies diagram headers and Mermaid sanitization
+
+Keyword retrieval setup is not a persisted pipeline stage: `worker/pipeline/retrieval/chunking.py` chunks source files and `worker/pipeline/retrieval/keyword_index.py` builds an in-memory BM25 `KeywordIndex` each run. Stage 4's FAISS+embedding path was removed in Layer B (issue #43); wiki indexing no longer requires an embedding API key.
 
 Supported AST languages: Python, JavaScript/JSX, TypeScript/TSX, Java, Go, Rust, C, C++, C#
 
 ### Data Storage Layout
-```text
+```
 ~/.autowiki/
   autowiki.db               ← SQLite (repos, jobs, wiki_pages)
   repos/{repo_hash}/
     clone/                  ← shallow git clone
-    faiss.index             ← vector index
-    faiss.meta.pkl          ← chunk metadata
     ast/
+      repo_index.json       ← shared repo metadata / retrieval artifact
       wiki_plan.json        ← internal wiki plan with file mappings (for refresh)
     wiki/
       wiki.json             ← generated user-facing wiki structure/API output
@@ -64,6 +64,7 @@ that steering config, not to the generated wiki output.
 - `repositories` — repo metadata, status, last-indexed commit SHA
 - `jobs` — indexing job tracking with 0–100 progress
 - `wiki_pages` — hierarchical page structure with slugs and parent refs
+- `platform_tokens` — persisted PATs per platform for private-repo access
 
 ## Configuration
 
@@ -88,9 +89,10 @@ Default LLM: `claude-sonnet-4-6`. Supported providers: `anthropic`, `openai`, `o
 - **wiki.json format**: user-facing (title/purpose/parent/page_notes); `ast/wiki_plan.json` is internal (includes files); `Repository.wiki_structure` is API-compatible (includes derived slugs/parent_slugs for frontend)
 - **FileAnalysis**: single-pass AST analysis — `analyze_all_files()` replaces both `build_enhanced_module_tree()` and `_build_file_entities()`
 - **`to_llm_summary(max_files=…)`**: PR #40 (issue #39) raised the Phase 1 outline budget from a flat 200 to the adaptive `min(800, max(500, file_count))` so 500+ file repos no longer lose structural files. The function still accepts an explicit `max_files=200` for legacy callers and `max_files=0` for the built-in 800-file safety cap; when capped, `_rank_files_by_importance()` selects the most architecturally significant files (entity count, in-degree, entry-point bonus, shallowness). Do NOT revert Phase 1 to a flat 200 — see `docs/spec/claude/2026-04-29-wiki-page-quality-redesign.md:122`.
-- **`reuse_index`**: `IndexRequest.reuse_index` (API) / `--reuse-index` (CLI) skips Stage 4 (FAISS rebuild) and loads the existing index instead; threaded through `enqueue_full_index` → `run_full_index`
+- **`reuse_index`** (deprecated): `IndexRequest.reuse_index` / `--reuse-index` are accepted for backward compatibility but ignored after Layer B — `KeywordIndex` is rebuilt in memory each run, so there is no persisted vector store to skip.
 - **`generate_batch` + bottom-up generation**: `LLMProvider.generate_batch()` runs prompts concurrently (semaphore-controlled); `compute_generation_order()` returns pages deepest-first so parents always receive finished child Markdown
-- **Multi-pass page generation**: each page goes through 4 passes — Pass 1 outline (`fast_llm`), Pass 2 full draft (`llm`), Pass 3 fact-check (`fast_llm`), Pass 4 targeted revision (`llm`, only when fact-check verdict is `"fail"`); deterministic fallback strips still-flagged claims/diagrams
+- **Keyword retrieval**: wiki generation uses an in-memory `KeywordIndex` (BM25 via `rank_bm25`) built from entity-aware chunks each run. `worker/pipeline/rag_indexer.py` and `worker/pipeline/retrieval/rag_indexer.py` were deleted; `worker/embedding/faiss_store.py` exists only for disabled Deep Research compatibility until issue #43 is resolved.
+- **Section-level page generation**: each page goes through 4 passes — Pass 1 outline (`fast_llm`), Pass 2 section-level drafting (`fast_llm` skeleton → parallel `llm` per-section drafts → `fast_llm` stitch), Pass 3 fact-check (`fast_llm`), Pass 4 targeted revision (`llm`, only when fact-check verdict is `"fail"`); deterministic fallback strips still-flagged claims/diagrams
 - **`PromptSegment`**: typed dataclass wrapping prompt parts with optional `cache_control`; all LLM providers translate `list[PromptSegment]` → provider-native format; enables Anthropic prompt caching for long system prompts
 - **`fast_model` / `fast_llm`**: `LLMConfig.fast_model` configured via `AUTOWIKI_LLM_FAST_MODEL` (defaults to main model when empty); `make_fast_llm_provider()` returns main provider unchanged when models match; used for Pass 1 outline and Pass 3 fact-check to cut latency and cost; threaded through jobs → planner Phase 2 → page generator
 - **`cache_ttl`**: `LLMConfig.cache_ttl` hints cache lifetime for providers that support it; Anthropic uses `"ephemeral"` cache control on system segments
@@ -114,12 +116,12 @@ GET   /api/repos/{repo_id}/wiki              # List wiki pages
 GET   /api/repos/{repo_id}/wiki/{slug}       # Get page Markdown
 POST  /api/repos/{repo_id}/chat              # Create a new chat session
 GET   /api/repos/{repo_id}/chat/{session_id} # Get chat history
-POST  /api/repos/{repo_id}/research          # Start deep research → {job_id, report_id}
-GET   /api/repos/{repo_id}/research/{job_id} # Get research report (plan, findings, Markdown)
+POST  /api/repos/{repo_id}/research          # (disabled — see issue #43) → HTTP 503
+GET   /api/repos/{repo_id}/research/{job_id} # (disabled — see issue #43) → HTTP 410
 GET   /api/jobs/{job_id}                     # Job status + progress
 WS    /ws/jobs/{job_id}                      # Stream job progress
 WS    /ws/repos/{repo_id}/chat/{session_id}  # Stream chat responses
-WS    /ws/repos/{repo_id}/research/{job_id}  # Stream research events
+WS    /ws/repos/{repo_id}/research/{job_id}  # (disabled — see issue #43) → close 1011
 GET   /api/settings/tokens                   # List PAT storage status (masked)
 PUT   /api/settings/tokens/{platform}        # Store/update PAT for private repos
 DELETE /api/settings/tokens/{platform}       # Delete stored PAT
@@ -130,17 +132,17 @@ DELETE /api/settings/tokens/{platform}       # Delete stored PAT
 autowiki index github.com/owner/repo [--reuse-index]
 autowiki list
 autowiki serve [--port 3000] [--debug]
-autowiki research github.com/owner/repo "<question>"
+autowiki research github.com/owner/repo "<question>"  # (disabled — see issue #43)
 autowiki validate-plan <repo>       # Offline planner diagnostic — reads ast/wiki_plan.json and reports coverage, page-size distribution, locality scores, and validation status
 autowiki config show
 autowiki config set <key> <value>
 ```
 
-### Research API (Phase 3)
-```http
-POST  /api/repos/{repo_id}/research                   # Start deep research → {job_id, report_id}
-GET   /api/repos/{repo_id}/research/{job_id}          # Get report (plan, findings, Markdown)
-WS    /ws/repos/{repo_id}/research/{job_id}           # Stream research events
+### Research API (Phase 3 — disabled, see issue #43)
+```
+POST  /api/repos/{repo_id}/research                   # (disabled) → HTTP 503
+GET   /api/repos/{repo_id}/research/{job_id}          # (disabled) → HTTP 410
+WS    /ws/repos/{repo_id}/research/{job_id}           # (disabled) → WS close 1011
 ```
 
 ## Workflow Rules
@@ -160,8 +162,8 @@ WS    /ws/repos/{repo_id}/research/{job_id}           # Stream research events
 - **Framework**: pytest with `asyncio_mode = "auto"` (no `@pytest.mark.asyncio` needed)
 - **Coverage target**: ≥80% on `worker/` and `api/` — currently at 80%
 - **Run**: `pytest tests/ --ignore=tests/e2e` AND `npm test --prefix web`
+- **Test Review**: After adding or changing tests, re-read the new assertions and simplify them if they are overfitted to implementation details. Keep only the smallest set of assertions that prove the intended behavior, and remove duplicate helpers or brittle call-shape checks unless they are the behavior under test.
 - **Fixtures**: `mock_llm`, `mock_embedding` in `tests/conftest.py`; fixture repo at `tests/fixtures/simple-repo/`
-- **Test Review**: After adding or changing tests, re-read the new assertions and simplify them if they are overfitted to implementation details. Keep only the smallest set of assertions that proves the intended behavior, and remove duplicate helpers or brittle call-shape checks unless they are the behavior under test.
 
 ## Deployment
 
@@ -175,10 +177,10 @@ Non-Docker: `autowiki serve` spawns API + worker + Next.js as subprocesses.
 
 - **Phase 1** ✅ — Core pipeline (index + static wiki + REST API + web UI + CLI)
 - **Phase 2** ✅ — Incremental refresh + Q&A chat + dependency diagrams (merged PR #4)
-- **Phase 2.5** ✅ — Wiki quality enhancements: two-phase planner with per-phase validation, bottom-up child-synthesis generation, 4-pass page orchestrator, prompt caching, fast model, RAG doc_k tuning, diagram post-processing (PRs #15 and #17)
-- **Phase 3** ✅ — Deep Research mode: multi-step RAG investigation, LLM planner, per-step AST context, synthesized report; `autowiki research` CLI; REST + WebSocket API (PR #20)
+- **Phase 2.5** ✅ — Wiki quality enhancements: two-phase planner with per-phase validation, bottom-up child-synthesis generation, 4-pass page orchestrator, prompt caching, fast model, BM25 keyword retrieval, section-level drafting, diagram post-processing (PRs #15 and #17; Layer B in issue #43 branch)
+- **Phase 3** ✅ — Deep Research mode: multi-step RAG investigation, LLM planner, per-step AST context, synthesized report; `autowiki research` CLI; REST + WebSocket API (PR #20). Temporarily disabled while migrating to keyword retrieval (issue #43).
 - **Phase 4** ✅ — User-steered wiki structure via `.autowiki/wiki.json`: override page hierarchy, assign modules to pages, inject repo/page notes into generation (PR #20)
 - **Phase 4.5** ✅ — Planner robustness hardening (PR #22): architectural anchors in Phase-1 outline prompt (Layer C1), `autowiki validate-plan` offline diagnostic CLI, feedback-retry loop in `_assign_files`, various bug fixes (Gemini JSON, Mermaid, Docker)
 - **Phase 4.6** ✅ — Page-centric file selection (PR #23): Phase 2 replaced from file-centric assignment to page-centric selection (5–8 files per page); scoring-based pre-filter + fallback (`_score_file_for_page`, `_heuristic_select_files`); `WikiPlan.all_repo_files` for correct refresh coverage; orphan enforcement removed
 - **Phase 5** ✅ — GitLab/Bitbucket support (public + private repos, full API metadata) + homepage project search (PR #30)
-- **Phase 6** — Hybrid search (keyword + semantic BM25/FAISS fusion)
+- **Phase 6** — Hybrid search and Deep Research keyword-retrieval migration follow-ups

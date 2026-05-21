@@ -1,4 +1,9 @@
-"""Filesystem and FAISS artifact helpers for index jobs."""
+"""Filesystem artifact helpers for index jobs.
+
+FAISS helpers (_make_faiss_store, _load_faiss_for_research) were removed in B2.5
+when Stage 4 (FAISS vector indexing) was deleted from the pipeline.
+The wiki indexing pipeline now uses BM25 keyword retrieval (KeywordIndex).
+"""
 
 from __future__ import annotations
 
@@ -6,8 +11,6 @@ import asyncio
 import os
 import shutil
 from pathlib import Path
-
-from worker.pipeline.retrieval.rag_indexer import FAISSStore
 
 LEGACY_REPO_INDEX_NAME = "fast_report_index.json"
 LEGACY_FILE_ANALYSIS_SUMMARY_NAME = "file_analysis_summary.txt"
@@ -17,21 +20,6 @@ async def _write_text_async(path: Path, content: str) -> None:
     """Write a string to a file without blocking the event loop."""
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, path.write_text, content)
-
-
-def _make_faiss_store(repo_data_dir: Path, embedding) -> FAISSStore:
-    return FAISSStore(
-        dimension=embedding.dimension,
-        index_path=repo_data_dir / "faiss.index",
-        meta_path=repo_data_dir / "faiss.meta.pkl",
-    )
-
-
-async def _load_faiss_for_research(repo_data_dir: Path, embedding) -> FAISSStore:
-    """Load the FAISS store for a repo, running the blocking IO in an executor."""
-    store = _make_faiss_store(repo_data_dir, embedding)
-    await asyncio.get_running_loop().run_in_executor(None, store.load)
-    return store
 
 
 def remove_stale_ast_artifacts(ast_dir: Path) -> None:
